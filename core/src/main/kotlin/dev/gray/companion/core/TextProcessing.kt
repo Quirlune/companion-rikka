@@ -52,12 +52,18 @@ internal fun canonicalWriteAddress(raw: String): String? {
 
 internal fun WorkflowNode.declaredWriteAddress(descriptor: ActionDescriptor?): String? {
     val field = descriptor?.macroWriteKeyField ?: return null
-    val raw = if (actionId == "macro.process") macroProcess.key.ifBlank { arguments[field].orEmpty() }
-        else arguments[field].orEmpty()
+    val declared = descriptor.withDefaults(arguments)[field].orEmpty()
+    val raw = if (actionId == "macro.process") macroProcess.key.ifBlank { declared } else declared
     return if (actionId == "macro.process") canonicalWriteAddress(raw) else MacroReferences.canonicalAddress(raw)
 }
 
-/** Pure ordered text operations. A thrown error aborts the enclosing staged turn. */
+internal fun WorkflowNode.declaredStateWriteAddress(descriptor: ActionDescriptor?): String? {
+    val field = descriptor?.stateWriteKeyField ?: return null
+    return descriptor.withDefaults(arguments)[field]?.trim()
+        ?.takeIf { it.isNotBlank() && !it.contains("{{") }?.let { "state.$it" }
+}
+
+/** Pure ordered text operations. Errors reject this node; previously accepted receipts remain. */
 object TextProcessing {
     private const val MAX_OUTPUT_LENGTH = 1_000_000
     fun validate(steps: List<TextProcessStep>, path: String): List<Issue> = buildList {

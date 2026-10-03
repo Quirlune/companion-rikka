@@ -122,6 +122,6 @@ internal fun HistoryConfigEditor(
         PromptReferenceChoice("楼层数量", "{{history.count}}", "历史处理")
     )
     WorkflowForm(processor.workflow, 0, 1, actions, profiles, usedOutputKeys, processorReferences,
-        { changed -> onChange(history.copy(processor = processor.copy(workflow = changed.copy(trigger = "history.process")))) },
+        { changed -> onChange(history.copy(processor = processor.copy(workflow = changed.copy(trigger = RuntimeEvents.HISTORY_PROCESS)))) },
         {}, {}, {}, fixedTrigger = true)
 }

@@ -5,9 +5,30 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 
 @Serializable enum class ActionFieldType { STRING, NUMBER, BOOLEAN, TEMPLATE, MACRO }
+@Serializable enum class ActionPresentation { STANDARD, COMPATIBILITY }
+/**
+ * PURE_MODEL handlers may only request a model and return candidate text. They must tolerate
+ * concurrent attempts and cancellation, and must not perform other external effects. The engine
+ * checks returned effects, but cannot undo or detect a handler's arbitrary external operations.
+ */
+@Serializable enum class ActionExecution { HANDLER, PURE_MODEL }
 @Serializable data class ActionChoice(val value: String, val title: String)
 @Serializable data class ActionFieldDescriptor(val key: String, val title: String, val type: ActionFieldType = ActionFieldType.STRING, val required: Boolean = false, val defaultValue: String? = null, val choices: List<ActionChoice> = emptyList(), val integer: Boolean = false)
-@Serializable data class ActionDescriptor(val id: String, val title: String, val description: String = "", val fields: List<ActionFieldDescriptor> = emptyList(), val usesModel: Boolean = false, @Transient val stateWriteKeyField: String? = null, @Transient val macroWriteKeyField: String? = null, @Transient val injectionIdField: String? = null, @Transient val injectionTargetWorkflowField: String? = null, @Transient val injectionTargetNodeField: String? = null, @Transient val removesInjection: Boolean = false)
+@Serializable data class ActionDescriptor(
+    val id: String,
+    val title: String,
+    val description: String = "",
+    val fields: List<ActionFieldDescriptor> = emptyList(),
+    val usesModel: Boolean = false,
+    @Transient val stateWriteKeyField: String? = null,
+    @Transient val macroWriteKeyField: String? = null,
+    @Transient val injectionIdField: String? = null,
+    @Transient val injectionTargetWorkflowField: String? = null,
+    @Transient val injectionTargetNodeField: String? = null,
+    @Transient val removesInjection: Boolean = false,
+    val presentation: ActionPresentation = ActionPresentation.STANDARD,
+    val execution: ActionExecution = ActionExecution.HANDLER
+)
 
 data class ActionContext(
     val node: WorkflowNode,
@@ -46,6 +67,7 @@ class ActionRegistry {
     @Synchronized fun register(descriptor: ActionDescriptor, handler: ActionHandler): ActionRegistry {
         require(descriptor.id.isNotBlank()) { "动作 ID 不能为空" }
         require(descriptor.fields.map { it.key }.distinct().size == descriptor.fields.size) { "动作参数键重复" }
+        descriptor.executionIssue()?.let { throw IllegalArgumentException(it) }
         actions[descriptor.id] = RegisteredAction(descriptor.copy(fields = descriptor.fields.toList()), handler)
         return this
     }
@@ -56,7 +78,8 @@ class ActionRegistry {
 
     companion object {
         fun defaults() = ActionRegistry()
-            .register(ActionDescriptor("model.generate", "模型生成", "使用所选模型生成文本", usesModel = true)) { context ->
+            .register(ActionDescriptor("model.generate", "模型生成", "使用所选模型生成文本", usesModel = true,
+                execution = ActionExecution.PURE_MODEL)) { context ->
                 val profile = context.profile ?: error("未选择模型")
                 ActionOutcome(context.gateway.generateAttempt(profile, context.messages, context.onDelta))
             }
@@ -64,7 +87,7 @@ class ActionRegistry {
             .register(ActionDescriptor("state.set", "设置状态", "写入会话状态", listOf(
                 ActionFieldDescriptor("key", "状态键", required = true),
                 ActionFieldDescriptor("value", "值", ActionFieldType.TEMPLATE)
-            ), stateWriteKeyField = "key")) { context ->
+            ), stateWriteKeyField = "key", presentation = ActionPresentation.COMPATIBILITY)) { context ->
                 val key = context.arguments.getValue("key").trim()
                 val value = context.arguments["value"] ?: context.input
                 ActionOutcome(value, mapOf(key to value))
@@ -74,7 +97,7 @@ class ActionRegistry {
                 ActionFieldDescriptor("amount", "变化量", ActionFieldType.NUMBER, required = true, defaultValue = "1"),
                 ActionFieldDescriptor("min", "下限", ActionFieldType.NUMBER),
                 ActionFieldDescriptor("max", "上限", ActionFieldType.NUMBER)
-            ), stateWriteKeyField = "key")) { context ->
+            ), stateWriteKeyField = "key", presentation = ActionPresentation.COMPATIBILITY)) { context ->
                 val key = context.arguments.getValue("key").trim()
                 val current = context.state[key]?.toBigDecimal() ?: BigDecimal.ZERO
                 val amount = context.arguments.getValue("amount").toBigDecimal()
@@ -91,13 +114,13 @@ class ActionRegistry {
                 ActionFieldDescriptor("event", "事件名称", required = true)
             ))) { context ->
                 val event = context.arguments.getValue("event").trim()
-                require(event !in setOf("history.process", "turn.prepare", "user.message", "reply.completed")) { "此事件由运行时派发" }
+                require(!RuntimeEvents.isReserved(event)) { "此事件由运行时派发" }
                 ActionOutcome(context.input, emittedEvents = listOf(event))
             }
             .register(ActionDescriptor("macro.write", "更新宏", "发布宏的新版本", listOf(
                 ActionFieldDescriptor("key", "宏地址", ActionFieldType.MACRO, required = true),
                 ActionFieldDescriptor("value", "内容", ActionFieldType.TEMPLATE)
-            ), macroWriteKeyField = "key")) { context ->
+            ), macroWriteKeyField = "key", presentation = ActionPresentation.COMPATIBILITY)) { context ->
                 val key = MacroReferences.canonicalAddress(context.arguments.getValue("key")) ?: error("宏地址无效")
                 val value = context.arguments["value"] ?: context.input
                 ActionOutcome(value, macroWrites = mapOf(key to value))
@@ -105,7 +128,7 @@ class ActionRegistry {
             .register(ActionDescriptor("macro.activate", "启用或停用宏", "发布宏的可见性版本", listOf(
                 ActionFieldDescriptor("key", "宏地址", ActionFieldType.MACRO, required = true),
                 ActionFieldDescriptor("enabled", "启用", ActionFieldType.BOOLEAN, required = true)
-            ), macroWriteKeyField = "key")) { context ->
+            ), macroWriteKeyField = "key", presentation = ActionPresentation.COMPATIBILITY)) { context ->
                 val key = MacroReferences.canonicalAddress(context.arguments.getValue("key")) ?: error("宏地址无效")
                 val enabled = context.arguments.getValue("enabled").toBooleanStrict()
                 ActionOutcome(context.input, activationWrites = mapOf(key to enabled))
@@ -143,7 +166,7 @@ class ActionRegistry {
             .register(ActionDescriptor("text.extract", "提取文本", "按安全正则提取输入", listOf(
                 ActionFieldDescriptor("pattern", "表达式", required = true),
                 ActionFieldDescriptor("captureGroup", "捕获组", ActionFieldType.NUMBER, defaultValue = "0", integer = true)
-            ))) { context ->
+            ), presentation = ActionPresentation.COMPATIBILITY)) { context ->
                 val pattern = context.arguments.getValue("pattern")
                 val captureGroup = context.arguments.getValue("captureGroup").toInt()
                 ActionOutcome(SafePatterns.extract(pattern, context.input, captureGroup).orEmpty())
@@ -184,11 +207,23 @@ class ActionRegistry {
             }
             .register(ActionDescriptor("prompt.remove", "移除注入", "按所有者与标识移除提示块", listOf(
                 ActionFieldDescriptor("id", "注入标识", required = true)
-            ), injectionIdField = "id", removesInjection = true)) { context ->
+            ), injectionIdField = "id", removesInjection = true, presentation = ActionPresentation.COMPATIBILITY)) { context ->
                 ActionOutcome(context.input, injectionWrites = listOf(PromptInjectionPatch(context.arguments.getValue("id").trim())))
             }
     }
 }
+
+internal fun ActionDescriptor.executionIssue(): String? {
+    if (execution != ActionExecution.PURE_MODEL) return null
+    if (!usesModel) return "纯模型动作必须声明 usesModel"
+    if (stateWriteKeyField != null || macroWriteKeyField != null || injectionIdField != null ||
+        injectionTargetWorkflowField != null || injectionTargetNodeField != null || removesInjection)
+        return "纯模型动作不能声明状态、宏或提示词注入写入"
+    return null
+}
+
+internal fun ActionOutcome.hasEffects(): Boolean = stateWrites.isNotEmpty() || emittedEvents.isNotEmpty() ||
+    macroWrites.isNotEmpty() || activationWrites.isNotEmpty() || injectionWrites.isNotEmpty()
 
 private fun readCopySource(library: Library, session: Session, source: String): String? {
     val raw = source.trim().removeSurrounding("{{", "}}").trim()

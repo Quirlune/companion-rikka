@@ -8,12 +8,11 @@ import dev.gray.companion.core.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
-import kotlinx.serialization.json.Json
 
 /** Resource records stay indexed by type and stable ID; sessions are independent records. */
 class SqliteLibraryRepository(context: Context) : LibraryRepository {
     private val helper = Db(context.applicationContext)
-    private val json = Json { ignoreUnknownKeys = false; encodeDefaults = true }
+    private val json = LibraryFormat.json
     private data class EncodedRecord(val value: Any, val payload: String)
     private var persistedRecords: Map<Pair<String, String>, Pair<Int, String>>? = null
     private var encodedRecords = emptyMap<Pair<String, String>, EncodedRecord>()
@@ -33,10 +32,10 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
             while (cursor.moveToNext()) meta[cursor.getString(0)] = cursor.getString(1)
         }
         val schema = meta["schema"]?.toIntOrNull() ?: if (rows.isEmpty()) 1 else error("Library metadata is damaged")
-        require(schema == 1) { "Unsupported library schema $schema" }
         val known = setOf("character", "main_call", "package", "group", "profile", "session", "connection", "chat_folder", "saved_chat", "persona")
         require(rows.keys.all { it in known }) { "Unknown resource record type" }
-        val library = Library(
+        val decoded = Library(
+            schemaVersion = schema,
             characters = decode(rows["character"], CharacterCard.serializer()),
             mainCalls = decode(rows["main_call"], MainCall.serializer()),
             packages = decode(rows["package"], PromptPackage.serializer()),
@@ -53,6 +52,7 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
             user = meta["user"]?.let { json.decodeFromString(UserIdentity.serializer(), it) } ?: UserIdentity(),
             titleConfig = meta["title_config"]?.let { json.decodeFromString(ChatTitleConfig.serializer(), it) } ?: ChatTitleConfig()
         )
+        val library = LibraryFormat.upgrade(decoded)
         val encoded = mutableMapOf<Pair<String, String>, EncodedRecord>()
         fun <T : Any> remember(kind: String, records: List<T>, id: (T) -> String) {
             records.forEach { record ->
@@ -60,16 +60,17 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
                 encoded[key] = EncodedRecord(record, persisted.getValue(key).second)
             }
         }
-        remember("character", library.characters) { it.id }
-        remember("main_call", library.mainCalls) { it.id }
-        remember("package", library.packages) { it.id }
-        remember("group", library.groups) { it.id }
-        remember("profile", library.profiles) { it.id }
-        remember("connection", library.connections) { it.id }
-        remember("session", library.sessions) { it.id }
-        remember("chat_folder", library.chatFolders) { it.id }
-        remember("saved_chat", library.savedChats) { it.id }
-        remember("persona", library.personas) { it.id }
+        // Cache the decoded objects: a migrated record must be encoded once on save.
+        remember("character", decoded.characters) { it.id }
+        remember("main_call", decoded.mainCalls) { it.id }
+        remember("package", decoded.packages) { it.id }
+        remember("group", decoded.groups) { it.id }
+        remember("profile", decoded.profiles) { it.id }
+        remember("connection", decoded.connections) { it.id }
+        remember("session", decoded.sessions) { it.id }
+        remember("chat_folder", decoded.chatFolders) { it.id }
+        remember("saved_chat", decoded.savedChats) { it.id }
+        remember("persona", decoded.personas) { it.id }
         persistedRecords = persisted
         encodedRecords = encoded
         library
@@ -79,7 +80,7 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
         rows.orEmpty().map { json.decodeFromString(serializer, it) }
 
     override suspend fun save(library: Library): Unit = withContext(Dispatchers.IO) {
-        require(library.schemaVersion == 1) { "Unsupported library schema" }
+        require(library.schemaVersion == LibraryFormat.CURRENT_VERSION) { "Unsupported library schema" }
         val db = helper.writableDatabase
         val nextEncoded = mutableMapOf<Pair<String, String>, EncodedRecord>()
         val wanted = mutableMapOf<Pair<String, String>, Pair<Int, String>>()
@@ -122,7 +123,7 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
                 check(db.insertWithOnConflict("records", null, cv, SQLiteDatabase.CONFLICT_REPLACE) != -1L) { "Record write failed" }
             }
             for (key in previous.keys - wanted.keys) db.delete("records", "kind=? AND id=?", arrayOf(key.first, key.second))
-            putMeta(db, "schema", "1")
+            putMeta(db, "schema", library.schemaVersion.toString())
             putMeta(db, "selected_session", library.selectedSessionId)
             putMeta(db, "selected_profile", library.selectedProfileId)
             putMeta(db, "selected_persona", library.selectedPersonaId)

@@ -16,7 +16,27 @@ object ChatArchive {
 
     fun restore(library: Library, savedChatId: String): Library {
         val saved = requireNotNull(library.savedChats.firstOrNull { it.id == savedChatId }) { "收藏对话不存在" }
-        val chat = saved.snapshot.copy(id = newId(), updatedAt = System.currentTimeMillis())
+        val restoredId = newId()
+        val chat = saved.snapshot.copy(id = restoredId,
+            pendingRun = saved.snapshot.pendingRun?.rebindForRestore(saved.snapshot.id, restoredId),
+            updatedAt = System.currentTimeMillis())
         return library.copy(sessions = listOf(chat) + library.sessions, selectedSessionId = chat.id)
+    }
+
+    private fun RunRecovery.rebindForRestore(sourceId: String, restoredId: String): RunRecovery {
+        // Historical regeneration owns a separate candidate conversation. Restoring the archive
+        // must copy that identity too, without turning it into an in-place latest-turn regeneration.
+        val candidateId = sessionId.takeIf { regenerating && it != sourceId &&
+            initialSession.id == it && regenerationBase?.id == it }
+        val restoredCandidateId = candidateId?.let { newId() }
+        fun mapped(id: String): String = when (id) {
+            sourceId -> restoredId
+            candidateId -> restoredCandidateId ?: id
+            else -> id
+        }
+        fun rebound(session: Session): Session = session.copy(id = mapped(session.id))
+        return copy(sessionId = mapped(sessionId), initialSession = rebound(initialSession),
+            environments = environments.map { it.copy(session = rebound(it.session)) },
+            regenerationBase = regenerationBase?.let(::rebound))
     }
 }

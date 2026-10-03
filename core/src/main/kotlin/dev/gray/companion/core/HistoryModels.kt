@@ -10,7 +10,7 @@ import kotlinx.serialization.Serializable
 @Serializable data class HistoryFloorRule(val messageId: String, val apiRole: Role? = null, val prefix: String? = null, val suffix: String? = null)
 @Serializable data class HistoryInsertion(val id: String = newId(), val title: String = "历史插入", val template: String = "", val role: Role = Role.SYSTEM, val at: HistoryPoint = HistoryPoint(HistoryAnchor.END, 0.0), val enabled: Boolean = true)
 fun defaultHistoryProcessorWorkflow(): Workflow = Workflow(
-    title = "历史上下文处理", trigger = "history.process", enabled = false,
+    title = "历史上下文处理", trigger = RuntimeEvents.HISTORY_PROCESS, enabled = false,
     nodes = listOf(WorkflowNode(title = "处理历史", inputTemplate = "{{history.pending}}", outputKey = "history_summary", includeHistory = false,
         blocks = listOf(PromptBlock(title = "历史处理要求",
             template = "将提供的历史整理为供后续对话使用的摘要，保留人物、世界状态与未完成事项。输出摘要正文。"))))

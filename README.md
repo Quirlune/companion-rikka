@@ -29,4 +29,4 @@ cd companion-rikka
 
 Windows uses `gradlew.bat`. API keys and signing keys remain local; source checkout and prompt editing do not require a configured model. The existing desktop preview launcher belongs to the local workspace, not the repository's portable setup.
 
-Inherited GitHub publishing workflows are retained as upstream source; Actions are disabled in this development repository until intentionally configured.
+Inherited GitHub publishing workflows are archived in `.github/upstream-workflows/`; Actions are disabled in this development repository until intentionally configured.

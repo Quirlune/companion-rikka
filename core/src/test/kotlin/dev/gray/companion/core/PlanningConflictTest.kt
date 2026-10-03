@@ -47,7 +47,7 @@ class PlanningConflictTest {
         assertEquals(session.state, result.state)
         assertEquals(session.results, result.results)
         assertTrue(result.replies.isEmpty())
-        assertTrue(result.traces.any { it.status == "error" && it.detail.contains("同一状态键") })
+        assertTrue(result.traces.any { it.status == "error" && it.detail.contains("同一宏地址") })
     }
 
     @Test fun conditionalAndDisabledAncestorsAllowExclusiveBranchesAndSerialWrites() = runBlocking {

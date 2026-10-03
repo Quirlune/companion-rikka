@@ -2,6 +2,7 @@ package dev.gray.companion.core
 
 interface ModelGateway {
     suspend fun generate(profile: ModelProfile, messages: List<ChatMessage>, onDelta: suspend (String) -> Unit): String
+    /** One request. Report transport failures as ModelRequestFailure so core can apply its retry budget. */
     suspend fun generateAttempt(profile: ModelProfile, messages: List<ChatMessage>, onDelta: suspend (String) -> Unit): String =
         generate(profile, messages, onDelta)
     fun maxParallelCandidates(profile: ModelProfile): Int = 1

@@ -99,10 +99,17 @@ class WorkflowEngineTest {
             WorkflowNode(id = "old", actionId = "text.render", outputKey = "oldResult")
         ))))
         val s = session().copy(groupIds = listOf("loaded"), state = mapOf("mood" to "existing"), results = mapOf("oldResult" to "stale"))
-        val result = WorkflowEngine().run(library(listOf(node), s, listOf(loaded, unloaded)), s, "hello", noModel)
+        val lib = library(listOf(node), s, listOf(loaded, unloaded))
+        val result = WorkflowEngine().run(lib, s, "hello", noModel)
         assertEquals("existing", result.replies.single().text)
         assertEquals("existing", result.state["mood"])
-        assertFalse(result.results.containsKey("oldResult"))
+        assertEquals("stale", result.results["oldResult"])
+        assertTrue("oldResult" in result.unavailableResultKeys)
+        val accepted = s.copy(state = result.state, results = result.results,
+            macroHistory = result.macroHistory, unavailableResultKeys = result.unavailableResultKeys)
+        assertEquals("", MacroResolver(lib, accepted).read("result.oldResult"))
+        val preview = PromptCompiler().preview(lib, accepted, node.copy(inputTemplate = "{{result.oldResult}}"), "hello")
+        assertTrue(preview.messages.none { it.text.contains("stale") })
     }
 
     @Test fun malformedXmlAndMissingPrimaryRejectSafely() = runBlocking {

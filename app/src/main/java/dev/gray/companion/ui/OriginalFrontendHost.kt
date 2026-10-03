@@ -75,15 +75,7 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
     }
     fun update(transform: (Library) -> Library) { scope.launch { report(controller.updateLibrary(transform)) } }
     fun open(screen: Screen) { scope.launch { drawer.close(); navigator.navigate(screen) } }
-    fun edit(kind: String, value: Any) {
-        val id = when (value) {
-            is CharacterCard -> value.id; is MainCall -> value.id; is PromptPackage -> value.id
-            is CallGroup -> value.id; is ModelProfile -> value.id; is ApiConnection -> value.id
-            is UserPersona -> value.id
-            else -> "user"
-        }
-        open(Screen.CompanionEditor(kind, id))
-    }
+    fun edit(target: Editing) { open(Screen.CompanionEditor(target.kind.route, target.id)) }
     fun save(transform: (Library) -> Library) {
         if (saving) return
         saving = true
@@ -134,8 +126,8 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                             onOpenFavorites = { open(Screen.History) },
                             onOpenSearch = { open(Screen.MessageSearch) },
                             onSelectCharacter = ::selectCharacter,
-                            onCreateCharacter = { edit("character", CharacterCard()) },
-                            onEditCharacter = { id -> library.characters.firstOrNull { it.id == id }?.let { edit("character", it) } },
+                            onCreateCharacter = { edit(Editing(EditorKind.CHARACTER, newId())) },
+                            onEditCharacter = { id -> library.characters.firstOrNull { it.id == id }?.let { edit(Editing(EditorKind.CHARACTER, it.id)) } },
                             onSettings = { open(Screen.Setting) },
                             onUsage = { usageDays = 7; open(Screen.CompanionUsage) },
                             onEditUser = { open(Screen.CompanionPersonas) },
@@ -192,7 +184,7 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                             entry<Screen.CompanionPersonas> {
                                 Column(Modifier.fillMaxSize()) {
                                     SettingsHeader("用户身份", { navigator.popBackStack() })
-                                    PersonasScreen(library, { edit(it.kind, it.item) }, ::update, Modifier.weight(1f))
+                                    PersonasScreen(library, ::edit, ::update, Modifier.weight(1f))
                                 }
                             }
                             entry<Screen.CompanionPromptPreview> { PromptPreviewPage(controller) }
@@ -207,14 +199,15 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                             } }, { navigator.popBackStack() }, saving) }
                             entry<Screen.CompanionResources> { key ->
                                 Column(Modifier.fillMaxSize()) {
-                                    SettingsHeader(listOf("角色卡", "主调用", "提示词包", "调用组")[key.kind], { navigator.popBackStack() })
-                                    ResourceScreen(library, key.kind, { edit(it.kind, it.item) }, ::update, Modifier.weight(1f))
+                                    val kind = ResourceKind.fromRouteIndex(key.kind)
+                                    SettingsHeader(kind?.title ?: "资源", { navigator.popBackStack() })
+                                    if (kind != null) ResourceScreen(library, kind, ::edit, ::update, Modifier.weight(1f))
                                 }
                             }
                             entry<Screen.SettingProvider> {
                                 Column(Modifier.fillMaxSize()) {
                                     SettingsHeader("模型与 API", { navigator.popBackStack() })
-                                    ModelsScreen(library, { edit(it.kind, it.item) }, ::update, Modifier.weight(1f))
+                                    ModelsScreen(library, ::edit, ::update, Modifier.weight(1f))
                                 }
                             }
                             entry<Screen.SettingModels> {
@@ -254,47 +247,63 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                 }
                             }
                             entry<Screen.CompanionEditor> { key ->
-                                val initial = remember(key) { when (key.kind) {
-                                    "character" -> library.characters.firstOrNull { it.id == key.id } ?: CharacterCard(id = key.id, name = "新角色", namespace = "character_${key.id.take(8)}")
-                                    "main" -> library.mainCalls.firstOrNull { it.id == key.id } ?: MainCall(id = key.id, name = "新主调用").let { it.copy(primaryWorkflowId = it.workflows.first().id) }
-                                    "package" -> library.packages.firstOrNull { it.id == key.id } ?: PromptPackage(id = key.id)
-                                    "group" -> library.groups.firstOrNull { it.id == key.id } ?: CallGroup(id = key.id)
-                                    "profile" -> library.profiles.firstOrNull { it.id == key.id } ?: ModelProfile(id = key.id, apiConnectionId = library.connections.firstOrNull()?.id)
-                                    "connection" -> library.connections.firstOrNull { it.id == key.id } ?: ApiConnection(id = key.id)
-                                    "persona" -> library.personas.firstOrNull { it.id == key.id } ?: UserPersona(id = key.id, name = "新用户身份")
-                                    else -> library.user
-                                } }
+                                val kind = EditorKind.fromRoute(key.kind)
                                 val back: () -> Unit = { navigator.popBackStack() }
-                                when (key.kind) {
-                                    "character" -> CharacterEditor(initial as CharacterCard, library.packages, { value -> save { it.copy(characters = it.characters.replaceOrAdd(value) { it.id }) } }, back, saving, library = library)
-                                    "user" -> UserIdentityEditor(initial as UserIdentity, { value -> save { it.copy(user = value) } }, back, saving)
-                                    "persona" -> PersonaEditor(initial as UserPersona, library, { value -> save { it.copy(personas = it.personas.replaceOrAdd(value) { it.id }) } }, back, saving)
-                                    "main" -> MainCallEditor(initial as MainCall, { value -> save { it.copy(mainCalls = it.mainCalls.replaceOrAdd(value) { it.id }) } }, back, saving, controller.actionDescriptors, library.profiles, library,
-                                        onSwitchResource = { draft, targetId ->
+                                when (kind) {
+                                    EditorKind.CHARACTER -> {
+                                        val initial = remember(key) { library.characters.firstOrNull { it.id == key.id } ?: CharacterCard(id = key.id, name = "新角色", namespace = "character_${key.id.take(8)}") }
+                                        CharacterEditor(initial, library.packages, { value -> save { it.copy(characters = it.characters.replaceOrAdd(value) { it.id }) } }, back, saving, library = library)
+                                    }
+                                    EditorKind.USER -> {
+                                        val initial = remember(key) { library.user }
+                                        UserIdentityEditor(initial, { value -> save { it.copy(user = value) } }, back, saving)
+                                    }
+                                    EditorKind.PERSONA -> {
+                                        val initial = remember(key) { library.personas.firstOrNull { it.id == key.id } ?: UserPersona(id = key.id, name = "新用户身份") }
+                                        PersonaEditor(initial, library, { value -> save { it.copy(personas = it.personas.replaceOrAdd(value) { it.id }) } }, back, saving)
+                                    }
+                                    EditorKind.MAIN -> {
+                                        val initial = remember(key) { library.mainCalls.firstOrNull { it.id == key.id } ?: MainCall(id = key.id, name = "新主调用").let { it.copy(primaryWorkflowId = it.workflows.first().id) } }
+                                        MainCallEditor(initial, { value -> save { it.copy(mainCalls = it.mainCalls.replaceOrAdd(value) { it.id }) } }, back, saving, controller.actionDescriptors, library.profiles, library,
+                                         onSwitchResource = { draft, targetId ->
                                             if (!saving) {
                                                 saving = true
                                                 scope.launch {
                                                     try {
                                                         val accepted = draft == null || report(controller.updateLibrary { current -> current.copy(mainCalls = current.mainCalls.replaceOrAdd(draft) { it.id }) })
-                                                        if (accepted) navigator.navigate(Screen.CompanionEditor("main", targetId ?: newId())) { popUpTo(key) { inclusive = true } }
+                                                        if (accepted) navigator.navigate(Screen.CompanionEditor(EditorKind.MAIN.route, targetId ?: newId())) { popUpTo(key) { inclusive = true } }
                                                     } finally { saving = false }
                                                 }
                                             }
-                                        })
-                                    "package" -> PackageEditor(initial as PromptPackage, library, { value, cards, mains -> save { lib -> lib.copy(
+                                         })
+                                    }
+                                    EditorKind.PACKAGE -> {
+                                        val initial = remember(key) { library.packages.firstOrNull { it.id == key.id } ?: PromptPackage(id = key.id) }
+                                        PackageEditor(initial, library, { value, cards, mains -> save { lib -> lib.copy(
                                         packages = lib.packages.replaceOrAdd(value) { it.id },
                                         characters = lib.characters.map { it.copy(boundPackageIds = it.boundPackageIds.withPackageBinding(value.id, it.id in cards)) },
                                         mainCalls = lib.mainCalls.map { it.copy(boundPackageIds = it.boundPackageIds.withPackageBinding(value.id, it.id in mains)) },
                                     ) } }, back, saving)
-                                    "group" -> GroupEditor(initial as CallGroup, library.packages, { value -> save { it.copy(groups = it.groups.replaceOrAdd(value) { it.id }) } }, back, saving, controller.actionDescriptors, library.profiles, library)
-                                    "profile" -> ProfileEditor(initial as ModelProfile, library.connections, { value -> save { it.copy(profiles = it.profiles.replaceOrAdd(value) { it.id }, selectedProfileId = it.selectedProfileId ?: value.id) } }, back, saving)
-                                    "connection" -> ConnectionEditor(initial as ApiConnection, controller.getApiKey(key.id), { value, secret ->
+                                    }
+                                    EditorKind.GROUP -> {
+                                        val initial = remember(key) { library.groups.firstOrNull { it.id == key.id } ?: CallGroup(id = key.id) }
+                                        GroupEditor(initial, library.packages, { value -> save { it.copy(groups = it.groups.replaceOrAdd(value) { it.id }) } }, back, saving, controller.actionDescriptors, library.profiles, library)
+                                    }
+                                    EditorKind.PROFILE -> {
+                                        val initial = remember(key) { library.profiles.firstOrNull { it.id == key.id } ?: ModelProfile(id = key.id, apiConnectionId = library.connections.firstOrNull()?.id) }
+                                        ProfileEditor(initial, library.connections, { value -> save { it.copy(profiles = it.profiles.replaceOrAdd(value) { it.id }, selectedProfileId = it.selectedProfileId ?: value.id) } }, back, saving)
+                                    }
+                                    EditorKind.CONNECTION -> {
+                                        val initial = remember(key) { library.connections.firstOrNull { it.id == key.id } ?: ApiConnection(id = key.id) }
+                                        ConnectionEditor(initial, controller.getApiKey(key.id), { value, secret ->
                                         if (!saving) { saving = true; scope.launch {
                                             try {
                                                 if (report(controller.updateLibrary { it.copy(connections = it.connections.replaceOrAdd(value) { it.id }) }) && report(controller.setApiKey(value.id, secret))) navigator.popBackStack()
                                             } finally { saving = false }
                                         } }
-                                    }, back, saving)
+                                        }, back, saving)
+                                    }
+                                    null -> Text("此编辑页不可用")
                                 }
                             }
                         }
@@ -317,9 +326,9 @@ private fun CompanionSettingsPage(onExport: () -> Unit, onImport: () -> Unit) {
                 item(onClick = { navigator.navigate(Screen.CompanionSession) }, headlineContent = { Text("当前对话配置") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionPersonas) }, headlineContent = { Text("用户身份") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionPromptPreview) }, headlineContent = { Text("提示词预览") }, leadingContent = { Icon(HugeIcons.Search01, null) })
-                item(onClick = { navigator.navigate(Screen.CompanionResources(1)) }, headlineContent = { Text("主调用") }, leadingContent = { Icon(HugeIcons.Brain02, null) })
-                item(onClick = { navigator.navigate(Screen.CompanionResources(2)) }, headlineContent = { Text("提示词包") }, leadingContent = { Icon(HugeIcons.Book03, null) })
-                item(onClick = { navigator.navigate(Screen.CompanionResources(3)) }, headlineContent = { Text("调用组") }, leadingContent = { Icon(HugeIcons.Package, null) })
+                item(onClick = { navigator.navigate(Screen.CompanionResources(ResourceKind.MAIN.routeIndex)) }, headlineContent = { Text("主调用") }, leadingContent = { Icon(HugeIcons.Brain02, null) })
+                item(onClick = { navigator.navigate(Screen.CompanionResources(ResourceKind.PACKAGE.routeIndex)) }, headlineContent = { Text("提示词包") }, leadingContent = { Icon(HugeIcons.Book03, null) })
+                item(onClick = { navigator.navigate(Screen.CompanionResources(ResourceKind.GROUP.routeIndex)) }, headlineContent = { Text("调用组") }, leadingContent = { Icon(HugeIcons.Package, null) })
             } }
             item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("连接与界面") }) {
                 item(onClick = { navigator.navigate(Screen.SettingProvider) }, headlineContent = { Text("模型与 API") }, leadingContent = { Icon(HugeIcons.ServerStack01, null) })

@@ -51,7 +51,7 @@ internal fun PersonasScreen(
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("用户身份", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                Button(onClick = { onEdit(Editing("persona", UserPersona(name = "新用户身份"))) }) { Text("新建身份") }
+                Button(onClick = { onEdit(Editing(EditorKind.PERSONA, newId())) }) { Text("新建身份") }
             }
         }
         item {
@@ -92,7 +92,7 @@ internal fun PersonasScreen(
                     supportingContent = {
                         Text(if (session?.personaId == null && session != null) "本段对话使用中 · 身份设定为空" else "保留原昵称与头像 · 身份设定为空")
                     },
-                    trailingContent = { TextButton(onClick = { onEdit(Editing("user", library.user)) }) { Text("编辑") } },
+                    trailingContent = { TextButton(onClick = { onEdit(Editing(EditorKind.USER, "user")) }) { Text("编辑") } },
                 )
             }
         }
@@ -123,7 +123,7 @@ internal fun PersonasScreen(
                         PersonaRowMenu(
                             isDefault = library.selectedPersonaId == persona.id,
                             useCount = useCount,
-                            onEdit = { onEdit(Editing("persona", persona)) },
+                            onEdit = { onEdit(Editing(EditorKind.PERSONA, persona.id)) },
                             onDefault = { onUpdate { it.copy(selectedPersonaId = persona.id) } },
                             onDelete = { pendingDelete = persona },
                         )

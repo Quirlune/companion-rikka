@@ -28,9 +28,12 @@ internal data class RunPlan(val events: Map<String, EventPlan>) {
                         val action = availableActions[node.actionId]
                         if (node.enabled && action == null) return null to Issue("workflow.${workflow.id}.node.${node.id}", "未注册的动作：${node.actionId}")
                         if (node.enabled) {
-                            val issue = action!!.descriptor.validate(node.arguments, "workflow.${workflow.id}.node.${node.id}").firstOrNull { it.error }
+                            action!!.descriptor.executionIssue()?.let {
+                                return null to Issue("workflow.${workflow.id}.node.${node.id}", it)
+                            }
+                            val issue = action.descriptor.validate(node.arguments, "workflow.${workflow.id}.node.${node.id}").firstOrNull { it.error }
                             if (issue != null) return null to issue
-                            if (node.actionId == "event.emit" && node.arguments["event"]?.trim() in setOf("history.process", "turn.prepare", "user.message", "reply.completed")) {
+                            if (node.actionId == "event.emit" && node.arguments["event"]?.trim() in RuntimeEvents.reserved) {
                                 return null to Issue("workflow.${workflow.id}.node.${node.id}.argument.event", "此事件由运行时派发")
                             }
                         }
@@ -55,10 +58,7 @@ internal data class RunPlan(val events: Map<String, EventPlan>) {
                     val macroKeys = guaranteed.flatMap { ref ->
                         buildSet {
                             add("result.${ref.node.outputKey}")
-                            ref.action?.descriptor?.stateWriteKeyField?.let { field ->
-                                ref.node.arguments[field]?.trim()?.takeIf { it.isNotBlank() && !it.contains("{{") }
-                                    ?.let { add("state.$it") }
-                            }
+                            ref.node.declaredStateWriteAddress(ref.action?.descriptor)?.let(::add)
                             ref.node.declaredWriteAddress(ref.action?.descriptor)?.let(::add)
                         }
                     }

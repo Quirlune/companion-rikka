@@ -3,7 +3,7 @@ package dev.gray.companion.core
 object LibraryValidator {
     fun validate(library: Library): List<Issue> {
         val issues = mutableListOf<Issue>()
-        if (library.schemaVersion != 1) issues += Issue("library.schemaVersion", "不支持的资源版本")
+        if (library.schemaVersion != LibraryFormat.CURRENT_VERSION) issues += Issue("library.schemaVersion", "不支持的资源版本")
         fun unique(values: List<String>, path: String) {
             values.filter { it.isBlank() }.forEach { issues += Issue(path, "ID 或名称不能为空") }
             values.filter { it.isNotBlank() }.groupingBy { it }.eachCount().filterValues { it > 1 }.keys.forEach {
@@ -153,8 +153,8 @@ object LibraryValidator {
             val path = "workflow.${workflow.id}"
             if (workflow.title.isBlank()) issues += Issue(path, "工作流名称不能为空")
             if (workflow.trigger.isBlank()) issues += Issue(path, "触发事件不能为空")
-            if (workflow.id in processorIds && workflow.trigger != "history.process") issues += Issue(path, "历史处理调用须使用 history.process")
-            if (workflow.id !in processorIds && workflow.trigger == "history.process") issues += Issue(path, "history.process 只供历史处理调用使用")
+            if (workflow.id in processorIds && workflow.trigger != RuntimeEvents.HISTORY_PROCESS) issues += Issue(path, "历史处理调用须使用 history.process")
+            if (workflow.id !in processorIds && workflow.trigger == RuntimeEvents.HISTORY_PROCESS) issues += Issue(path, "history.process 只供历史处理调用使用")
             if (workflow.modelProfileId != null && library.profiles.none { it.id == workflow.modelProfileId })
                 issues += Issue("$path.modelProfileId", "工作流模型不存在")
             checkCondition(workflow.condition, "$path.condition", issues)

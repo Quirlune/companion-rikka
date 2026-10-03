@@ -20,6 +20,26 @@ class ActionProcessingTest {
                                       onDelta: suspend (String) -> Unit): String = error("unexpected model call")
     }
 
+    @Test fun rejectedInjectionOutcomeDoesNotEmitItsEvent() = runBlocking {
+        val actions = ActionRegistry.defaults().register("invalid.patch") {
+            ActionOutcome("rejected", emittedEvents = listOf("should.not.fire"), injectionWrites = listOf(
+                PromptInjectionPatch("missing-target", PromptBlock(template = "note"), targetWorkflowId = "missing")))
+        }
+        val workflows = listOf(
+            Workflow(id = "entry", nodes = listOf(WorkflowNode(id = "reject", actionId = "invalid.patch", outputKey = "rejected"))),
+            Workflow(id = "listener", trigger = "should.not.fire", nodes = listOf(WorkflowNode(
+                id = "increment", actionId = "state.increment", outputKey = "eventResult",
+                arguments = mapOf("key" to "fired", "amount" to "1"))))
+        )
+        val before = session().copy(state = mapOf("fired" to "0"))
+        val result = WorkflowEngine(actions).run(library(workflows, before), before, "hello", noModel)
+        assertEquals(RunStatus.PAUSED, result.status)
+        assertEquals("0", result.state["fired"])
+        assertFalse(result.results.containsKey("rejected"))
+        assertTrue(result.recovery!!.accepted.isEmpty())
+        assertTrue(result.promptInjections.isEmpty())
+    }
+
     @Test fun macroTargetCopyNumericAndLegacyStateStayCurrent() = runBlocking {
         val nodes = listOf(
             WorkflowNode(id = "set", actionId = "macro.process", inputTemplate = "hp=7", outputKey = "set",
@@ -75,8 +95,11 @@ class ActionProcessingTest {
                     steps = listOf(TextProcessStep(TextProcessKind.INCREASE, amount = "1"))), inputTemplate = "oops")
         )
         val rejected = WorkflowEngine().run(library(listOf(Workflow(id = "flow", nodes = staged)), s), s, "hello", noModel)
-        assertEquals(RunStatus.FAILED, rejected.status)
-        assertFalse(rejected.state.containsKey("x"))
+        assertEquals(RunStatus.PAUSED, rejected.status)
+        assertEquals("3", rejected.state["x"])
+        assertFalse(rejected.results.containsKey("bad"))
+        assertEquals(listOf("flow/first"), rejected.recovery!!.accepted.map { it.nodeKey })
+        assertEquals(listOf("flow/bad"), rejected.recovery.failures.map { it.nodeKey })
     }
 
     @Test fun nodeProfileAndInputOutputProcessingAreAuthoritative() = runBlocking {
@@ -106,7 +129,8 @@ class ActionProcessingTest {
         assertTrue(seenMessages.any { it.role == Role.USER && it.text == "hello!" })
         assertTrue(seenMessages.any { it.role == Role.SYSTEM && it.text == "abc!" })
         assertEquals("done", result.replies.single().text)
-        assertEquals(listOf("done"), updates.filter { it.visible }.map { it.text })
+        assertTrue(updates.none { it.visible })
+        assertEquals(listOf("done"), updates.mapNotNull { it.progress }.last().replies.map { it.text })
         assertEquals(listOf(second.id), WorkflowRequirements.requiredProfiles(lib, s, ActionRegistry.defaults().descriptors()).map { it?.id })
     }
 

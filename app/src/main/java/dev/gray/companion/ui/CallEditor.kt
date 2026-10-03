@@ -91,7 +91,7 @@ internal fun CallListEditor(
 }
 
 internal fun workflowScheduleLabel(workflow: Workflow): String {
-    val phase = when (workflow.trigger) { "user.message" -> "用户消息后"; "reply.completed" -> "正文完成后"; "turn.prepare" -> "发送前准备"; "history.process" -> "历史处理"; else -> workflow.trigger }
+    val phase = when (workflow.trigger) { RuntimeEvents.USER_MESSAGE -> "用户消息后"; RuntimeEvents.REPLY_COMPLETED -> "正文完成后"; RuntimeEvents.TURN_PREPARE -> "发送前准备"; RuntimeEvents.HISTORY_PROCESS -> "历史处理"; else -> workflow.trigger }
     return "$phase · ${if (workflow.queued) "排队 ${workflow.priority} 级" else "并行"}"
 }
 
@@ -170,8 +170,8 @@ internal fun CallModelChoice(selected: String?, profiles: List<ModelProfile>, on
 @Composable
 private fun WorkflowScheduleEditor(workflow: Workflow, onChange: (Workflow) -> Unit) {
     val choices = listOf(
-        ("user.message" to false) to "用户消息后 · 并行", ("user.message" to true) to "用户消息后 · 排队",
-        ("reply.completed" to false) to "正文完成后 · 并行", ("reply.completed" to true) to "正文完成后 · 排队",
+        (RuntimeEvents.USER_MESSAGE to false) to "用户消息后 · 并行", (RuntimeEvents.USER_MESSAGE to true) to "用户消息后 · 排队",
+        (RuntimeEvents.REPLY_COMPLETED to false) to "正文完成后 · 并行", (RuntimeEvents.REPLY_COMPLETED to true) to "正文完成后 · 排队",
     )
     val selected = workflow.trigger to workflow.queued
     ChoiceLine("时机", selected, choices + if (choices.none { it.first == selected }) listOf(selected to workflowScheduleLabel(workflow)) else emptyList()) { (trigger, queued) ->
@@ -182,9 +182,9 @@ private fun WorkflowScheduleEditor(workflow: Workflow, onChange: (Workflow) -> U
         OutlinedTextField(priority, { value -> priority = value; value.toIntOrNull()?.let { onChange(workflow.copy(priority = it)) } }, label = { Text("排队级别") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         Text("数字越小越先完成；同级独立节点并行。可填负数，普通并行与默认调用为 0 级。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    EditorSection("其他触发事件", if (workflow.trigger !in listOf("user.message", "reply.completed")) workflow.trigger else "发送前准备或自定义事件") {
+    EditorSection("其他触发事件", if (workflow.trigger !in listOf(RuntimeEvents.USER_MESSAGE, RuntimeEvents.REPLY_COMPLETED)) workflow.trigger else "发送前准备或自定义事件") {
         TextFieldLine("事件名称", workflow.trigger, { onChange(workflow.copy(trigger = it)) })
-        TextButton(onClick = { onChange(workflow.copy(trigger = "turn.prepare")) }) { Text("使用发送前准备（turn.prepare）") }
+        TextButton(onClick = { onChange(workflow.copy(trigger = RuntimeEvents.TURN_PREPARE)) }) { Text("使用发送前准备（turn.prepare）") }
     }
 }
 
@@ -198,8 +198,7 @@ private fun CallNodeActions(
     val nodeReferences = referencesForWritingNode(references, node.id)
     val usesModel = action?.usesModel == true
     EditorTitleRow(node.title, { rename = true }) { Switch(node.enabled, { onChange(node.copy(enabled = it)) }) }
-    val primaryActions = actions.filter { it.id in setOf("model.generate", "macro.process", "prompt.inject", "text.render", "event.emit") ||
-        (it.id == "prompt.remove" && node.actionId == "prompt.remove") }
+    val primaryActions = actions.filter { it.presentation == ActionPresentation.STANDARD }
     val choices = primaryActions.map { it.id to (when (it.id) { "macro.process" -> "宏处理"; "prompt.inject" -> "管理提示词 · 插入/更新"; "prompt.remove" -> "管理提示词 · 移除"; else -> it.title }) }.distinctBy { it.first } +
         if (node.actionId !in primaryActions.map { it.id }) listOf(node.actionId to "已有动作：${action?.title ?: node.actionId}") else emptyList()
     ChoiceLine("动作", node.actionId, choices) { selected ->
@@ -210,6 +209,8 @@ private fun CallNodeActions(
         onPrompt(PromptEditRequest(node.blocks, nodeReferences) { onChange(node.copy(blocks = it)) })
     }
     Text(action?.description ?: "此动作未注册；原有参数已保留，运行前需要恢复相应动作。", style = MaterialTheme.typography.bodySmall, color = if (action == null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+    if (usesModel && node.actionId != "model.generate")
+        NodeModelOptionsEditor(node, profiles, onChange, nodeReferences)
     when (node.actionId) {
         "macro.process" -> MacroProcessEditor(node, onChange, nodeReferences)
         "prompt.inject", "prompt.remove" -> PromptManagementEditor(node, nodes, onChange, nodeReferences)

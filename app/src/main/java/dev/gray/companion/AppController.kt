@@ -5,11 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import dev.gray.companion.core.*
-import dev.gray.companion.data.KeystoreCredentialStore
-import dev.gray.companion.data.RikkaGateway
 import dev.gray.companion.data.GatewayFailure
-import dev.gray.companion.data.SqliteLibraryRepository
-import dev.gray.companion.data.SqliteUsageRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineStart
@@ -26,7 +22,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.util.Locale
@@ -46,17 +41,25 @@ data class ControllerState(
     val titleError: String? = null,
 )
 
-class AppController(context: Context, private val actions: ActionRegistry = ActionRegistry.defaults()) : ViewModel() {
+class AppController internal constructor(
+    context: Context,
+    private val actions: ActionRegistry,
+    dependencies: ControllerDependencies,
+) : ViewModel() {
+    constructor(context: Context, actions: ActionRegistry = ActionRegistry.defaults()) :
+        this(context, actions, ControllerDependencies.android(context))
+
     val actionDescriptors: List<ActionDescriptor> get() = actions.descriptors()
-    private val repository = SqliteLibraryRepository(context)
-    private val usageRepository = SqliteUsageRepository(context)
+    private val repository = dependencies.library
+    private val usageRepository = dependencies.usage
+    private val gatewayFactory = dependencies.gateway
     private val usageMutex = Mutex()
     private var usageFrom = Long.MAX_VALUE
     private val _usage = MutableStateFlow<List<ModelUsageRecord>>(emptyList())
     val usage: StateFlow<List<ModelUsageRecord>> = _usage.asStateFlow()
     private val _usageError = MutableStateFlow<String?>(null)
     val usageError: StateFlow<String?> = _usageError.asStateFlow()
-    private val credentials = KeystoreCredentialStore(context)
+    private val credentials = dependencies.credentials
     private val applicationContext = context.applicationContext
     private data class PreparedTurn(
         val library: Library,
@@ -68,13 +71,12 @@ class AppController(context: Context, private val actions: ActionRegistry = Acti
         val sourceSessionId: String,
         val recovery: RunRecovery? = null,
         val decision: RecoveryDecision? = null,
+        val completion: CompletableDeferred<Unit>,
     )
-    private val json = Json { ignoreUnknownKeys = false; encodeDefaults = true }
     private val mutex = Mutex()
     private val titleJobs = mutableMapOf<String, Deferred<List<Issue>>>()
     @Volatile private var runJob: Job? = null
     @Volatile private var runCompletion: CompletableDeferred<Unit>? = null
-    @Volatile private var commitInProgress = false
     @Volatile private var revision = 0L
     private var lastRetry: Pair<String, String>? = null // session ID to input
     @Volatile private var storageReady = false
@@ -266,12 +268,11 @@ class AppController(context: Context, private val actions: ActionRegistry = Acti
             _state.value = _state.value.copy(titleError = null)
             viewModelScope.async(start = CoroutineStart.LAZY) {
                 try {
-                    val gateway = RikkaGateway(applicationContext, object : CredentialStore {
+                    val gateway = gatewayFactory(object : CredentialStore {
                         override fun get(profileId: String): String = secret
                         override fun put(profileId: String, secret: String) = error("运行凭据快照只读")
                         override fun remove(profileId: String) = error("运行凭据快照只读")
-                    }, sessionId = sessionId, onUsage = ::recordUsage,
-                        connectionLimits = snapshot.connections.associate { it.id to it.maxConcurrentRequests })
+                    }, sessionId, snapshot.connections.associate { it.id to it.maxConcurrentRequests }, ::recordUsage)
                     val title = gateway.generate(request.profile, request.messages) {}.trim()
                     if (title.isBlank()) return@async listOf(Issue("title", "模型没有返回标题"))
                     mutex.withLock {
@@ -550,108 +551,57 @@ class AppController(context: Context, private val actions: ActionRegistry = Acti
             _error.value = null
             _state.value = _state.value.copy(busy = true, streaming = "", traces = emptyList(), error = null, issues = emptyList(), pendingOutputs = emptyList(), generationPreview = staged.takeIf { regenerationBase != null })
             if (regenerationMessageId == null) lastRetry = session.id to runInput
-            runCompletion = CompletableDeferred()
-            PreparedTurn(next, staged, revision, secrets, runInput, regenerationBase, session.id, recovery, recoveryDecision)
+            val completion = CompletableDeferred<Unit>()
+            runCompletion = completion
+            PreparedTurn(next, staged, revision, secrets, runInput, regenerationBase, session.id, recovery, recoveryDecision, completion)
         }
         if (prepared == null) { accepted?.complete(false); return@supervisorScope false }
         accepted?.complete(true)
         val (snapshot, session, runRevision, secrets, runInput, regenerationBase, sourceSessionId, recovery, decision) = prepared
-        val completion = runCompletion!!
-        val gateway = RikkaGateway(applicationContext, object : CredentialStore {
-            override fun get(profileId: String): String = secrets[profileId].orEmpty()
-            override fun put(profileId: String, secret: String) = error("运行凭据快照只读")
-            override fun remove(profileId: String) = error("运行凭据快照只读")
-        }, sessionId = session.id, onUsage = ::recordUsage,
-            connectionLimits = snapshot.connections.associate { it.id to it.maxConcurrentRequests })
-        val outputOrder = (snapshot.mainCalls.firstOrNull { it.id == session.mainCallId }?.workflows.orEmpty() +
-            snapshot.loadedCallGroups(session).flatMap { it.workflows })
-            .flatMap { flow -> flow.nodes.map { flow.id to it.id } }.withIndex().associate { it.value to it.index }
-        var persistedRunId = recovery?.id
-        var lastPersistedResult: RunResult? = null
-        suspend fun persist(result: RunResult) = withContext(NonCancellable) {
-            mutex.withLock {
-                if (result == lastPersistedResult) return@withLock
-                val current = _library.value.sessions.firstOrNull { it.id == sourceSessionId }
-                    ?: error("运行中的会话已移除")
-                val journal = result.recovery?.copy(regenerating = regenerationBase != null,
-                    regenerationBase = regenerationBase)
-                if (journal != null) {
-                    if (persistedRunId == null) persistedRunId = journal.id
-                    val currentPendingRun = current.pendingRun
-                    check(persistedRunId == journal.id && (currentPendingRun == null || currentPendingRun.id == journal.id)) {
-                        "运行断点已改变"
-                    }
-                }
-                val savedResult = result.copy(recovery = journal)
-                val forking = session.id != sourceSessionId
-                val operation = when {
-                    regenerationBase != null && result.status != RunStatus.SUCCESS ->
-                        MessageOperationResult(current.copy(pendingRun = journal))
-                    regenerationBase != null -> MessageOperations.commitRegeneration(
-                        if (forking) regenerationBase else current, session, savedResult)
-                    current.pendingRun != null -> MessageOperations.continuePartialTurn(current, savedResult)
-                    result.status == RunStatus.SUCCESS -> MessageOperations.recordSuccessfulTurn(session, savedResult)
-                    journal != null -> MessageOperations.recordPartialTurn(session, savedResult)
-                    else -> MessageOperationResult(current)
-                }
-                val generated = operation.session ?: error(operation.issues.firstOrNull()?.message ?: "运行进度无法保存")
-                val committed = generated.copy(title = current.title, titlePending = current.titlePending,
-                    isPinned = if (forking && result.status == RunStatus.SUCCESS) false else current.isPinned,
-                    updatedAt = System.currentTimeMillis())
-                val next = if (forking && result.status == RunStatus.SUCCESS) _library.value.copy(
-                    sessions = _library.value.sessions.map { if (it.id == sourceSessionId) it.copy(pendingRun = null) else it } + committed,
-                    selectedSessionId = committed.id)
-                    else _library.value.copy(sessions = _library.value.sessions.map { if (it.id == sourceSessionId) committed else it })
-                commitInProgress = true
-                try {
-                    repository.save(next)
-                    _library.value = next
-                    lastPersistedResult = result
-                    if (regenerationBase != null && result.status != RunStatus.SUCCESS && journal != null) {
-                        _state.value = _state.value.copy(generationPreview = session.copy(
-                            messages = session.messages + journal.replies, state = journal.state, results = journal.results,
-                            resultOrigins = journal.resultOrigins, macroHistory = journal.macroHistory,
-                            promptInjections = journal.promptInjections, historyDigests = journal.historyDigests,
-                            unavailableResultKeys = journal.unavailableKeys))
-                    }
-                    val acceptedNodes = journal?.accepted.orEmpty().map { it.reply?.let { reply -> reply.workflowId to reply.nodeId } }.toSet()
-                    val pending = _state.value.pendingOutputs.filterNot { (it.workflowId to it.nodeId) in acceptedNodes }
-                    _streaming.value = pending.filter { it.outputSlot == OutputSlot.BODY }.joinToString("\n\n") { it.text }
-                    _state.value = _state.value.copy(pendingOutputs = pending, streaming = _streaming.value)
-                } finally { commitInProgress = false }
-            }
-        }
-        val job = async(start = CoroutineStart.LAZY) {
-            val onUpdate: suspend (RunUpdate) -> Unit = onUpdate@{ update ->
-                update.progress?.let { persist(it) }
-                if (runRevision != revision) return@onUpdate
-                if (update.replace) {
-                    val pending = _state.value.pendingOutputs.filterNot { it.workflowId == update.workflowId && it.nodeId == update.nodeId }
-                    _streaming.value = pending.filter { it.outputSlot == OutputSlot.BODY }.joinToString("\n\n") { it.text }
-                    _state.value = _state.value.copy(pendingOutputs = pending, streaming = _streaming.value)
-                }
-                if (update.visible && update.text.isNotEmpty()) {
-                    val pending = _state.value.pendingOutputs.toMutableList()
-                    val index = pending.indexOfFirst { it.workflowId == update.workflowId && it.nodeId == update.nodeId }
-                    if (index < 0) pending += PendingOutput(update.workflowId, update.nodeId, update.text, update.outputSlot, update.turnId)
-                    else pending[index] = pending[index].copy(text = pending[index].text + update.text)
-                    val ordered = pending.sortedBy { outputOrder[it.workflowId to it.nodeId] ?: Int.MAX_VALUE }
-                    _streaming.value = ordered.filter { it.outputSlot == OutputSlot.BODY }.joinToString("\n\n") { it.text }
-                    _state.value = _state.value.copy(streaming = _streaming.value, pendingOutputs = ordered)
-                }
-                update.trace?.let { trace -> _state.value = _state.value.copy(traces = _state.value.traces + trace) }
-            }
-            if (recovery != null && decision != null)
-                WorkflowEngine(actions).resume(snapshot, _library.value.sessions.first { it.id == sourceSessionId }, gateway, recovery, decision, onUpdate)
-            else WorkflowEngine(actions).run(snapshot, session, runInput, gateway, onUpdate)
-        }
-        runJob = job
-        if (runRevision != revision) job.cancel() else job.start()
+        val completion = prepared.completion
+        var launchedJob: Job? = null
         var titleSessionId: String? = null
         var recoveryAccepted = false
         try {
+            val gateway = gatewayFactory(object : CredentialStore {
+                override fun get(profileId: String): String = secrets[profileId].orEmpty()
+                override fun put(profileId: String, secret: String) = error("运行凭据快照只读")
+                override fun remove(profileId: String) = error("运行凭据快照只读")
+            }, session.id, snapshot.connections.associate { it.id to it.maxConcurrentRequests }, ::recordUsage)
+            val outputOrder = (snapshot.mainCalls.firstOrNull { it.id == session.mainCallId }?.workflows.orEmpty() +
+                snapshot.loadedCallGroups(session).flatMap { it.workflows })
+                .flatMap { flow -> flow.nodes.map { flow.id to it.id } }.withIndex().associate { it.value to it.index }
+            val publisher = AcceptedTurnPublisher(repository, mutex, _library, _state, _streaming,
+                session, sourceSessionId, regenerationBase, recovery?.id)
+            val job = async(start = CoroutineStart.LAZY) {
+                val onUpdate: suspend (RunUpdate) -> Unit = onUpdate@{ update ->
+                    update.progress?.let { publisher.persist(it) }
+                    if (runRevision != revision) return@onUpdate
+                    if (update.replace) {
+                        val pending = _state.value.pendingOutputs.filterNot { it.workflowId == update.workflowId && it.nodeId == update.nodeId }
+                        _streaming.value = pending.filter { it.outputSlot == OutputSlot.BODY }.joinToString("\n\n") { it.text }
+                        _state.value = _state.value.copy(pendingOutputs = pending, streaming = _streaming.value)
+                    }
+                    if (update.visible && update.text.isNotEmpty()) {
+                        val pending = _state.value.pendingOutputs.toMutableList()
+                        val index = pending.indexOfFirst { it.workflowId == update.workflowId && it.nodeId == update.nodeId }
+                        if (index < 0) pending += PendingOutput(update.workflowId, update.nodeId, update.text, update.outputSlot, update.turnId)
+                        else pending[index] = pending[index].copy(text = pending[index].text + update.text)
+                        val ordered = pending.sortedBy { outputOrder[it.workflowId to it.nodeId] ?: Int.MAX_VALUE }
+                        _streaming.value = ordered.filter { it.outputSlot == OutputSlot.BODY }.joinToString("\n\n") { it.text }
+                        _state.value = _state.value.copy(streaming = _streaming.value, pendingOutputs = ordered)
+                    }
+                    update.trace?.let { trace -> _state.value = _state.value.copy(traces = _state.value.traces + trace) }
+                }
+                if (recovery != null && decision != null)
+                    WorkflowEngine(actions).resume(snapshot, _library.value.sessions.first { it.id == sourceSessionId }, gateway, recovery, decision, onUpdate)
+                else WorkflowEngine(actions).run(snapshot, session, runInput, gateway, onUpdate)
+            }
+            launchedJob = job
+            runJob = job
+            if (runRevision != revision) job.cancel() else job.start()
             val result = job.await()
-            persist(result)
+            publisher.persist(result)
             val resultRecovery = result.recovery
             recoveryAccepted = result.status == RunStatus.SUCCESS ||
                 (decision != null && resultRecovery != null && resultRecovery.failures.none { it.nodeKey == decision.nodeKey })
@@ -681,7 +631,7 @@ class AppController(context: Context, private val actions: ActionRegistry = Acti
                         _streaming.value = ""
                         _state.value = _state.value.copy(busy = false, streaming = "", pendingOutputs = emptyList(), generationPreview = null)
                     }
-                    if (runJob === job) runJob = null
+                    if (runJob === launchedJob) runJob = null
                 }
                 completion.complete(Unit)
                 if (runCompletion === completion) runCompletion = null
@@ -724,19 +674,19 @@ class AppController(context: Context, private val actions: ActionRegistry = Acti
     }
 
     suspend fun export(): String = mutex.withLock {
-        withContext(Dispatchers.Default) { json.encodeToString(Library.serializer(), _library.value) }
+        withContext(Dispatchers.Default) { LibraryFormat.encode(_library.value) }
     }
     suspend fun importBundle(jsonText: String, selectImportedSession: Boolean = false): List<Issue> {
         val decoded = try { withContext(Dispatchers.Default) {
-            val document = json.parseToJsonElement(jsonText) as? JsonObject ?: error("资源文件须为对象")
+            val document = LibraryFormat.json.parseToJsonElement(jsonText) as? JsonObject ?: error("资源文件须为对象")
             if ((document["format"] as? JsonPrimitive)?.content == "sillytavern.preview.v1")
                 SillyTavernImport.convert(jsonText, library.value)
-            else ImportResult(ModelCatalog.normalize(json.decodeFromJsonElement(Library.serializer(), document)), emptyList())
+            else ImportResult(ModelCatalog.normalize(LibraryFormat.decode(jsonText)), emptyList())
         } }
         catch (failure: IllegalArgumentException) { return listOf(Issue("import", failure.message ?: "JSON 无法读取或格式不受支持")) }
         catch (_: Exception) { return listOf(Issue("import", "JSON 无法读取或格式不受支持")) }
-        val imported = decoded.library
-        if (imported.schemaVersion != 1) return listOf(Issue("import.schemaVersion", "不支持的资源版本"))
+        val imported = try { LibraryFormat.upgrade(decoded.library) }
+        catch (_: IllegalArgumentException) { return listOf(Issue("import.schemaVersion", "不支持的资源版本")) }
         // Validate the merged graph: imports may refer to an existing model or persona.
         val saved = updateLibrary { old ->
             old.copy(characters = old.characters + imported.characters, mainCalls = old.mainCalls + imported.mainCalls,

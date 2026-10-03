@@ -308,9 +308,9 @@ private fun isVersionedMacro(macro: String): Boolean {
 }
 
 internal fun callPhaseLabel(trigger: String): String = when (trigger) {
-    "turn.prepare" -> "发送前准备"
-    "user.message" -> "用户消息后"
-    "reply.completed" -> "正文完成后"
+    RuntimeEvents.TURN_PREPARE -> "发送前准备"
+    RuntimeEvents.USER_MESSAGE -> "用户消息后"
+    RuntimeEvents.REPLY_COMPLETED -> "正文完成后"
     else -> "自定义事件：$trigger"
 }
 
@@ -323,7 +323,7 @@ internal fun CallScheduleOverview(workflows: List<Workflow>, primaryId: String?,
     TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起调用顺序" else "查看调用顺序") }
     if (expanded) OutlinedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            val phases = listOf("turn.prepare" to "① 发送前准备", "user.message" to "② 用户消息后的调用", "reply.completed" to "③ 正文完成后")
+            val phases = listOf(RuntimeEvents.TURN_PREPARE to "① 发送前准备", RuntimeEvents.USER_MESSAGE to "② 用户消息后的调用", RuntimeEvents.REPLY_COMPLETED to "③ 正文完成后")
             phases.forEach { (trigger, title) ->
                 Text(title, style = MaterialTheme.typography.titleSmall)
                 val calls = workflows.filter { it.trigger == trigger }

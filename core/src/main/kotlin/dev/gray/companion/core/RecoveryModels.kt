@@ -84,7 +84,9 @@ import kotlinx.serialization.Serializable
     val replies: List<ChatMessage> = emptyList(),
     val traces: List<RunTrace> = emptyList(),
     val regenerating: Boolean = false,
-    val regenerationBase: Session? = null
+    val regenerationBase: Session? = null,
+    val formatVersion: Int = 1,
+    val executionVersion: Int = 1
 ) {
     val acceptedCount: Int get() = accepted.size
 }

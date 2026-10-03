@@ -80,7 +80,7 @@ internal fun ModelsScreen(
                     Text("API 连接", style = MaterialTheme.typography.titleLarge)
                     Text("凭据由本机凭据存储管理；导出的 JSON 不包含 API Key。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Button(onClick = { onEdit(Editing("connection", ApiConnection())) }) { Text("新建连接") }
+                Button(onClick = { onEdit(Editing(EditorKind.CONNECTION, newId())) }) { Text("新建连接") }
             }
         }
         if (visibleConnections.isEmpty()) {
@@ -94,7 +94,7 @@ internal fun ModelsScreen(
                 val linkedModels = linkedModelCounts[connection.id] ?: 0
                 CardGroup {
                     item(
-                        onClick = { onEdit(Editing("connection", connection)) },
+                        onClick = { onEdit(Editing(EditorKind.CONNECTION, connection.id)) },
                         headlineContent = {
                             Text(connection.name.ifBlank { "API 连接" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         },
@@ -109,7 +109,7 @@ internal fun ModelsScreen(
                             ModelRowMenu(
                                 deleteEnabled = linkedModels == 0,
                                 deleteDisabledReason = "仍有模型使用此连接",
-                                onEdit = { onEdit(Editing("connection", connection)) },
+                                onEdit = { onEdit(Editing(EditorKind.CONNECTION, connection.id)) },
                                 onDelete = { deleteConnection = connection },
                             )
                         },
@@ -124,7 +124,7 @@ internal fun ModelsScreen(
                     Text("节点模型优先于调用模型；调用模型优先于全局默认。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Button(onClick = {
-                    onEdit(Editing("profile", ModelProfile(apiConnectionId = library.connections.firstOrNull()?.id)))
+                    onEdit(Editing(EditorKind.PROFILE, newId()))
                 }) { Text("新建模型") }
             }
         }
@@ -141,7 +141,7 @@ internal fun ModelsScreen(
                 val assignedWorkflows = assignedWorkflowCounts[profile.id] ?: 0
                 CardGroup {
                     item(
-                        onClick = { onEdit(Editing("profile", profile)) },
+                        onClick = { onEdit(Editing(EditorKind.PROFILE, profile.id)) },
                         headlineContent = {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text(profile.name.ifBlank { "未命名模型" }, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
@@ -171,7 +171,7 @@ internal fun ModelsScreen(
                                 defaultLabel = if (library.selectedProfileId == profile.id) "当前默认" else "设为默认",
                                 deleteEnabled = assignedWorkflows == 0,
                                 deleteDisabledReason = "被 $assignedWorkflows 处调用或节点配置使用",
-                                onEdit = { onEdit(Editing("profile", profile)) },
+                                onEdit = { onEdit(Editing(EditorKind.PROFILE, profile.id)) },
                                 onDelete = { deleteProfile = profile },
                             )
                         },

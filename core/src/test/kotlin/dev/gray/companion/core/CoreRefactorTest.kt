@@ -107,8 +107,18 @@ class CoreRefactorTest {
             ))
             val targeted = session.copy(state = mapOf("target" to "reply.completed"))
             val rejected = WorkflowEngine(registry).run(library(listOf(invalidPrepare, interaction, post), targeted), targeted, "hello", noModel)
-            assertEquals(RunStatus.FAILED, rejected.status)
-            assertEquals(1, seen.size)
+            assertFalse(rejected.results.containsKey("event"))
+            if (eventArgument == "reply.completed") {
+                assertEquals(RunStatus.FAILED, rejected.status)
+                assertTrue(rejected.replies.isEmpty())
+                assertEquals(1, seen.size)
+            } else {
+                assertEquals(RunStatus.PAUSED, rejected.status)
+                assertEquals(listOf("prepare/emit"), rejected.recovery!!.failures.map { it.nodeKey })
+                assertEquals(listOf("answer"), rejected.replies.map { it.text })
+                assertEquals(2, seen.size)
+                assertEquals(listOf("hello", "answer"), seen.last().map { it.text })
+            }
         }
     }
 

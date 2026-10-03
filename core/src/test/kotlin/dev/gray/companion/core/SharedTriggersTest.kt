@@ -31,10 +31,10 @@ class SharedTriggersTest {
         ))
         val stale = Workflow(id = "stale", condition = Condition(expression = "result.score == 'old'"),
             nodes = listOf(renderNode("staleReceipt", input = "must stay skipped")))
-        val historical = Workflow(id = "historical", condition = Condition(expression = "macro('macro.score') == 'old'"),
+        val historical = Workflow(id = "historical", condition = Condition(expression = "macro('macro.score@version-1') == 'old'"),
             nodes = listOf(renderNode("historicalReceipt", input = "explicit history")))
         val consumer = Workflow(id = "consumer", queued = true, priority = 1,
-            condition = Condition(expression = "number(macro('result.score')) >= 7"),
+            condition = Condition(expression = "exists(macro('result.score')) && number(macro('result.score')) >= 7"),
             recognition = Recognition(rules = listOf(RecognitionRule(template = "{{result.score}}",
                 pattern = "([0-9]+)", captureGroup = 1, op = Compare.EQUALS, value = "7"))),
             nodes = listOf(renderNode("answer", input = "fresh {{result.score}}/{{result.draft}}").copy(visible = true)))

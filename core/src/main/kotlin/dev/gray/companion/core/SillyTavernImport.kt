@@ -276,7 +276,7 @@ object SillyTavernImport {
                     "scope" to InjectionScope.TURN.name))
         }
         val depthWorkflow = Workflow(id = id("workflow", "world-depth:$sourceName"), title = "场景深度提示",
-            trigger = "turn.prepare", nodes = depthNodes)
+            trigger = RuntimeEvents.TURN_PREPARE, nodes = depthNodes)
         val group = CallGroup(id = groupId, name = "$sourceName · 场景注入",
             workflows = if (depthNodes.isEmpty()) emptyList() else listOf(depthWorkflow),
             boundPackageIds = listOf(packId))
@@ -305,7 +305,7 @@ object SillyTavernImport {
             outputProcessing = listOf(TextProcessStep(TextProcessKind.REGEX_EXTRACT,
                 pattern = "(?s)<StatusBlock>.*?</StatusBlock>"), TextProcessStep(TextProcessKind.TRIM)))
         val statusWorkflow = Workflow(id = id("workflow", "status:$sourceName"), title = "回复后状态",
-            trigger = "reply.completed", nodes = listOf(statusNode))
+            trigger = RuntimeEvents.REPLY_COMPLETED, nodes = listOf(statusNode))
         val tileTemplate = "{{result.status}}"
         val tiles = listOf(MacroTile(id = id("tile", "chat-status:$sourceName"), title = "场景状态",
             template = tileTemplate, kind = MacroTileKind.STATUS, slot = OutputSlot.AFTER_BODY,

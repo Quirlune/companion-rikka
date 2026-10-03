@@ -1,11 +1,14 @@
 package dev.gray.companion.core
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -32,6 +35,38 @@ class RecoveryTest {
     private fun statusTile() = MacroTile(title = "Status", template = "{{result.status}}",
         kind = MacroTileKind.STATUS, fields = listOf(MacroStatusField("love", "Love",
             MacroTileKind.PROGRESS, 0.0, 100.0)))
+
+    @Test fun unknownJournalVersionsKeepAcceptedDataWithoutExecution() = runBlocking {
+        val before = session()
+        val base = library(before, listOf(Workflow(id = "flow", nodes = listOf(WorkflowNode(id = "failed")))))
+        val reply = ChatMessage(id = "accepted-reply", role = Role.ASSISTANT, text = "kept", turnId = "user-turn")
+        val versions = mapOf("result.kept" to listOf(MacroVersion(1, "kept", ResultOrigin("main", "flow", "done"))))
+        val journal = RunRecovery(id = "run", sessionId = before.id, turnId = "user-turn", input = "hello",
+            checkpoint = MessageOperations.captureCheckpoint(before), initialSession = before, frozenResources = base,
+            accepted = listOf(RecoveryReceipt("flow/done", ActionOutcome("kept"), reply)),
+            failures = listOf(RecoveryFailure("flow/failed", "flow", "failed", "Failed", RecoveryFailureKind.MODEL_REQUEST, "offline")),
+            state = mapOf("count" to "1"), results = mapOf("kept" to "kept"), macroHistory = versions,
+            replies = listOf(reply), unavailableKeys = setOf("reply"))
+        var calls = 0
+        val gateway = object : ModelGateway {
+            override suspend fun generate(profile: ModelProfile, messages: List<ChatMessage>,
+                onDelta: suspend (String) -> Unit): String { calls++; error("Unknown journals must not execute") }
+        }
+        for (unknown in listOf(journal.copy(formatVersion = 2), journal.copy(executionVersion = 2))) {
+            val current = before.copy(pendingRun = unknown)
+            val result = WorkflowEngine().resume(base, current, gateway, unknown,
+                RecoveryDecision(RecoveryDecisionKind.RETRY, "flow/failed"))
+            assertEquals(RunStatus.PAUSED, result.status)
+            assertEquals(RecoveryFailureKind.CONFLICT, result.recovery!!.failures.single().kind)
+            assertEquals(unknown.accepted, result.recovery.accepted)
+            assertEquals(unknown.state, result.state)
+            assertEquals(unknown.results, result.results)
+            assertEquals(unknown.macroHistory, result.macroHistory)
+            assertEquals(unknown.replies, result.replies)
+            assertEquals(unknown.unavailableKeys, result.unavailableResultKeys)
+        }
+        assertEquals(0, calls)
+    }
 
     @Test fun siblingSurvivesAndEditedPromptUsesFrozenBreakpoint() = runBlocking {
         val good = WorkflowNode(id = "good", title = "Good", outputKey = "good", visible = true,
@@ -153,7 +188,11 @@ class RecoveryTest {
 
     @Test fun formatCandidatesPublishOnceAndSerialModeStopsAtThree() = runBlocking {
         val before = session()
-        val flow = Workflow(id = "flow", nodes = listOf(strictStatusNode()))
+        val actions = ActionRegistry.defaults().register(ActionDescriptor("another.model", "Another model",
+            usesModel = true, execution = ActionExecution.PURE_MODEL)) { context ->
+            ActionOutcome(context.gateway.generateAttempt(context.profile!!, context.messages, context.onDelta))
+        }
+        val flow = Workflow(id = "flow", nodes = listOf(strictStatusNode().copy(actionId = "another.model")))
         val base = library(before, listOf(flow), listOf(statusTile()))
         var calls = 0
         val gateway = object : ModelGateway {
@@ -165,7 +204,7 @@ class RecoveryTest {
                 else -> "<StatusBlock><love>42</love></StatusBlock>"
             }
         }
-        val result = WorkflowEngine().run(base, before, "hello", gateway)
+        val result = WorkflowEngine(actions).run(base, before, "hello", gateway)
         assertEquals(RunStatus.SUCCESS, result.status)
         assertTrue(calls in 3..5)
         assertEquals(1, result.macroHistory["result.status"].orEmpty().size)
@@ -176,10 +215,72 @@ class RecoveryTest {
             override suspend fun generate(profile: ModelProfile, messages: List<ChatMessage>,
                 onDelta: suspend (String) -> Unit): String { serialCalls++; return "invalid" }
         }
-        val failed = WorkflowEngine().run(base, before, "hello", serial)
+        val failed = WorkflowEngine(actions).run(base, before, "hello", serial)
         assertEquals(RunStatus.PAUSED, failed.status)
         assertEquals(3, serialCalls)
         assertFalse(failed.results.containsKey("status"))
+    }
+
+    @Test fun modelHandlersAndInvalidPureOutcomesDoNotRetryEffects() = runBlocking {
+        val before = session()
+        var calls = 0
+        val gateway = object : ModelGateway {
+            override fun maxParallelCandidates(profile: ModelProfile) = 2
+            override suspend fun generate(profile: ModelProfile, messages: List<ChatMessage>,
+                onDelta: suspend (String) -> Unit): String = error("Handler owns this action")
+        }
+        for (execution in ActionExecution.entries) {
+            calls = 0
+            val actions = ActionRegistry.defaults().register(ActionDescriptor("model.effect", "Model with effect",
+                usesModel = true, execution = execution)) {
+                calls++
+                ActionOutcome("invalid", stateWrites = mapOf("count" to "1"), emittedEvents = listOf("effect.event"))
+            }
+            val flow = Workflow(id = "flow", nodes = listOf(strictStatusNode().copy(actionId = "model.effect")))
+            val result = WorkflowEngine(actions).run(library(before, listOf(flow)), before, "hello", gateway)
+            assertEquals(RunStatus.PAUSED, result.status)
+            assertEquals(1, calls)
+            assertTrue(result.state.isEmpty())
+            assertTrue(result.recovery!!.accepted.isEmpty())
+            if (execution == ActionExecution.PURE_MODEL) {
+                assertEquals(RecoveryFailureKind.CONFIGURATION, result.recovery.failures.single().kind)
+                assertFalse(result.recovery.failures.single().retryable)
+            }
+        }
+        val invalidDescriptor = ActionDescriptor("unsafe", "Unsafe", usesModel = true,
+            stateWriteKeyField = "key", execution = ActionExecution.PURE_MODEL)
+        assertTrue(runCatching { ActionRegistry().register(invalidDescriptor) { ActionOutcome() } }
+            .exceptionOrNull() is IllegalArgumentException)
+    }
+
+    @Test fun acceptedPublicationFinishesSavingWhenItsCallerCancels() = runBlocking {
+        val before = session()
+        val flow = Workflow(id = "flow", nodes = listOf(WorkflowNode(id = "accepted", actionId = "text.render",
+            outputKey = "accepted", inputTemplate = "kept", visible = true)))
+        val base = library(before, listOf(flow))
+        val gateway = object : ModelGateway {
+            override suspend fun generate(profile: ModelProfile, messages: List<ChatMessage>,
+                onDelta: suspend (String) -> Unit): String = error("No model needed")
+        }
+        var saved = before
+        lateinit var running: Job
+        running = launch(start = CoroutineStart.LAZY) {
+            WorkflowEngine().run(base, before, "hello", gateway) { update ->
+                update.progress?.let { progress ->
+                    if (progress.results["accepted"] == "kept") {
+                        running.cancel()
+                        yield() // Simulate suspension while the accepted receipt is being saved.
+                    }
+                    saved = if (saved.pendingRun == null) MessageOperations.recordPartialTurn(saved, progress).session!!
+                        else MessageOperations.continuePartialTurn(saved, progress).session!!
+                }
+            }
+        }
+        running.start()
+        running.join()
+        assertEquals("kept", saved.results["accepted"])
+        assertEquals(1, saved.pendingRun!!.accepted.size)
+        assertEquals("kept", saved.messages.last().text)
     }
 
     @Test fun skipKeepsAcceptedIncrementsEventsAndMasksOldLatest() = runBlocking {

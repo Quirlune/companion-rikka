@@ -1,9 +1,65 @@
 package dev.gray.companion.core
 
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
 
 class ChatArchiveTest {
+    @Test fun restoredBreakpointKeepsAcceptedIdentityAndCanContinue() = runBlocking {
+        val before = Session(id = "source", characterId = "character", mainCallId = "main",
+            messages = listOf(ChatMessage(id = "turn", text = "hello")))
+        val flow = Workflow(id = "flow", nodes = listOf(
+            WorkflowNode(id = "kept", actionId = "text.render", inputTemplate = "kept", outputKey = "kept", visible = true),
+            WorkflowNode(id = "failed", outputKey = "failed")))
+        val base = Library(characters = listOf(CharacterCard(id = "character", namespace = "hero", name = "Hero")),
+            mainCalls = listOf(MainCall(id = "main", name = "Main", workflows = listOf(flow))),
+            profiles = listOf(ModelProfile(id = "profile", model = "demo")), selectedProfileId = "profile",
+            sessions = listOf(before), chatFolders = listOf(ChatFolder("folder")))
+        val gateway = object : ModelGateway {
+            override suspend fun generate(profile: ModelProfile, messages: List<ChatMessage>,
+                onDelta: suspend (String) -> Unit): String = throw ModelRequestFailure("offline")
+        }
+        val engine = WorkflowEngine()
+        val first = engine.run(base, before, "hello", gateway)
+        val paused = MessageOperations.recordPartialTurn(before, first).session!!
+        val originalJournal = paused.pendingRun!!
+        val saved = ChatArchive.save(base.copy(sessions = listOf(paused)), paused.id, "folder")
+        val restored = ChatArchive.restore(saved, saved.savedChats.single().id)
+        val chat = restored.sessions.first()
+        val journal = chat.pendingRun!!
+        assertNotEquals(paused.id, chat.id)
+        assertEquals(chat.id, journal.sessionId)
+        assertEquals(chat.id, journal.initialSession.id)
+        assertTrue(journal.environments.all { it.session.id == chat.id })
+        assertEquals(originalJournal.accepted, journal.accepted)
+        assertEquals(paused.turnRecords, chat.turnRecords)
+        val resumed = engine.resume(restored, chat, gateway, journal,
+            RecoveryDecision(RecoveryDecisionKind.MANUAL, "flow/failed", manualText = "fixed"))
+        assertEquals(RunStatus.SUCCESS, resumed.status)
+        val continued = MessageOperations.continuePartialTurn(chat, resumed).session!!
+        assertEquals(chat.id, continued.id)
+        assertEquals(first.replies.single().id, continued.messages.first { it.nodeId == "kept" }.id)
+        assertEquals(paused, restored.savedChats.single().snapshot)
+
+        val candidateId = "historical-candidate"
+        val historical = originalJournal.copy(regenerating = true, sessionId = candidateId,
+            initialSession = originalJournal.initialSession.copy(id = candidateId),
+            environments = originalJournal.environments.map { it.copy(session = it.session.copy(id = candidateId)) },
+            regenerationBase = before.copy(id = candidateId))
+        val historicalSource = paused.copy(pendingRun = historical)
+        val historicalSaved = ChatArchive.save(base.copy(sessions = listOf(historicalSource)), paused.id, "folder")
+        val historicalChat = ChatArchive.restore(historicalSaved, historicalSaved.savedChats.single().id).sessions.first()
+        val historicalJournal = historicalChat.pendingRun!!
+        assertNotEquals(candidateId, historicalJournal.sessionId)
+        assertNotEquals(historicalChat.id, historicalJournal.sessionId)
+        assertEquals(historicalJournal.sessionId, historicalJournal.initialSession.id)
+        assertEquals(historicalJournal.sessionId, historicalJournal.regenerationBase!!.id)
+        assertTrue(historicalJournal.environments.all { it.session.id == historicalJournal.sessionId })
+        assertEquals(historical.accepted, historicalJournal.accepted)
+        assertEquals(historical.id, historicalJournal.id)
+        assertEquals(historicalSource, historicalSaved.savedChats.single().snapshot)
+    }
+
     @Test fun sourceChangesNeverAlterSnapshotAndRestoringAlwaysCreatesIndependentSession() {
         val message = ChatMessage(id = "user-1", text = "first", speakerName = "User")
         val origin = ResultOrigin("main", "flow", "node")
