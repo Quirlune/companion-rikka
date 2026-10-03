@@ -41,7 +41,7 @@ class WorkflowEngine(
         decision: RecoveryDecision,
         onUpdate: suspend (RunUpdate) -> Unit = {}
     ): RunResult {
-        if (recovery.formatVersion != 1 || recovery.executionVersion !in 1..6)
+        if (recovery.formatVersion != 1 || recovery.executionVersion !in 1..7)
             return conflict(recovery, "恢复断点版本不受支持；已接受的数据可保留，请结束此断点后开始新一轮")
         if (decision.nodeKey !in recovery.failures.map { it.nodeKey } ||
             currentSession.pendingRun?.id != recovery.id ||
@@ -50,7 +50,7 @@ class WorkflowEngine(
         val revised = repairedResources(recovery.frozenResources, library, decision.nodeKey)
             ?: return conflict(recovery, "调用结构或环境已变化；只能编辑失败调用的提示词块")
         if (decision.kind != RecoveryDecisionKind.SKIP) {
-            val target = (revised.mainCalls.flatMap { it.workflows + it.history.processor.workflow } +
+            val target = (revised.mainCalls.flatMap { it.configuredWorkflows() } +
                 revised.groups.flatMap { it.workflows })
                 .firstOrNull { it.id == decision.nodeKey.substringBefore('/') }
                 ?.nodes?.firstOrNull { it.id == decision.nodeKey.substringAfter('/') }
@@ -82,7 +82,7 @@ class WorkflowEngine(
         val main = library.mainCalls.first { it.id == session.mainCallId }
         val groups = library.loadedCallGroups(session, main)
         val packages = library.loadedPromptPackages(session, main)
-        val referencedProfiles = (main.workflows + listOf(main.history.processor.workflow) +
+        val referencedProfiles = (main.configuredWorkflows() +
             groups.flatMap { it.workflows }).flatMap { flow ->
             flow.nodes.map { it.generation.profileId ?: flow.modelProfileId ?: library.selectedProfileId }
         }.filterNotNull().toSet() + listOfNotNull(library.selectedProfileId)
@@ -126,7 +126,10 @@ class WorkflowEngine(
             patch(old, liveMain.workflows.firstOrNull { it.id == old.id })
         }, history = frozenMain.history.copy(processor = frozenMain.history.processor.copy(
             workflow = patch(frozenMain.history.processor.workflow,
-                liveMain.history.processor.workflow.takeIf { it.id == workflowId }))))
+                liveMain.history.processor.workflow.takeIf { it.id == workflowId }),
+            aggregationWorkflow = frozenMain.history.processor.aggregationWorkflow?.let { old ->
+                patch(old, liveMain.history.processor.aggregationWorkflow?.takeIf { it.id == workflowId })
+            })))
         val patchedGroups = frozen.groups.map { old ->
             val source = live.groups.firstOrNull { it.id == old.id } ?: return null
             old.copy(workflows = old.workflows.map { flow ->
@@ -164,7 +167,7 @@ class WorkflowEngine(
         onUpdate: suspend (RunUpdate) -> Unit
     ): RunResult {
         val traces = mutableListOf<RunTrace>()
-        val executionVersion = previous?.executionVersion ?: 6
+        val executionVersion = previous?.executionVersion ?: 7
         val legacy = executionVersion == 1
         val updateMutex = Mutex()
         suspend fun trace(ref: PlannedNode?, status: String, detail: String) {
@@ -202,8 +205,9 @@ class WorkflowEngine(
         val initialHistory = HistoryContext(library, session, main, legacyProcessing = legacy, executionVersion = executionVersion)
         val processingCandidate = initialHistory.pendingCandidate()
         initialHistory.issues.forEach { trace(null, "history", it.message) }
-        val workflows = main.workflows + groups.flatMap { it.workflows } +
-            listOfNotNull(processor.workflow.takeIf { it.enabled })
+        val workflows = main.configuredWorkflows().filter {
+            executionVersion >= 7 || it.id != processor.aggregationWorkflow?.id
+        } + groups.flatMap { it.workflows }
         val availableActions = actions.snapshot()
         val (plan, planningIssue) = RunPlan.create(workflows, availableActions, executionVersion)
         if (planningIssue != null || plan == null) {
@@ -250,7 +254,8 @@ class WorkflowEngine(
         // Pending and skipped producers cannot lend their previous-turn text to this run.
         // The saved result remains intact if that producer is not executed.
         val maskedKeys = (inactiveGroupKeys + session.unavailableResultKeys).toMutableSet()
-        if (processingCandidate == null) processor.workflow.nodes.forEach { maskedKeys += resultKeys(it) }
+        if (processingCandidate == null) (processor.workflow.nodes + processor.aggregationWorkflow?.nodes.orEmpty())
+            .forEach { maskedKeys += resultKeys(it) }
         workflows.filter { !it.enabled }.flatMap { it.nodes }.forEach { maskedKeys += resultKeys(it) }
         workflows.filter { it.enabled }.flatMap { it.nodes.filter { node -> !node.enabled } }
             .forEach { maskedKeys += resultKeys(it) }
@@ -264,7 +269,7 @@ class WorkflowEngine(
             workflows.filter { it.enabled }.flatMap { it.nodes.filter { node -> !node.enabled } } +
             library.groups.filter { group -> groups.none { it.id == group.id } }.flatMap { it.workflows }.flatMap { it.nodes })
         val resourceByWorkflow = buildMap {
-            main.workflows.forEach { put(it.id, main.id) }
+            main.configuredWorkflows().forEach { put(it.id, main.id) }
             groups.forEach { group -> group.workflows.forEach { put(it.id, group.id) } }
             if (processor.workflow.enabled) put(processor.workflow.id, main.id)
         }
@@ -295,7 +300,7 @@ class WorkflowEngine(
         val recoveryBase = previous ?: RunRecovery(
             id = newId(), sessionId = session.id, turnId = currentUserMessageId.orEmpty(), input = input,
             checkpoint = MessageOperations.captureCheckpoint(session), initialSession = session.copy(pendingRun = null),
-            frozenResources = freezeResources(library, session), executionVersion = 6
+            frozenResources = freezeResources(library, session), executionVersion = 7
         )
         fun replayIncomplete(): Boolean = previous != null && !replayedOldKeys.containsAll(oldAcceptedKeys)
         fun recoverySnapshot(): RunRecovery = recoveryBase.copy(

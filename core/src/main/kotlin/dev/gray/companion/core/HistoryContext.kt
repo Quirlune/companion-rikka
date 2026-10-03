@@ -12,7 +12,8 @@ class HistoryContext(
     private val legacyProcessing: Boolean = false,
     private val floorNumbers: Map<String, Int> = emptyMap(),
     private val projectionSegments: List<HistoryMemorySegment>? = null,
-    val executionVersion: Int = 6
+    val executionVersion: Int = 7,
+    private val projectionVersion: Int? = null
 ) {
     data class Pending(
         val messages: List<ChatMessage>, val text: String, val throughMessageId: String,
@@ -35,12 +36,18 @@ class HistoryContext(
     private val selected: IntRange = if (processing) range(HistoryRange(), floors.size)
         else range(main.history.range, floors.size)
     private val selectedFloors = if (selected.isEmpty()) emptyList() else floors.slice(selected)
-    private val validSegments = if (legacyProcessing || (session.historyMemory.segments.isEmpty() && digest == null)) emptyList() else {
-        val sources = archivedFloors.map { runCatching { HistoryMemory.source(it, sourceKind) }.getOrNull() }
-        val positions = archivedFloors.withIndex().associate { it.value.id to it.index }
-        HistoryMemory.effectiveSegments(session, main, sourceKind).values.filter { HistoryMemory.matches(it, sources, positions) }
+    private val allSegments = HistoryMemory.effectiveSegments(session, main, sourceKind)
+    private val archiveSources = archivedFloors.map {
+        if (sourceKind == HistorySourceKind.MODEL_RAW && it.role == Role.ASSISTANT && !it.authoredOpening && it.rawText == null) null
+        else HistoryMemory.source(it, sourceKind)
     }
-    private val segments = validSegments.filter { it.workflowId == main.history.processor.workflow.id }
+    private val hierarchy = HistoryHierarchy(allSegments, archiveSources, ordered = executionVersion >= 7)
+    private val validSegments = if (legacyProcessing || (session.historyMemory.segments.isEmpty() && digest == null))
+        emptyList() else hierarchy.validSegments().values.toList()
+    private val segments = if (executionVersion >= 7) hierarchy.roots(validSegments.filter {
+        hierarchy.belongsToFamily(it.id, main.history.processor.workflow.id)
+    }) else validSegments.filter { it.workflowId == main.history.processor.workflow.id }
+    private val orderedProjection = (projectionVersion ?: if (executionVersion >= 7) 2 else 1) >= 2
     private val pending = capturedPending ?: candidate()
     private val speakerRules = main.history.speakers.associateBy { it.speaker }
     private val floorRules = main.history.floors.associateBy { it.messageId }
@@ -51,7 +58,7 @@ class HistoryContext(
     fun selectedSourceIds(): List<String> = selectedFloors.map { it.id }
     fun containsMessage(id: String?): Boolean = id != null && selectedFloors.any { it.id == id }
     fun withMessages(messages: List<ChatMessage>): HistoryContext = HistoryContext(
-        library, session.copy(messages = messages), main, processing, capturedPending, legacyProcessing, floorNumbers, projectionSegments, executionVersion
+        library, session.copy(messages = messages), main, processing, capturedPending, legacyProcessing, floorNumbers, projectionSegments, executionVersion, projectionVersion
     )
 
     fun read(key: String, renderInsertion: (String) -> String = { it }): String? = when (key) {
@@ -60,7 +67,7 @@ class HistoryContext(
         "pending" -> pending?.text.orEmpty()
         "summary" -> if (legacyProcessing) digest?.text.orEmpty()
             else (if (sourceKind == HistorySourceKind.DISPLAY) validSegments
-                else HistoryViews.summaries(session, main, HistorySourceKind.DISPLAY))
+                else HistoryViews.summaries(session, main, HistorySourceKind.DISPLAY, executionVersion))
                 .joinToString("\n") { HistoryViews.summaryMessage(it).text }
         "count" -> selectedFloors.size.toString()
         "pending.count" -> (pending?.newFloors ?: 0).toString()
@@ -75,13 +82,15 @@ class HistoryContext(
         val selectedPositions = selectedFloors.withIndex().associate { it.value.id to it.index }
         val candidateSegments = (projectionSegments ?: if (processing) emptyList() else segments).filter { segment ->
             val start = selectedPositions[segment.sources.first().messageId] ?: -1
-            start >= 0 && start + segment.sources.size <= selectedFloors.size &&
+            if (orderedProjection) segment.sources.all { it.messageId in selectedPositions }
+            else start >= 0 && start + segment.sources.size <= selectedFloors.size &&
                 insertions.keys.none { it > start && it < start + segment.sources.size }
         }
         val overlaps = candidateSegments.flatMap { it.sources.map { source -> source.messageId } }.groupingBy { it }.eachCount()
         // An ambiguous automatic mapping exposes original floors instead of choosing an arbitrary summary.
         val segmentStarts = candidateSegments.filter { segment -> segment.sources.none { overlaps[it.messageId]!! > 1 } }
             .associateBy { it.sources.first().messageId }
+        val compressedIds = segmentStarts.values.flatMapTo(mutableSetOf()) { it.sources.map { source -> source.messageId } }
         var cursor = 0
         while (cursor <= selectedFloors.size) {
             insertions[cursor].orEmpty().forEach { insertion ->
@@ -96,7 +105,9 @@ class HistoryContext(
                 val segment = segmentStarts[selectedFloors[cursor].id]
                 if (segment != null) {
                     output += HistoryViews.summaryMessage(segment).copy(role = main.history.apiRole ?: Role.SYSTEM)
-                    cursor += segment.sources.size
+                    cursor += if (orderedProjection) 1 else segment.sources.size
+                } else if (orderedProjection && selectedFloors[cursor].id in compressedIds) {
+                    cursor++
                 } else {
                     val originalIndex = selected.first + cursor
                     output += wrapped(selectedFloors[cursor], floorNumbers[selectedFloors[cursor].id] ?: originalIndex + 1)
@@ -139,6 +150,8 @@ class HistoryContext(
         if (!config.workflow.enabled || processing || floors.isEmpty()) return null
         val currentUser = floors.indexOfLast { it.role == Role.USER && it.id == MacroReferences.currentTurnId(session) }
         if (currentUser < 0) return null
+        if (executionVersion >= 7 && config.thresholdBasis == HistoryThresholdBasis.UNCOMPRESSED_FLOORS)
+            return uncompressedCandidate(currentUser)
         val eligible = floors.subList(0, currentUser)
         var cutoff = (eligible.size - config.keepRecentFloors).coerceAtLeast(0)
         if (cutoff < eligible.size && cutoff > 0 && eligible[cutoff].role != Role.USER) {
@@ -163,6 +176,30 @@ class HistoryContext(
             addAll(eligible.subList(covered, cutoff))
         }
         return Pending(source, rawText(source), eligible[cutoff - 1].id, cutoff, newFloors)
+    }
+
+    private fun uncompressedCandidate(currentUser: Int): Pending? {
+        val config = main.history.processor
+        val kind = config.sourceKind
+        val eligible = floors.take(currentUser + 1)
+        val sources = eligible.map { message ->
+            if (kind == HistorySourceKind.MODEL_RAW && message.role == Role.ASSISTANT && !message.authoredOpening && message.rawText == null) {
+                mutableIssues += Issue("history.model", "初始模型原文缺失，保留此楼层：${message.id}", false)
+                null
+            } else HistoryMemory.source(message, kind)
+        }
+        val memory = HistoryHierarchy(HistoryMemory.effectiveSegments(session, main, kind), sources, ordered = true)
+        val marked = memory.validSegments().values.flatMapTo(mutableSetOf()) { it.sources.map { ref -> ref.messageId } }
+        val unmarked = eligible.indices.filter { sources[it] != null && eligible[it].id !in marked }
+        if (unmarked.size < config.minimumNewFloors) return null
+        val start = config.protectFirstFloors.coerceAtLeast(0).coerceAtMost(unmarked.size)
+        val end = (unmarked.size - maxOf(1, config.keepRecentFloors)).coerceAtLeast(start)
+        val selected = unmarked.subList(start, end).filter { it != currentUser }
+            .take(config.maximumBatchFloors ?: Int.MAX_VALUE)
+        if (selected.isEmpty()) return null
+        val messages = selected.map { HistoryMemory.sourceMessage(eligible[it], kind) }
+        return Pending(messages, rawText(messages), messages.last().id, selected.last() + 1, messages.size,
+            selected.map { requireNotNull(sources[it]) }, kind)
     }
 
     private fun unmarkedCandidate(eligible: List<ChatMessage>, cutoff: Int): Pending? {

@@ -151,7 +151,7 @@ object ConfigurationCommands {
         for (change in changes) {
             if (change.kind !in kinds) fail("config.${change.kind}", "未知资源类型")
             val expected = if (forward) change.before else change.after
-            if (resourceJson(current, change.kind, change.id) != expected)
+            if (resourceJson(current, change.kind, change.id) != canonicalImage(change.kind, change.id, expected))
                 fail("config.${change.kind}.${change.id}", "资源已被后续编辑，不能直接${if (forward) "应用" else "撤回"}")
         }
         for (change in settings) {
@@ -173,7 +173,7 @@ object ConfigurationCommands {
         excludedChange(current, normalized)?.let { fail(it, "配置操作会改变会话、收藏或运行状态") }
         changes.forEach { change ->
             val expected = if (forward) change.after else change.before
-            if (resourceJson(normalized, change.kind, change.id) != expected)
+            if (resourceJson(normalized, change.kind, change.id) != canonicalImage(change.kind, change.id, expected))
                 fail("config.${change.kind}.${change.id}", "当前资源关系使配置结果与预览不一致")
         }
         settings.forEach { change ->
@@ -357,6 +357,10 @@ object ConfigurationCommands {
 
     private fun idOf(value: JsonElement, path: String): String =
         stringAt((value as? JsonObject)?.get("id"), "$path.id")
+
+    /** Saved receipts may predate appended fields; compare typed defaults, without renaming or migrating chats. */
+    private fun canonicalImage(kind: String, id: String, value: JsonElement?): JsonElement? =
+        value?.let { resourceJson(replaceResource(Library(), kind, id, it, null), kind, id) }
 
     private fun replaceResource(library: Library, kind: String, id: String, value: JsonElement?, index: Int?): Library = when (kind) {
         "character" -> library.copy(characters = replace(library.characters, id, value, index, CharacterCard.serializer()) { it.id })

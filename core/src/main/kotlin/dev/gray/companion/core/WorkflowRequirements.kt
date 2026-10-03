@@ -6,8 +6,7 @@ object WorkflowRequirements {
     fun requiredProfiles(library: Library, session: Session, actions: List<ActionDescriptor>): List<ModelProfile?> {
         val modelActions = actions.filter { it.usesModel }.mapTo(mutableSetOf()) { it.id }
         val main = library.mainCalls.firstOrNull { it.id == session.mainCallId }
-        val workflows = main?.workflows.orEmpty() + library.loadedCallGroups(session, main).flatMap { it.workflows } +
-            listOfNotNull(main?.history?.processor?.workflow?.takeIf { it.enabled })
+        val workflows = main?.configuredWorkflows().orEmpty() + library.loadedCallGroups(session, main).flatMap { it.workflows }
         return workflows.filter { it.enabled }.flatMap { workflow ->
             workflow.nodes.filter { it.enabled && it.actionId in modelActions }.map { node ->
                 node.generation.resolve(library, workflow)
@@ -18,8 +17,7 @@ object WorkflowRequirements {
     fun requiresModel(library: Library, session: Session, actions: List<ActionDescriptor>): Boolean {
         val modelActions = actions.filter { it.usesModel }.mapTo(mutableSetOf()) { it.id }
         val main = library.mainCalls.firstOrNull { it.id == session.mainCallId }
-        val workflows = main?.workflows.orEmpty() + library.loadedCallGroups(session, main).flatMap { it.workflows } +
-            listOfNotNull(main?.history?.processor?.workflow?.takeIf { it.enabled })
+        val workflows = main?.configuredWorkflows().orEmpty() + library.loadedCallGroups(session, main).flatMap { it.workflows }
         return workflows.any { workflow -> workflow.enabled && workflow.nodes.any { it.enabled && it.actionId in modelActions } }
     }
 }

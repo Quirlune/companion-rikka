@@ -38,10 +38,7 @@ internal fun ModelsScreen(
                     node.generation.profileId?.let { id -> put(id, (get(id) ?: 0) + 1) }
                 }
             }
-            library.mainCalls.forEach { main ->
-                main.workflows.forEach(::add)
-                add(main.history.processor.workflow)
-            }
+            library.mainCalls.forEach { main -> main.configuredWorkflows().forEach(::add) }
             library.groups.forEach { group -> group.workflows.forEach(::add) }
         }
     }

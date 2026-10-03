@@ -117,9 +117,10 @@ internal class OutcomePublisher(
             outcome.historyWrites.copy(segments = outcome.historyWrites.segments + automaticSegment)
         try { if (!historyPatch.isEmpty()) {
             val index = HistoryMemory.sourceIndex(current)
-            val references = historyPatch.segments.flatMap { it.sources } + historyPatch.captures.values.flatten()
+            val nextMemory = HistoryMemory.apply(current.historyMemory, historyPatch)
+            val references = historyPatch.segments.flatMap { it.sources } +
+                historyPatch.captures.keys.flatMap { HistoryMemory.captureSources(nextMemory, it) }
             require(references.all { HistoryMemory.resolve(it, index) != null }) { "历史写入引用的原文修订不存在" }
-            HistoryMemory.apply(current.historyMemory, historyPatch)
         } }
         catch (failure: IllegalArgumentException) {
             throw NodeExecutionFailure(ref, failure.message.orEmpty(), RecoveryFailureKind.CONFLICT, retryable = false)

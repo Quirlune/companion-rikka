@@ -202,7 +202,7 @@ internal class MacroReadView(val library: Library, val session: Session) {
 }
 
 /** Shared display/template entry point. It never invokes a model or executes behavior. */
-class MacroResolver(library: Library, session: Session, input: String = "", executionVersion: Int = 6) {
+class MacroResolver(library: Library, session: Session, input: String = "", executionVersion: Int = 7) {
     private val mutableIssues = mutableListOf<Issue>()
     private val renderer = TemplateRenderer(
         loadedResources(library, session, session.state, session.results, input, mutableIssues, executionVersion = executionVersion),

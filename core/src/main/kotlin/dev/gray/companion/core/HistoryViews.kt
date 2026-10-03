@@ -2,7 +2,7 @@ package dev.gray.companion.core
 
 /** Reads source references without publishing captures or macro versions. */
 object HistoryViews {
-    fun selection(expression: String, executionVersion: Int = 6): HistorySelection? {
+    fun selection(expression: String, executionVersion: Int = 7): HistorySelection? {
         val result = PromptReferenceLanguage.compile(expression)
         val ref = result.reference ?: return null
         if (executionVersion < 5 && result.fields.any { it.name == "source" }) return null
@@ -33,22 +33,20 @@ object HistoryViews {
         val view = HistoryMemory.view(session.historyMemory, selection.viewId, selection.revision)
             ?: error("历史副本或版本不存在：${selection.viewId}")
         require(view.sourceKind == selection.sourceKind) { "历史副本来源类型不一致：${selection.viewId}" }
-        val all = session.historyMemory.captures[view.captureId] ?: error("历史副本来源捕获不存在")
+        val all = HistoryMemory.captureSources(session.historyMemory, view.captureId)
         require(all.all { it.sourceKind == selection.sourceKind }) { "历史捕获来源类型不一致" }
         require(HistoryContext.rangeValid(range, all.size)) { "历史范围起点晚于终点" }
         return all.slice(HistoryContext.selectedRange(range, all.size))
     }
 
-    fun summaries(session: Session, main: MainCall, kind: HistorySourceKind): List<HistoryMemorySegment> {
+    fun summaries(session: Session, main: MainCall, kind: HistorySourceKind, executionVersion: Int = 7): List<HistoryMemorySegment> {
         val floors = session.messages.filter { !it.deleted && it.outputSlot == OutputSlot.BODY }
         val sources = floors.map { message ->
             if (kind == HistorySourceKind.MODEL_RAW && message.role == Role.ASSISTANT && !message.authoredOpening && message.rawText == null) null
             else HistoryMemory.source(message, kind)
         }
-        val positions = floors.withIndex().associate { it.value.id to it.index }
-        return HistoryMemory.effectiveSegments(session, main, kind).values.filter {
-            HistoryMemory.matches(it, sources, positions)
-        }
+        return HistoryHierarchy(HistoryMemory.effectiveSegments(session, main, kind), sources,
+            ordered = executionVersion >= 7).validSegments().values.toList()
     }
 
     fun originalMessages(session: Session, selection: HistorySelection, main: MainCall? = null): List<ChatMessage> {
@@ -58,7 +56,7 @@ object HistoryViews {
     }
 
     fun project(library: Library, session: Session, main: MainCall, selection: HistorySelection,
-                textOverrides: Map<String, String> = emptyMap(),
+                textOverrides: Map<String, String> = emptyMap(), executionVersion: Int = 7,
                 renderInsertion: (String) -> String = { it }): HistoryProjection = try {
         val selectedSources = sources(session, selection, main)
         val index = HistoryMemory.sourceIndex(session)
@@ -69,25 +67,21 @@ object HistoryViews {
         val state = session.historyMemory
         val view = selection.viewId?.let { HistoryMemory.view(state, it, selection.revision) ?: error("历史副本不存在") }
         val segments = HistoryMemory.effectiveSegments(session, main, selection.sourceKind)
-        val selectedPositions = selectedSources.withIndex().associate { it.value.messageId to it.index }
+        val projectionVersion = view?.projectionVersion ?: if (executionVersion >= 7) 2 else 1
         val modes = view?.let { HistoryMemory.modes(state, it) } ?: if (selection.compressed)
-            defaultModes(main, selectedSources, segments) else emptyMap()
-        val compressed = modes.filterValues { it == HistorySegmentMode.COMPRESS }.keys.map { id ->
-            segments[id] ?: error("记忆段不存在：$id")
-        }.filter { segment ->
-            HistoryMemory.matches(segment, selectedSources, selectedPositions)
-        }
-        val coveredIds = compressed.flatMap { it.sources.map { source -> source.messageId } }
-        require(coveredIds.distinct().size == coveredIds.size) { "压缩记忆段重叠" }
+            defaultModes(main, selectedSources, segments, projectionVersion) else emptyMap()
+        val compressed = HistoryHierarchy(segments, selectedSources, ordered = projectionVersion >= 2)
+            .compressed(modes, projectionVersion)
         // One source-coordinate projection keeps insertions and per-floor wrappers consistent with compression.
         val displayMain = main.copy(history = main.history.copy(range = HistoryRange()))
         val activeNumbers = session.messages.filter { it.outputSlot == OutputSlot.BODY && !it.deleted }
             .withIndex().associate { it.value.id to it.index + 1 }
-        val capturedNumbers = view?.let { state.captures[it.captureId] }?.withIndex()
+        val capturedNumbers = view?.let { HistoryMemory.captureSources(state, it.captureId) }?.withIndex()
             ?.associate { it.value.messageId to it.index + 1 }.orEmpty()
         val sourceNumbers = capturedNumbers + activeNumbers
         val styled = HistoryContext(library, session.copy(messages = originals), displayMain, processing = true,
-            legacyProcessing = true, floorNumbers = sourceNumbers, projectionSegments = compressed).projected(renderInsertion)
+            legacyProcessing = true, floorNumbers = sourceNumbers, projectionSegments = compressed,
+            executionVersion = executionVersion, projectionVersion = projectionVersion).projected(renderInsertion)
         HistoryProjection(styled, sourceIds = selectedSources.map { it.messageId })
     } catch (failure: IllegalArgumentException) {
         HistoryProjection(emptyList(), listOf(Issue("history", failure.message ?: "历史副本无效")))
@@ -101,7 +95,8 @@ object HistoryViews {
     )
 
     fun copy(session: Session, selection: HistorySelection, targetId: String, name: String,
-             mode: HistorySegmentMode, segmentIds: List<String>, main: MainCall? = null): HistoryMemoryPatch {
+             mode: HistorySegmentMode, segmentIds: List<String>, main: MainCall? = null,
+             inheritTargetModes: Boolean = false, executionVersion: Int = 7): HistoryMemoryPatch {
         require(MacroNaming.isValidSlug(targetId)) { "历史副本标识须为英文 slug" }
         // A writer may update its own captured previous version; other pending producers stay masked.
         val resolvedSelection = if (selection.viewId == targetId && selection.revision == null)
@@ -113,32 +108,57 @@ object HistoryViews {
         val state = session.historyMemory
         val base = resolvedSelection.viewId?.let { HistoryMemory.view(state, it, resolvedSelection.revision) ?: error("历史副本不存在") }
         val sameCapture = base?.captureId == captureId
+        val target = HistoryMemory.view(state, targetId)?.takeIf { it.sourceKind == selection.sourceKind }
+        val previousSources = if (executionVersion >= 7 && captureId !in state.captures)
+            target?.let { HistoryMemory.captureSources(state, it.captureId) } else null
+        val appendBase = target?.takeIf { previousSources != null && selected.size > previousSources.size &&
+            selected.subList(0, previousSources.size) == previousSources }
+        val addedCaptures = if (captureId in state.captures) emptyMap() else mapOf(captureId to
+            if (appendBase == null) selected else selected.drop(requireNotNull(previousSources).size))
+        val addedBases = appendBase?.let { mapOf(captureId to it.captureId) }.orEmpty()
+        val captureState = state.copy(captures = state.captures + addedCaptures, captureBases = state.captureBases + addedBases)
         val effective = if (main == null) state.segments.filterValues { segment ->
             segment.sources.all { it.sourceKind == selection.sourceKind }
         } else HistoryMemory.effectiveSegments(session, main, selection.sourceKind)
-        val inherited = if (base == null && selection.compressed && main != null) defaultModes(main, selected, effective)
-        else if (base == null || sameCapture) emptyMap() else HistoryMemory.modes(state, base).filter { (id, _) ->
-            state.segments[id]?.sources?.let { refs ->
-                val start = selected.indexOf(refs.first())
-                start >= 0 && selected.drop(start).take(refs.size) == refs
-            } == true
-        }
+        val projectionVersion = if (executionVersion >= 7) 2 else 1
+        val selectedHierarchy = HistoryHierarchy(effective, selected, ordered = projectionVersion >= 2)
+        val compatibleBase = sameCapture && base?.projectionVersion == projectionVersion
+        val inherited = if (base == null && selection.compressed && main != null) defaultModes(main, selected, effective, projectionVersion)
+        else if (base == null) emptyMap()
+        else HistoryMemory.modes(state, base).filterKeys(selectedHierarchy::valid)
         val revision = state.views[targetId]?.lastOrNull()?.revision ?: 0
+        val priorPreferences = if (inheritTargetModes && executionVersion >= 7) {
+            target?.let { HistoryMemory.modes(state, it).filterKeys(selectedHierarchy::valid) }.orEmpty()
+        } else emptyMap()
+        val requested = segmentIds.distinct().associateWith { mode }
+        // Explicit refresh preserves prior choices; normal copy commands still override them.
+        val chosen = if (inheritTargetModes && executionVersion >= 7) inherited + requested + priorPreferences
+            else inherited + requested
+        // A refresh carries only changed preferences when its previous capture is an exact prefix.
+        val refreshBase = if (inheritTargetModes && projectionVersion >= 2) target?.takeIf {
+            it.projectionVersion == projectionVersion && HistoryMemory.captureExtends(captureState, it.captureId, captureId)
+        } else null
+        val modeBase = refreshBase ?: base?.takeIf { compatibleBase }
+        val baseModes = modeBase?.let { HistoryMemory.modes(state, it) }.orEmpty()
+        require(baseModes.keys.all { it in chosen }) { "历史副本基础模式缺少继承项" }
+        val storedModes = if (modeBase == null) chosen else chosen.filter { (id, value) -> baseModes[id] != value }
         val view = HistoryViewRevision(targetId, name.ifBlank { targetId }, revision + 1, captureId,
-            base?.viewId?.takeIf { sameCapture }, base?.revision?.takeIf { sameCapture },
-            inherited + segmentIds.distinct().associateWith { mode }, sourceKind = selection.sourceKind)
-        val needed = (inherited.keys + segmentIds).mapNotNull { id -> effective[id]?.takeIf { it.id !in state.segments } }
+            modeBase?.viewId, modeBase?.revision, storedModes, sourceKind = selection.sourceKind, projectionVersion = projectionVersion)
+        val needed = chosen.keys.mapNotNull { id -> effective[id]?.takeIf { it.id !in state.segments } }
         val patch = HistoryMemoryPatch(segments = needed,
-            captures = if (captureId in state.captures) emptyMap() else mapOf(captureId to selected),
-            views = listOf(view), expectedViewRevisions = mapOf(targetId to revision))
+            captures = addedCaptures, views = listOf(view), expectedViewRevisions = mapOf(targetId to revision), captureBases = addedBases)
         HistoryMemory.apply(state, patch)
         return patch
     }
 
     private fun defaultModes(main: MainCall, sources: List<HistorySourceRef>,
-                             segments: Map<String, HistoryMemorySegment>): Map<String, HistorySegmentMode> {
-        val positions = sources.withIndex().associate { it.value.messageId to it.index }
-        return segments.values.filter { it.workflowId == main.history.processor.workflow.id &&
-            HistoryMemory.matches(it, sources, positions) }.associate { it.id to HistorySegmentMode.COMPRESS }
+                             segments: Map<String, HistoryMemorySegment>, projectionVersion: Int): Map<String, HistorySegmentMode> {
+        val hierarchy = HistoryHierarchy(segments, sources, ordered = projectionVersion >= 2)
+        val matching = hierarchy.validSegments().values.filter { segment ->
+            if (projectionVersion >= 2) hierarchy.belongsToFamily(segment.id, main.history.processor.workflow.id)
+            else segment.workflowId == main.history.processor.workflow.id
+        }
+        return (if (projectionVersion >= 2) hierarchy.roots(matching) else matching)
+            .associate { it.id to HistorySegmentMode.COMPRESS }
     }
 }

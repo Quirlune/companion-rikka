@@ -80,8 +80,8 @@ internal fun MainCallEditor(
         else onSwitchResource?.invoke(null, targetId)
     }
     fun addCall() {
-        val key = nextCallOutputKey(outputKeysForNewNodes(library, item.workflows + item.history.processor.workflow), "call")
-        val siblings = item.workflows + item.history.processor.workflow
+        val key = nextCallOutputKey(outputKeysForNewNodes(library, item.configuredWorkflows()), "call")
+        val siblings = item.configuredWorkflows()
         val workflow = Workflow(title = nextDisplayName(siblings.map { it.title }, "调用"),
             slug = nextEditorSlug(siblings.map { it.slug }, "call"),
             nodes = listOf(WorkflowNode(outputKey = key, slug = key, recordTrajectory = false)))
@@ -117,15 +117,15 @@ internal fun MainCallEditor(
                         })
                     }
                     if (modelNode != null) NodeTrajectoryControl(modelNode, {}, usesModel = true)
-                    if (modelNode != null) RegexOutputCopyEditor(modelNode, outputKeysForNewNodes(library, item.workflows + item.history.processor.workflow)) { copy ->
+                    if (modelNode != null) RegexOutputCopyEditor(modelNode, outputKeysForNewNodes(library, item.configuredWorkflows())) { copy ->
                         val current = item.workflows.firstOrNull { it.id == default.id } ?: return@RegexOutputCopyEditor
                         updateWorkflow(current.copy(nodes = current.nodes.map { if (it.id == modelNode.id) it.copy(regexOutputCopy = copy) else it }))
                     }
                     EditorDestinationRow("默认调用设置", if (default.nodes.size > 1) "${default.nodes.size} 个节点" else null) { openDetails(default) }
                 } else OutlinedButton(onClick = {
-                    val key = nextCallOutputKey(outputKeysForNewNodes(library, listOf(item.history.processor.workflow)), "reply")
-                    val workflow = Workflow(title = nextDisplayName((item.workflows + item.history.processor.workflow).map { it.title }, "调用"),
-                        slug = nextEditorSlug((item.workflows + item.history.processor.workflow).map { it.slug }, "call"),
+                    val key = nextCallOutputKey(outputKeysForNewNodes(library, item.configuredWorkflows()), "reply")
+                    val workflow = Workflow(title = nextDisplayName(item.configuredWorkflows().map { it.title }, "调用"),
+                        slug = nextEditorSlug(item.configuredWorkflows().map { it.slug }, "call"),
                         nodes = listOf(WorkflowNode(outputKey = key, slug = key, visible = true, recordTrajectory = false)))
                     item = item.copy(workflows = item.workflows + workflow, primaryWorkflowId = workflow.id)
                 }) { Text("添加默认调用") }
@@ -147,11 +147,11 @@ internal fun MainCallEditor(
         entry<CallEditorRoute.Details> { route ->
             callDrafts[route.id]?.let { draft ->
                 val call = draft.value
-                CallDetailsEditor(draft.baseline, call, { callDrafts[route.id] = draft.copy(value = it) }, actions, profiles, outputKeysForNewNodes(library, item.workflows + item.history.processor.workflow + call),
+                CallDetailsEditor(draft.baseline, call, { callDrafts[route.id] = draft.copy(value = it) }, actions, profiles, outputKeysForNewNodes(library, item.configuredWorkflows() + call),
                     { changed -> referenceChoices(item.copy(workflows = mergeWorkflow(changed))) },
                     { item = item.copy(workflows = mergeWorkflow(it)); pop() }, ::pop, ::requestPrompt,
                     onDelete = if (call.id == default?.id) null else ({ item = item.copy(workflows = item.workflows.filterNot { it.id == call.id }); pop() }),
-                    onRegisterBack = { backs[route] = it }, siblings = item.workflows + item.history.processor.workflow,
+                    onRegisterBack = { backs[route] = it }, siblings = item.configuredWorkflows(),
                     tags = library?.promptTags.orEmpty(), triggerTargets = completionSources())
             }
         }

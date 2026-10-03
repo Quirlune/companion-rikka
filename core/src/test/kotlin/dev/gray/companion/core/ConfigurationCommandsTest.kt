@@ -2,9 +2,35 @@ package dev.gray.companion.core
 
 import org.junit.Assert.*
 import org.junit.Test
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 
 class ConfigurationCommandsTest {
     private fun emptyLibrary() = LibraryFormat.upgrade(Library())
+
+    @Test fun oldUndoImagesUseAppendedDefaultsButStillDetectLaterMemoryEdits() {
+        val base = LibraryFormat.upgrade(Library(mainCalls = listOf(MainCall(id = "main", name = "Old"))))
+        val preview = ConfigurationCommands.preview("""{"format":"companion.config.v1","commands":[
+            {"op":"mergePatch","kind":"mainCall","id":"main","patch":{"name":"New"}}]}""", base)
+        val applied = ConfigurationCommands.apply(requireNotNull(preview.plan), base)
+        assertTrue(applied.issues.toString(), applied.issues.none { it.error })
+        fun oldImage(image: JsonElement?): JsonElement? {
+            val main = image as? JsonObject ?: return image
+            val history = main["history"] as JsonObject
+            val processor = history["processor"] as JsonObject
+            return JsonObject(main + ("history" to JsonObject(history + ("processor" to JsonObject(processor.filterKeys {
+                it !in setOf("thresholdBasis", "protectFirstFloors", "maximumBatchFloors", "aggregationWorkflow")
+            })))))
+        }
+        val receipt = requireNotNull(applied.receipt).let { it.copy(changes = it.changes.map { change ->
+            change.copy(before = oldImage(change.before), after = oldImage(change.after))
+        }) }
+        assertEquals(base, ConfigurationCommands.undo(receipt, requireNotNull(applied.library)).library)
+        val later = applied.library!!.let { library -> library.copy(mainCalls = library.mainCalls.map { main ->
+            main.copy(history = main.history.copy(processor = main.history.processor.copy(protectFirstFloors = 7)))
+        }) }
+        assertTrue(ConfigurationCommands.undo(receipt, later).issues.any { it.error })
+    }
 
     @Test fun resourcePackageImportsAndBindsAsOnePlan() {
         val base = emptyLibrary()

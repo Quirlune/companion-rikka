@@ -132,7 +132,7 @@ internal fun promptReferenceChoices(
     }
     if (callGroup != null) {
         val groupOwner = PromptReferenceSource("group:${callGroup.id}", callGroup.name.ifBlank { "未命名调用组" }, "编辑中的调用组配置")
-        selectedMain?.let { collect(mainOwner!!, it.workflows) }
+        selectedMain?.let { collect(mainOwner!!, it.configuredWorkflows()) }
         collect(groupOwner, workflows)
     } else if (mainOwner != null) {
         collect(mainOwner, workflows)
@@ -142,9 +142,7 @@ internal fun promptReferenceChoices(
     groups.filterNot { it.id == callGroup?.id }.forEach { group ->
         collect(PromptReferenceSource("group:${group.id}", group.name.ifBlank { "未命名调用组" }, "聊天或主调用绑定的调用组"), group.workflows)
     }
-    selectedMain?.history?.processor?.workflow?.let { call ->
-        collect(mainOwner!!, listOf(call))
-    }
+    selectedMain?.let { collect(mainOwner!!, it.configuredWorkflows()) }
     callOwners.values.forEach { (owner, call) ->
         val callTitle = call.title.ifBlank { "未命名调用" }
         val callOwner = PromptReferenceSource("call:${owner.id}:${call.id}", callTitle,

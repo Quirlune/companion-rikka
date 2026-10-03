@@ -125,7 +125,8 @@ internal fun WorkflowEditorContent(
     fixedTrigger: Boolean = false, tags: List<PromptTag> = emptyList(), triggerTargets: List<Workflow> = emptyList(),
 ) {
     Text("触发", style = MaterialTheme.typography.titleSmall)
-    if (fixedTrigger) Text("历史处理", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    if (fixedTrigger) Text(if (workflow.afterWorkflowId != null) "小摘要完成后" else "历史处理",
+        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     else WorkflowScheduleEditor(workflow, triggerTargets, onChange)
     TriggerEditor(workflow.recognition, workflow.condition, references) { recognition, condition -> onChange(workflow.copy(recognition = recognition, condition = condition)) }
     HorizontalDivider()
@@ -295,7 +296,7 @@ internal fun referencesForWritingNode(references: List<PromptReferenceChoice>, n
 
 internal fun outputKeysForNewNodes(library: Library?, draftWorkflows: List<Workflow>): Set<String> = buildSet {
     fun collect(call: Workflow) = call.nodes.forEach { node -> add(node.outputKey); node.regexOutputCopy.outputKey.takeIf { node.regexOutputCopy.enabled && it.isNotBlank() }?.let { add(it) } }
-    library?.mainCalls?.forEach { main -> (main.workflows + main.history.processor.workflow).forEach(::collect) }
+    library?.mainCalls?.forEach { main -> main.configuredWorkflows().forEach(::collect) }
     library?.groups?.forEach { group -> group.workflows.forEach(::collect) }
     draftWorkflows.forEach(::collect)
 }

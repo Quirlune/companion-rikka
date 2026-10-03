@@ -7,6 +7,38 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PromptPackagesTest {
+    @Test fun emptyReferenceBlocksSkipProcessingWithoutHidingLiteralPrompts() {
+        val pack = PromptPackage(id = "pack", namespace = "world", name = "World", entries = listOf(
+            PromptEntry(key = "one", text = "  ", category = "empty"),
+            PromptEntry(key = "two", text = "\n", category = "empty")))
+        val main = MainCall(id = "main", boundPackageIds = listOf(pack.id))
+        val library = Library(mainCalls = listOf(main), packages = listOf(pack))
+        val node = WorkflowNode(includeHistory = false, inputTemplate = "", blocks = listOf(
+            PromptBlock(template = "标题\n{{category.empty}}", hideWhenReferencesEmpty = true,
+                processing = listOf(TextProcessStep(TextProcessKind.APPEND, text = "must not appear"))),
+            PromptBlock(template = "missing: {{state.unavailable}}", hideWhenReferencesEmpty = true,
+                processing = listOf(TextProcessStep(TextProcessKind.PREPEND, text = "must not appear"))),
+            PromptBlock(template = "literal instruction", hideWhenReferencesEmpty = true)))
+        val preview = PromptCompiler().preview(library, Session(mainCallId = main.id), node, "")
+        assertEquals(listOf("literal instruction"), preview.messages.map { it.text })
+        assertFalse(preview.issues.any { it.error })
+    }
+
+    @Test fun emptyOmissionKeepsDiagnosticsAndLegacyProcessingSemantics() {
+        val library = Library(mainCalls = listOf(MainCall(id = "main")))
+        val session = Session(mainCallId = "main")
+        val compiler = PromptCompiler()
+        val node = WorkflowNode(includeHistory = false, inputTemplate = "", blocks = listOf(
+            PromptBlock(template = "{{state.unavailable}}", hideWhenReferencesEmpty = true,
+                processing = listOf(TextProcessStep(TextProcessKind.APPEND, text = "legacy wrapper")))))
+        assertTrue(compiler.preview(library, session, node, "").messages.isEmpty())
+        assertEquals("legacy wrapper", compiler.preview(library, session, node, "", executionVersion = 6).messages.single().text)
+        val malformed = node.copy(blocks = listOf(node.blocks.single().copy(template = "{{unknown.source}}")))
+        val rejected = compiler.preview(library, session, malformed, "")
+        assertTrue(rejected.messages.isEmpty())
+        assertTrue(rejected.issues.any { it.error })
+    }
+
     @Test fun mainBindingMakesMacrosAvailableWithoutAutomaticallySendingTheWarehouse() {
         val pack = PromptPackage(id = "world", namespace = "world", name = "World", entries = listOf(
             PromptEntry(key = "scene", text = "<place>garden</place>", category = "setting"),

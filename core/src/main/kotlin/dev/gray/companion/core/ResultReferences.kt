@@ -22,8 +22,7 @@ object ResultReferences {
             }
         }
         library.mainCalls.firstOrNull { it.id == session.mainCallId }?.let { main ->
-            addWorkflows(main.id, main.workflows)
-            main.history.processor.workflow.takeIf { it.enabled }?.let { addWorkflows(main.id, listOf(it)) }
+            addWorkflows(main.id, main.configuredWorkflows())
         }
         library.loadedCallGroups(session).forEach { addWorkflows(it.id, it.workflows) }
     }

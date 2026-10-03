@@ -82,7 +82,7 @@ class HistorySourcesTest {
         val first = engine.run(lib, before, "sent", noModel)
         assertEquals(first.traces.toString(), RunStatus.PAUSED, first.status)
         val journal = first.recovery!!
-        assertEquals(6, journal.executionVersion)
+        assertEquals(7, journal.executionVersion)
         val roundTrip = LibraryFormat.json.decodeFromString(RunRecovery.serializer(),
             LibraryFormat.json.encodeToString(RunRecovery.serializer(), journal))
         val resumed = engine.resume(lib, before.copy(pendingRun = roundTrip), noModel, roundTrip,

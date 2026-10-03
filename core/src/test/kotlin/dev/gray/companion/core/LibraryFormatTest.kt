@@ -119,7 +119,8 @@ class LibraryFormatTest {
                 "historyMemory", "historyWrites", "completedWorkflowIds", "htmlTemplate", "htmlCss", "htmlBindings",
                 "recordTrajectory", "currentOnlyMacros", "headWrites", "headRemovals", "precedingGap", "rawText",
                 "bodySourceTileId", "bodyTextTemplate", "bodyDisplay", "bodyDisplayReceipt", "sourceKind",
-                "reasoningParsing", "reasoningSnapshot", "fullResponseText", "alternateGreetings", "authoredOpening") &&
+                "reasoningParsing", "reasoningSnapshot", "fullResponseText", "alternateGreetings", "authoredOpening",
+                "thresholdBasis", "protectFirstFloors", "maximumBatchFloors", "aggregationWorkflow") &&
                 !(key == "title" && "key" in value && "text" in value && "category" in value)
         }.mapValues { (_, item) -> withoutMetadata(item) })
         else -> value

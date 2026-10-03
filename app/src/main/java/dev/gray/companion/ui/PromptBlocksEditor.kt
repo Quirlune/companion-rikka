@@ -119,7 +119,9 @@ internal fun PromptBlocksEditor(
                                             OutlinedTextField(depth, { text -> depth = text; text.toIntOrNull()?.takeIf { it >= 0 }?.let { update(block.copy(depth = it)) } }, label = { Text("距历史末尾的消息数") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                                             Text("0 位于最后一条之后。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         }
-                                        ToggleLine("引用全空时隐藏本块", block.hideWhenReferencesEmpty) { update(block.copy(hideWhenReferencesEmpty = it)) }
+                                        ToggleLine("引用均为空或不可用时隐藏整条", block.hideWhenReferencesEmpty) { update(block.copy(hideWhenReferencesEmpty = it)) }
+                                        Text("只对含引用的提示词生效；纯文字照常保留，语法错误仍会报告。",
+                                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         HorizontalDivider()
                                         TriggerEditor(block.recognition, block.condition, references) { recognition, condition -> update(block.copy(recognition = recognition, condition = condition)) }
                                     }

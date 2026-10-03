@@ -9,7 +9,7 @@ internal data class EventPlan(val trigger: String, val waves: List<List<PlannedN
 
 internal data class RunPlan(val events: Map<String, EventPlan>) {
     companion object {
-        fun create(workflows: List<Workflow>, availableActions: Map<String, RegisteredAction>, executionVersion: Int = 6): Pair<RunPlan?, Issue?> {
+        fun create(workflows: List<Workflow>, availableActions: Map<String, RegisteredAction>, executionVersion: Int = 7): Pair<RunPlan?, Issue?> {
             val events = linkedMapOf<String, EventPlan>()
             val categories = mutableMapOf<String, String>()
             for (workflow in workflows.filter { it.enabled }) for (node in workflow.nodes.filter { it.enabled }) {

@@ -10,27 +10,29 @@ import kotlinx.serialization.Serializable
     val sourceKind: HistorySourceKind = HistorySourceKind.DISPLAY)
 @Serializable data class HistoryMemorySegment(
     val id: String, val title: String, val summary: String,
-    val sources: List<HistorySourceRef>, val workflowId: String
+    val sources: List<HistorySourceRef>, val workflowId: String, val childSegmentIds: List<String> = emptyList()
 )
 @Serializable data class HistoryViewRevision(
     val viewId: String, val name: String, val revision: Int, val captureId: String,
     val baseViewId: String? = null, val baseRevision: Int? = null,
     val segmentModes: Map<String, HistorySegmentMode> = emptyMap(),
-    val sourceKind: HistorySourceKind = HistorySourceKind.DISPLAY
+    val sourceKind: HistorySourceKind = HistorySourceKind.DISPLAY, val projectionVersion: Int = 1
 )
 @Serializable data class HistoryMemoryState(
     val segments: Map<String, HistoryMemorySegment> = emptyMap(),
     val captures: Map<String, List<HistorySourceRef>> = emptyMap(),
     val views: Map<String, List<HistoryViewRevision>> = emptyMap(),
-    val unavailableViewIds: Set<String> = emptySet()
+    val unavailableViewIds: Set<String> = emptySet(),
+    val captureBases: Map<String, String> = emptyMap()
 )
 @Serializable data class HistoryMemoryPatch(
     val segments: List<HistoryMemorySegment> = emptyList(),
     val captures: Map<String, List<HistorySourceRef>> = emptyMap(),
     val views: List<HistoryViewRevision> = emptyList(),
-    val expectedViewRevisions: Map<String, Int> = emptyMap()
+    val expectedViewRevisions: Map<String, Int> = emptyMap(),
+    val captureBases: Map<String, String> = emptyMap()
 ) {
-    fun isEmpty(): Boolean = segments.isEmpty() && captures.isEmpty() && views.isEmpty() && expectedViewRevisions.isEmpty()
+    fun isEmpty(): Boolean = segments.isEmpty() && captures.isEmpty() && views.isEmpty() && expectedViewRevisions.isEmpty() && captureBases.isEmpty()
 }
 @Serializable data class HistorySelection(
     val viewId: String? = null, val revision: Int? = null, val range: HistoryRange = HistoryRange(),
@@ -73,17 +75,94 @@ object HistoryMemory {
         if (it.sourceKind == HistorySourceKind.DISPLAY) identity else "MODEL_RAW\u0000$identity"
     })
 
+    /** Stored arrays are either complete legacy captures or strict suffixes of their named base. */
+    fun captureSources(state: HistoryMemoryState, captureId: String): List<HistorySourceRef> {
+        val chunks = mutableListOf<List<HistorySourceRef>>()
+        val visited = mutableSetOf<String>()
+        var current: String? = captureId
+        while (current != null) {
+            val id = current
+            require(visited.add(id)) { "历史捕获存在循环引用" }
+            val sources = state.captures[id] ?: error("历史捕获来源不存在：$id")
+            val base = state.captureBases[id]
+            require(base == null || sources.isNotEmpty()) { "历史捕获增量不能为空" }
+            chunks += sources
+            current = base
+        }
+        return buildList { chunks.asReversed().forEach { addAll(it) } }
+    }
+
+    /** Proves a capture prefix from immutable links, without reconstructing every prior array. */
+    fun captureExtends(state: HistoryMemoryState, baseCaptureId: String, captureId: String): Boolean {
+        require(baseCaptureId in state.captures) { "历史捕获基础来源不存在：$baseCaptureId" }
+        val visited = mutableSetOf<String>()
+        var current: String? = captureId
+        while (current != null) {
+            val id = current
+            require(visited.add(id)) { "历史捕获存在循环引用" }
+            val suffix = state.captures[id] ?: error("历史捕获来源不存在：$id")
+            val base = state.captureBases[id]
+            require(base == null || suffix.isNotEmpty()) { "历史捕获增量不能为空" }
+            if (id == baseCaptureId) return true
+            current = base
+        }
+        return false
+    }
+
+    fun validateCaptures(state: HistoryMemoryState) {
+        require(state.captureBases.keys.all { it in state.captures }) { "历史捕获基础链接缺少对应增量" }
+        require(state.captureBases.values.all { it in state.captures }) { "历史捕获基础来源不存在" }
+        val children = state.captureBases.entries.groupBy({ it.value }, { it.key })
+        val visited = mutableSetOf<String>()
+        val sources = mutableListOf<HistorySourceRef>()
+        val messageIds = mutableSetOf<String>()
+        val stack = ArrayDeque<Pair<String, Boolean>>()
+        state.captures.keys.filter { it !in state.captureBases }.forEach { stack.addLast(it to false) }
+        // Traverse all branches with one mutable prefix; do not retain expanded arrays per capture.
+        while (stack.isNotEmpty()) {
+            val (id, leaving) = stack.removeLast()
+            val suffix = state.captures.getValue(id)
+            if (leaving) {
+                repeat(suffix.size) { messageIds.remove(sources.removeAt(sources.lastIndex).messageId) }
+                continue
+            }
+            require(visited.add(id)) { "历史捕获存在循环引用" }
+            require(id !in state.captureBases || suffix.isNotEmpty()) { "历史捕获增量不能为空" }
+            suffix.forEach { ref ->
+                require(ref.messageId.isNotBlank() && ref.revisionId.isNotBlank() && ref.fingerprint.isNotBlank()) { "历史捕获来源无效" }
+                require(messageIds.add(ref.messageId)) { "历史来源楼层重复" }
+                require(sources.isEmpty() || sources.first().sourceKind == ref.sourceKind) { "历史捕获不能混合来源" }
+                sources += ref
+            }
+            require(id == captureId(sources)) { "历史捕获身份不一致" }
+            stack.addLast(id to true)
+            children[id].orEmpty().forEach { stack.addLast(it to false) }
+        }
+        require(visited.size == state.captures.size) { "历史捕获存在循环引用" }
+    }
+
+    private fun validateCapture(state: HistoryMemoryState, id: String) {
+        val sources = captureSources(state, id)
+        require(id == captureId(sources)) { "历史捕获身份不一致" }
+        require(sources.all { it.messageId.isNotBlank() && it.revisionId.isNotBlank() && it.fingerprint.isNotBlank() }) { "历史捕获来源无效" }
+        require(sources.map { it.sourceKind }.distinct().size <= 1) { "历史捕获不能混合来源" }
+        require(sources.map { it.messageId }.distinct().size == sources.size) { "历史来源楼层重复" }
+    }
+
     fun segment(title: String, summary: String, messages: List<ChatMessage>, workflowId: String): HistoryMemorySegment {
         require(messages.all { it.outputSlot == OutputSlot.BODY && !it.deleted }) { "记忆来源必须是有效正文楼层" }
         return segmentFromSources(title, summary, messages.map(::source), workflowId)
     }
 
-    fun segmentFromSources(title: String, summary: String, sources: List<HistorySourceRef>, workflowId: String): HistoryMemorySegment {
+    fun segmentFromSources(title: String, summary: String, sources: List<HistorySourceRef>, workflowId: String,
+                           childSegmentIds: List<String> = emptyList()): HistoryMemorySegment {
         require(summary.isNotBlank() && sources.isNotEmpty()) { "记忆摘要和来源不能为空" }
         require(sources.map { it.messageId }.distinct().size == sources.size) { "记忆来源不能重复" }
         require(sources.map { it.sourceKind }.distinct().size == 1) { "记忆段不能混合历史来源" }
-        val id = "memory-" + hash("$workflowId\u0000${captureId(sources)}\u0000$summary")
-        return HistoryMemorySegment(id, title, summary, sources, workflowId)
+        val identity = "$workflowId\u0000${captureId(sources)}\u0000$summary"
+        val id = "memory-" + hash(if (childSegmentIds.isEmpty()) identity else
+            "$identity\u0000children\u0000${childSegmentIds.joinToString("\u0000")}")
+        return HistoryMemorySegment(id, title, summary, sources, workflowId, childSegmentIds)
     }
 
     /** A pure compatibility view; callers decide whether an explicit operation persists it. */
@@ -133,6 +212,38 @@ object HistoryMemory {
         return segment.sources.indices.all { offset -> sources.getOrNull(start + offset) == segment.sources[offset] }
     }
 
+    internal fun matchesOrdered(segment: HistoryMemorySegment, sources: List<HistorySourceRef?>,
+                                positions: Map<String, Int>): Boolean {
+        var previous = -1
+        return segment.sources.isNotEmpty() && segment.sources.all { ref ->
+            val index = positions[ref.messageId] ?: return@all false
+            (index > previous && sources[index] == ref).also { previous = index }
+        }
+    }
+
+    /** Validates immutable graph structure once; active source revisions are checked by readers. */
+    fun validateSegments(segments: Map<String, HistoryMemorySegment>) {
+        val done = mutableSetOf<String>()
+        val visiting = mutableSetOf<String>()
+        fun visit(id: String) {
+            if (id in done) return
+            require(visiting.add(id)) { "记忆摘要存在循环引用" }
+            val item = segments[id] ?: error("子记忆段不存在：$id")
+            require(item.id == id && item.summary.isNotBlank() && item.sources.isNotEmpty()) { "记忆身份、来源或摘要无效" }
+            require(item.sources.map { it.sourceKind }.distinct().size == 1) { "记忆段不能混合历史来源" }
+            require(item.sources.map { it.messageId }.distinct().size == item.sources.size) { "记忆来源重复" }
+            require(item.childSegmentIds.distinct().size == item.childSegmentIds.size) { "子记忆重复" }
+            item.childSegmentIds.forEach(::visit)
+            if (item.childSegmentIds.isNotEmpty()) {
+                require(item.childSegmentIds.size >= 2) { "父摘要至少需要两个子记忆" }
+                require(item.childSegmentIds.flatMap { segments.getValue(it).sources } == item.sources) { "父摘要来源与有序子记忆不一致" }
+            }
+            visiting.remove(id)
+            done += id
+        }
+        segments.keys.forEach(::visit)
+    }
+
     fun view(state: HistoryMemoryState, id: String, revision: Int? = null): HistoryViewRevision? =
         state.views[id]?.let { versions -> if (revision == null) versions.lastOrNull() else versions.firstOrNull { it.revision == revision } }
 
@@ -147,7 +258,9 @@ object HistoryMemory {
             current = if (item.baseViewId == null) null else {
                 val base = view(state, item.baseViewId, requireNotNull(item.baseRevision))
                     ?: error("历史副本的基础版本不存在")
-                require(base.captureId == item.captureId && base.sourceKind == item.sourceKind) { "历史副本捕获来源不一致" }
+                require(base.sourceKind == item.sourceKind && base.projectionVersion == item.projectionVersion &&
+                    (base.captureId == item.captureId || item.projectionVersion >= 2 &&
+                        captureExtends(state, base.captureId, item.captureId))) { "历史副本捕获来源不一致" }
                 base
             }
         }
@@ -167,14 +280,16 @@ object HistoryMemory {
             require(segments[segment.id] == null || segments[segment.id] == segment) { "记忆身份冲突" }
             segments[segment.id] = segment
         }
+        validateSegments(segments)
         val captures = state.captures.toMutableMap()
+        require(patch.captureBases.keys.all { it in patch.captures }) { "历史捕获基础链接缺少对应增量" }
         patch.captures.forEach { (id, sources) ->
-            require(id == captureId(sources)) { "历史捕获身份不一致" }
-            require(sources.map { it.sourceKind }.distinct().size <= 1) { "历史捕获不能混合来源" }
-            require(sources.map { it.messageId }.distinct().size == sources.size) { "历史来源楼层重复" }
-            require(captures[id] == null || captures[id] == sources) { "历史捕获身份冲突" }
+            require(id !in captures || captures[id] == sources && state.captureBases[id] == patch.captureBases[id]) { "历史捕获身份冲突" }
             captures[id] = sources
         }
+        val captureBases = state.captureBases + patch.captureBases
+        val captureState = state.copy(captures = captures, captureBases = captureBases)
+        patch.captures.keys.forEach { validateCapture(captureState, it) }
         val views = state.views.toMutableMap()
         for (item in patch.views) {
             require(MacroNaming.isValidSlug(item.viewId)) { "历史副本标识须为英文 slug" }
@@ -184,20 +299,16 @@ object HistoryMemory {
             require(item.viewId in patch.expectedViewRevisions) { "历史副本缺少版本前置条件" }
             require(captures.containsKey(item.captureId)) { "历史副本缺少来源捕获" }
             require((item.baseViewId == null) == (item.baseRevision == null)) { "历史副本基础版本不完整" }
-            val interim = HistoryMemoryState(segments, captures, views)
+            val interim = HistoryMemoryState(segments, captures, views, captureBases = captureBases)
             if (item.baseViewId != null) require(view(interim, item.baseViewId, item.baseRevision) != null) { "历史副本基础版本不存在" }
             val effective = modes(interim, item)
-            val sources = captures.getValue(item.captureId)
+            val sources = captureSources(interim, item.captureId)
             require(sources.all { it.sourceKind == item.sourceKind }) { "历史副本来源类型不一致" }
-            val compressed = mutableSetOf<String>()
-            effective.forEach { (id, mode) ->
-                val segment = segments[id] ?: error("记忆段不存在：$id")
-                val start = sources.indexOf(segment.sources.first())
-                require(start >= 0 && sources.drop(start).take(segment.sources.size) == segment.sources) { "记忆段不属于此历史捕获：$id" }
-                if (mode == HistorySegmentMode.COMPRESS) require(segment.sources.all { compressed.add(it.messageId) }) { "压缩记忆段重叠" }
-            }
+            val hierarchy = HistoryHierarchy(segments, sources, ordered = item.projectionVersion >= 2)
+            effective.keys.forEach { id -> require(hierarchy.valid(id)) { "记忆段不属于此历史捕获：$id" } }
+            hierarchy.compressed(effective, item.projectionVersion)
             views[item.viewId] = previous + item
         }
-        return HistoryMemoryState(segments, captures, views, state.unavailableViewIds - patch.views.map { it.viewId }.toSet())
+        return HistoryMemoryState(segments, captures, views, state.unavailableViewIds - patch.views.map { it.viewId }.toSet(), captureBases)
     }
 }

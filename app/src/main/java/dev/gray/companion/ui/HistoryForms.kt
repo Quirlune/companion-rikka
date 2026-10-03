@@ -133,8 +133,18 @@ internal fun HistoryMemoryInspector(session: Session?) {
             OutlinedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(segment.title.ifBlank { "记忆段 ${segment.id.take(8)}" }, style = MaterialTheme.typography.titleSmall)
                 Text(segment.summary, style = MaterialTheme.typography.bodyMedium)
-                val sourceLabel = if (segment.sources.firstOrNull()?.sourceKind == HistorySourceKind.MODEL_RAW) "模型初始原文" else "最终展示正文"
+                val sourceKinds = segment.sources.map { it.sourceKind }.distinct()
+                val sourceLabel = sourceKinds.joinToString("、") {
+                    if (it == HistorySourceKind.MODEL_RAW) "模型初始原文" else "最终展示正文"
+                }.ifBlank { "无来源楼层" }
                 Text("来源：$sourceLabel", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (segment.childSegmentIds.isNotEmpty()) Text(
+                    "子记忆（${segment.childSegmentIds.size}）： " + segment.childSegmentIds.joinToString("、") { childId ->
+                        val child = state?.segments?.get(childId)
+                        "${child?.title?.ifBlank { "未命名记忆" } ?: "未找到记忆"} · $childId"
+                    },
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Text("来源楼层：" + segment.sources.joinToString("、") { source ->
                     floorNumbers[source.messageId]?.let { floor ->
                         "第 ${floor} 层" + if (original.firstOrNull { it.id == source.messageId }?.let { runCatching { HistoryMemory.source(it, source.sourceKind) == source }.getOrDefault(false) } == true) "" else "（旧版本）"
@@ -147,9 +157,9 @@ internal fun HistoryMemoryInspector(session: Session?) {
         if (state?.views.isNullOrEmpty()) Text("尚无副本；在调用中使用“复制历史视图”动作创建。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         state?.views.orEmpty().forEach { (id, revisions) ->
             revisions.lastOrNull()?.let { latest ->
-                val captured = state?.captures?.get(latest.captureId).orEmpty()
+                val captured = state?.let { HistoryMemory.captureSources(it, latest.captureId) }.orEmpty()
                 val source = if (latest.sourceKind == HistorySourceKind.MODEL_RAW) ".source:model" else ""
-                Text("${latest.name} · $id · 第 ${latest.revision} 版 · ${captured.size} 层 · ${if (source.isNotEmpty()) "模型初始原文" else "最终展示正文"}", style = MaterialTheme.typography.bodyMedium)
+                Text("${latest.name} · $id · 第 ${latest.revision} 版 · 投影规则 v${latest.projectionVersion} · ${captured.size} 层 · ${if (source.isNotEmpty()) "模型初始原文" else "最终展示正文"}", style = MaterialTheme.typography.bodyMedium)
                 Text("{{type:builtin.in:history.name:context$source.view:$id}}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             }
         }

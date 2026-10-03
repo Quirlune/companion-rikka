@@ -258,7 +258,7 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                     val referenceLibrary = library.copy(selectedSessionId = key.sessionId)
                                     val session = referenceLibrary.sessions.firstOrNull { it.id == key.sessionId }
                                     val main = referenceLibrary.mainCalls.firstOrNull { it.id == session?.mainCallId }
-                                    val workflows = main?.let { it.workflows + it.history.processor.workflow }.orEmpty() +
+                                    val workflows = main?.configuredWorkflows().orEmpty() +
                                         session?.let { referenceLibrary.loadedCallGroups(it).flatMap { group -> group.workflows } }.orEmpty()
                                     val references = referencesForWritingNode(promptReferenceChoices(workflows, referenceLibrary, main), node.id)
                                     PromptBlocksEditor(node.blocks, references, { blocks ->

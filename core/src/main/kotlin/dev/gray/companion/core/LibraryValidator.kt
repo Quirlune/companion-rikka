@@ -1,7 +1,7 @@
 package dev.gray.companion.core
 
 object LibraryValidator {
-    fun validate(library: Library, executionVersion: Int = 6): List<Issue> {
+    fun validate(library: Library, executionVersion: Int = 7): List<Issue> {
         val issues = mutableListOf<Issue>()
         if (library.schemaVersion != LibraryFormat.CURRENT_VERSION) issues += Issue("library.schemaVersion", "不支持的资源版本")
         checkMetadata(library, issues)
@@ -179,7 +179,7 @@ object LibraryValidator {
             }
         }
         val processorIds = library.mainCalls.map { it.history.processor.workflow.id }.toSet()
-        val allWorkflows = library.mainCalls.flatMap { it.workflows + it.history.processor.workflow } + library.groups.flatMap { it.workflows }
+        val allWorkflows = library.mainCalls.flatMap { it.configuredWorkflows() } + library.groups.flatMap { it.workflows }
         unique(allWorkflows.map { it.id }, "library.workflowIds")
         unique(allWorkflows.flatMap { it.nodes }.flatMap { it.blocks }.map { it.id }, "library.blockIds")
         allWorkflows.forEach { workflow ->
@@ -268,7 +268,7 @@ object LibraryValidator {
                     if (block.depth < 0) issues += Issue("$blockPath.depth", "插入深度不能小于零")
                 }
                 node.arguments.forEach { (key, value) -> checkTemplate(value, "$nodePath.argument.$key", issues) }
-                if (node.actionId in setOf("history.view.copy", "history.memory.write")) {
+                if (node.actionId in setOf("history.view.copy", "history.memory.write", "history.memory.select")) {
                     val source = node.arguments["source"] ?: "{{history}}"
                     if (source.isBlank()) issues += Issue("$nodePath.argument.source", "请选择历史来源")
                     else if (HistoryViews.selection(source) == null)
@@ -278,6 +278,14 @@ object LibraryValidator {
                             issues += Issue("$nodePath.argument.targetId", "历史副本标识须为英文 slug")
                         SafePatterns.validate(node.arguments["pattern"].orEmpty(), node.arguments["captureGroup"]?.toIntOrNull() ?: 0)
                             ?.let { issues += Issue("$nodePath.argument.pattern", it) }
+                    }
+                    if (node.actionId == "history.memory.select") {
+                        val count = node.arguments["count"].orEmpty()
+                        if (count.isNotBlank() && !count.contains("{{") && (count.toIntOrNull()?.let { it >= 0 } != true))
+                            issues += Issue("$nodePath.argument.count", "摘要数量须为非负整数，零表示全部")
+                        val mode = node.arguments["mode"] ?: "UNMERGED_LEAVES"
+                        if (!mode.contains("{{") && mode !in setOf("UNMERGED_LEAVES", "ROOTS"))
+                            issues += Issue("$nodePath.argument.mode", "记忆选择须为未合并小摘要或根摘要")
                     }
                 }
                 if (node.actionId == "text.extract") {
@@ -350,35 +358,46 @@ object LibraryValidator {
                 }
             }
         }
-        library.mainCalls.forEach { workflows(it.workflows + it.history.processor.workflow, "main.${it.id}") }
+        library.mainCalls.forEach { workflows(it.configuredWorkflows(), "main.${it.id}") }
         library.groups.forEach { workflows(it.workflows, "group.${it.id}") }
     }
 
     /** Only saved structure is checked here; unavailable old sources are diagnosed when read. */
     private fun checkMemory(memory: HistoryMemoryState, path: String, issues: MutableList<Issue>) {
+        try {
+            HistoryMemory.validateSegments(memory.segments)
+        } catch (failure: IllegalArgumentException) {
+            issues += Issue("$path.segments", failure.message ?: "记忆段关系无效")
+        } catch (failure: IllegalStateException) {
+            issues += Issue("$path.segments", failure.message ?: "记忆段关系无效")
+        }
         memory.segments.forEach { (id, segment) ->
             if (id != segment.id || segment.summary.isBlank() || segment.sources.isEmpty() ||
                 segment.sources.map { it.messageId }.distinct().size != segment.sources.size ||
                 segment.sources.map { it.sourceKind }.distinct().size > 1)
                 issues += Issue("$path.segments.$id", "记忆段身份、摘要或来源无效")
         }
-        memory.captures.forEach { (id, sources) ->
-            if (id.isBlank() || sources.map { it.messageId }.distinct().size != sources.size ||
-                sources.any { it.messageId.isBlank() || it.revisionId.isBlank() || it.fingerprint.isBlank() } ||
-                sources.map { it.sourceKind }.distinct().size > 1)
-                issues += Issue("$path.captures.$id", "历史捕获来源无效")
+        try {
+            HistoryMemory.validateCaptures(memory)
+        } catch (failure: IllegalArgumentException) {
+            issues += Issue("$path.captures", failure.message ?: "历史捕获来源无效")
+        } catch (failure: IllegalStateException) {
+            issues += Issue("$path.captures", failure.message ?: "历史捕获来源无效")
         }
         memory.views.forEach { (id, versions) ->
             if (!MacroNaming.isValidSlug(id) || versions.isEmpty()) issues += Issue("$path.views.$id", "历史副本标识或版本无效")
             versions.forEachIndexed { index, view ->
-                if (view.viewId != id || view.revision != index + 1 || view.name.isBlank() || view.captureId !in memory.captures ||
+                if (view.viewId != id || view.revision != index + 1 || view.name.isBlank() || view.projectionVersion !in 1..2 || view.captureId !in memory.captures ||
                     (view.baseViewId == null) != (view.baseRevision == null) || view.segmentModes.keys.any { id ->
                         memory.segments[id]?.sources?.all { it.sourceKind == view.sourceKind } != true
                     } ||
                     memory.captures[view.captureId].orEmpty().any { it.sourceKind != view.sourceKind })
                     issues += Issue("$path.views.$id.${view.revision}", "历史副本结构无效")
                 if (view.baseViewId != null && memory.views[view.baseViewId].orEmpty().none {
-                    it.revision == view.baseRevision && it.sourceKind == view.sourceKind && it.captureId == view.captureId
+                    it.revision == view.baseRevision && it.sourceKind == view.sourceKind &&
+                        it.projectionVersion == view.projectionVersion &&
+                        (it.captureId == view.captureId || view.projectionVersion >= 2 &&
+                            runCatching { HistoryMemory.captureExtends(memory, it.captureId, view.captureId) }.getOrDefault(false))
                 })
                     issues += Issue("$path.views.$id.${view.revision}", "历史副本基础版本不存在")
             }
@@ -441,8 +460,13 @@ object LibraryValidator {
             checkTemplate(insertion.template, "$path.insertions.$index.template", issues)
         }
         val processor = history.processor
-        if (processor.minimumNewFloors < 1 || processor.keepRecentFloors < 0)
-            issues += Issue("$path.processor", "历史处理门槛须大于零，保留楼数不能为负")
+        if (processor.minimumNewFloors < 1 || processor.keepRecentFloors < 0 || processor.protectFirstFloors < 0 ||
+            processor.maximumBatchFloors?.let { it < 1 } == true)
+            issues += Issue("$path.processor", "历史门槛与批次上限须大于零，保留楼数不能为负")
+        processor.aggregationWorkflow?.let { aggregation ->
+            if (aggregation.afterWorkflowId != processor.workflow.id)
+                issues += Issue("$path.processor.aggregationWorkflow", "大摘要须由对应小摘要调用完成触发")
+        }
         if (processor.workflow.enabled && processor.workflow.nodes.none { it.enabled && it.outputKey == processor.outputKey })
             issues += Issue("$path.processor.outputKey", "历史处理输出键必须来自已启用节点")
         if (processor.workflow.enabled) processor.workflow.nodes.filter { it.enabled }.forEach { node ->

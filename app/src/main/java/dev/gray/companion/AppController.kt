@@ -492,7 +492,7 @@ class AppController internal constructor(
         val current = library.value
         val pending = current.sessions.firstOrNull { it.id == sessionId }?.pendingRun?.takeIf { it.id == runId } ?: return null
         val failure = pending.failures.firstOrNull { it.nodeKey == nodeKey } ?: return null
-        return (current.mainCalls.flatMap { it.workflows + it.history.processor.workflow } + current.groups.flatMap { it.workflows })
+        return (current.mainCalls.flatMap { it.configuredWorkflows() } + current.groups.flatMap { it.workflows })
             .filter { it.id == failure.workflowId }.flatMap { it.nodes }.singleOrNull { it.id == failure.nodeId }
     }
 
@@ -505,9 +505,11 @@ class AppController internal constructor(
             fun repair(flow: Workflow): Workflow = if (flow.id != failure.workflowId) flow else
                 flow.copy(nodes = flow.nodes.map { if (it.id == failure.nodeId) it.copy(blocks = blocks) else it })
             current.copy(mainCalls = current.mainCalls.map { main ->
-                if (main.workflows.none { it.id == failure.workflowId } && main.history.processor.workflow.id != failure.workflowId) main
+                if (main.configuredWorkflows().none { it.id == failure.workflowId }) main
                 else main.copy(workflows = main.workflows.map(::repair),
-                    history = main.history.copy(processor = main.history.processor.copy(workflow = repair(main.history.processor.workflow))))
+                    history = main.history.copy(processor = main.history.processor.copy(
+                        workflow = repair(main.history.processor.workflow),
+                        aggregationWorkflow = main.history.processor.aggregationWorkflow?.let(::repair))))
             }, groups = current.groups.map { group ->
                 if (group.workflows.none { it.id == failure.workflowId }) group else group.copy(workflows = group.workflows.map(::repair))
             })

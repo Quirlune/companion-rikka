@@ -44,7 +44,7 @@ data class ActionContext(
     val session: Session? = null,
     val library: Library? = null,
     val workflowId: String = "",
-    val executionVersion: Int = 6,
+    val executionVersion: Int = 7,
     val macroTarget: MacroTargetSnapshot? = null
 )
 
@@ -186,16 +186,45 @@ class ActionRegistry {
                     mode = RegexTransformMode.valueOf(context.arguments.getValue("mode")),
                     replacement = context.arguments["replacement"].orEmpty()), context.input))
             }
+            .register(ActionDescriptor("history.memory.select", "选择分段记忆", "按来源选择未合并小摘要或最外层摘要", listOf(
+                ActionFieldDescriptor("source", "History 来源", required = true, defaultValue = "{{history.display}}"),
+                ActionFieldDescriptor("leafWorkflowId", "小摘要调用 ID"),
+                ActionFieldDescriptor("mode", "选择方式", defaultValue = "ROOTS", choices = listOf(
+                    ActionChoice("ROOTS", "最外层摘要"), ActionChoice("UNMERGED_LEAVES", "未合并的小摘要"))),
+                ActionFieldDescriptor("count", "选择数量（0 为全部）", ActionFieldType.NUMBER, defaultValue = "0", integer = true),
+                ActionFieldDescriptor("requireCount", "不足数量时不选择", ActionFieldType.BOOLEAN, defaultValue = "false")
+            ))) { context ->
+                require(context.executionVersion >= 7) { "此恢复版本不支持层级记忆选择" }
+                val session = requireNotNull(context.session)
+                val main = requireNotNull(context.library).mainCalls.first { it.id == session.mainCallId }
+                val selection = HistoryViews.selection(context.arguments.getValue("source"), context.executionVersion) ?: error("History 来源引用无效")
+                ActionOutcome(HistoryActions.select(session, main, selection, context.arguments["leafWorkflowId"].orEmpty(),
+                    context.arguments.getValue("mode"), context.arguments.getValue("count").toInt(),
+                    context.arguments.getValue("requireCount").toBooleanStrict()))
+            }
+            .register(ActionDescriptor("history.memory.read", "读取分段记忆", "读取指定记忆 ID 对应的摘要与来源标识", listOf(
+                ActionFieldDescriptor("ids", "记忆 ID", ActionFieldType.TEMPLATE)
+            ))) { context ->
+                require(context.executionVersion >= 7) { "此恢复版本不支持层级记忆读取" }
+                val session = requireNotNull(context.session)
+                val main = requireNotNull(context.library).mainCalls.first { it.id == session.mainCallId }
+                ActionOutcome(HistoryActions.read(session, main, HistoryActions.selectedIds(context.arguments["ids"].orEmpty(), "", 0)))
+            }
             .register(ActionDescriptor("history.memory.write", "记录分段记忆", "保存摘要与真实原文楼层的映射", listOf(
                 ActionFieldDescriptor("source", "History 来源", required = true, defaultValue = "{{history}}"),
-                ActionFieldDescriptor("title", "记忆标题", defaultValue = "记忆")
+                ActionFieldDescriptor("title", "记忆标题", defaultValue = "记忆"),
+                ActionFieldDescriptor("childrenIds", "子记忆 ID（大摘要）", ActionFieldType.TEMPLATE)
             ))) { context ->
                 val session = requireNotNull(context.session)
                 val selection = HistoryViews.selection(context.arguments.getValue("source"), context.executionVersion) ?: error("History 来源引用无效")
                 val main = requireNotNull(context.library).mainCalls.first { it.id == session.mainCallId }
-                val segment = HistoryMemory.segmentFromSources(context.arguments["title"].orEmpty(), context.input,
-                    HistoryViews.sources(session, selection, main), context.workflowId)
-                ActionOutcome(segment.id, historyWrites = HistoryMemoryPatch(segments = listOf(segment)))
+                val children = if (context.executionVersion >= 7) HistoryActions.selectedIds(
+                    context.arguments["childrenIds"].orEmpty(), "", 0, distinct = false) else emptyList()
+                val patch = if (children.isNotEmpty()) HistoryActions.parent(session, main, selection, children,
+                    context.arguments["title"].orEmpty(), context.input, context.workflowId) else HistoryMemoryPatch(segments = listOf(
+                    HistoryMemory.segmentFromSources(context.arguments["title"].orEmpty(), context.input,
+                        HistoryViews.sources(session, selection, main), context.workflowId)))
+                ActionOutcome(patch.segments.last().id, historyWrites = patch)
             }
             .register(ActionDescriptor("history.view.copy", "History 压缩或展开副本", "通过记忆 ID 创建独立历史视图，不复制原文", listOf(
                 ActionFieldDescriptor("source", "History 来源", required = true, defaultValue = "{{history}}"),
@@ -205,7 +234,8 @@ class ActionRegistry {
                     ActionChoice("COMPRESS", "压缩"), ActionChoice("EXPAND", "展开"))),
                 ActionFieldDescriptor("ids", "记忆 ID", ActionFieldType.TEMPLATE),
                 ActionFieldDescriptor("pattern", "ID 提取正则"),
-                ActionFieldDescriptor("captureGroup", "捕获组", ActionFieldType.NUMBER, defaultValue = "0", integer = true)
+                ActionFieldDescriptor("captureGroup", "捕获组", ActionFieldType.NUMBER, defaultValue = "0", integer = true),
+                ActionFieldDescriptor("inheritTargetModes", "刷新时保留展开选择", ActionFieldType.BOOLEAN, defaultValue = "false")
             ))) { context ->
                 val selection = HistoryViews.selection(context.arguments.getValue("source"), context.executionVersion) ?: error("History 来源引用无效")
                 val ids = HistoryActions.selectedIds(context.arguments["ids"].orEmpty(),
@@ -214,7 +244,9 @@ class ActionRegistry {
                 val session = requireNotNull(context.session)
                 val main = requireNotNull(context.library).mainCalls.first { it.id == session.mainCallId }
                 val patch = HistoryViews.copy(session, selection, target,
-                    context.arguments["name"].orEmpty(), HistorySegmentMode.valueOf(context.arguments.getValue("mode")), ids, main)
+                    context.arguments["name"].orEmpty(), HistorySegmentMode.valueOf(context.arguments.getValue("mode")), ids, main,
+                    inheritTargetModes = context.arguments["inheritTargetModes"]?.toBooleanStrict() ?: false,
+                    executionVersion = context.executionVersion)
                 ActionOutcome(target, historyWrites = patch)
             }
             .register(ActionDescriptor("prompt.inject", "注入提示词", "向主调用目标模型节点注入提示块", listOf(

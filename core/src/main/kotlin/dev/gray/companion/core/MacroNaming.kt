@@ -52,13 +52,15 @@ object MacroNaming {
 
     fun normalize(value: MainCall, siblingSlugs: Collection<String> = emptyList()): MainCall {
         // The history processor shares its owner's call namespace, including when disabled.
-        val calls = siblings(value.workflows + value.history.processor.workflow, { it.slug }) { call, used ->
+        val calls = siblings(value.configuredWorkflows(), { it.slug }) { call, used ->
             normalize(call, used)
         }
         return value.copy(
             slug = alias(value.slug, "", "main", value.id, siblingSlugs),
-            workflows = calls.dropLast(1),
-            history = value.history.copy(processor = value.history.processor.copy(workflow = calls.last()))
+            workflows = calls.take(value.workflows.size),
+            history = value.history.copy(processor = value.history.processor.copy(
+                workflow = calls[value.workflows.size],
+                aggregationWorkflow = calls.getOrNull(value.workflows.size + 1)))
         ).retainOriginal(value)
     }
 
@@ -111,7 +113,8 @@ object MacroNaming {
     internal fun runtimeShape(value: MainCall): MainCall = value.copy(
         slug = "", workflows = value.workflows.map { runtimeShape(it) },
         history = value.history.copy(processor = value.history.processor.copy(
-            workflow = runtimeShape(value.history.processor.workflow)))
+            workflow = runtimeShape(value.history.processor.workflow),
+            aggregationWorkflow = value.history.processor.aggregationWorkflow?.let { runtimeShape(it) }))
     )
 
     internal fun runtimeShape(value: CallGroup): CallGroup = value.copy(
