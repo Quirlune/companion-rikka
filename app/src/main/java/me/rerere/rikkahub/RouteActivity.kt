@@ -42,6 +42,7 @@ import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.NavKey
+import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
@@ -71,6 +72,8 @@ import me.rerere.rikkahub.ui.context.LocalSharedTransitionScope
 import me.rerere.rikkahub.ui.context.LocalTTSState
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.context.Navigator
+import me.rerere.rikkahub.ui.context.VolumeKeyScrollOwner
+import me.rerere.rikkahub.ui.context.consumeVolumeKey
 import me.rerere.rikkahub.ui.hooks.readBooleanPreference
 import me.rerere.rikkahub.ui.hooks.readStringPreference
 import me.rerere.rikkahub.ui.hooks.rememberCustomAsrState
@@ -137,27 +140,17 @@ import kotlin.uuid.Uuid
 private const val TAG = "RouteActivity"
 private const val ACTION_TRANSLATE = "me.rerere.rikkahub.action.TRANSLATE"
 
-class RouteActivity : ComponentActivity() {
+class RouteActivity : ComponentActivity(), VolumeKeyScrollOwner {
     private val okHttpClient by inject<OkHttpClient>()
     private val settingsStore by inject<SettingsStore>()
     private var navStack: MutableList<NavKey>? = null
     private val pendingIntents = ArrayDeque<Intent>()
 
     // Volume key listener registry — last registered handler wins
-    internal val volumeKeyListeners = mutableListOf<(isVolumeUp: Boolean) -> Boolean>()
+    override val volumeKeyListeners = mutableListOf<(isVolumeUp: Boolean) -> Boolean>()
 
-    @SuppressLint("RestrictedApi")
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (event.action == KeyEvent.ACTION_DOWN) {
-            val isVolumeUp = when (event.keyCode) {
-                KeyEvent.KEYCODE_VOLUME_UP -> true
-                KeyEvent.KEYCODE_VOLUME_DOWN -> false
-                else -> return super.dispatchKeyEvent(event)
-            }
-            if (volumeKeyListeners.lastOrNull()?.invoke(isVolumeUp) == true) return true
-        }
-        return super.dispatchKeyEvent(event)
-    }
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+        if (consumeVolumeKey(event)) true else super.dispatchKeyEvent(event)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -293,33 +286,12 @@ class RouteActivity : ComponentActivity() {
                         .semantics { testTagsAsResourceId = true }
                         .background(MaterialTheme.colorScheme.background)
                 ) {
-                    NavDisplay(
+                    RikkaNavDisplay(
                         backStack = backStack,
-                        entryDecorators = listOf(
-                            rememberSaveableStateHolderNavEntryDecorator(),
-                            rememberViewModelStoreNavEntryDecorator(),
-                        ),
-                        modifier = Modifier.fillMaxSize(),
                         onBack = { backStack.removeLastOrNull() },
-                        transitionSpec = {
-                            if (backStack.size == 1) fadeIn() togetherWith fadeOut()
-                            else {
-                                slideInHorizontally { it } togetherWith
-                                    slideOutHorizontally { -it / 2 } + scaleOut(targetScale = 0.7f) + fadeOut()
-                            }
-                        },
-                        popTransitionSpec = {
-                            slideInHorizontally { -it / 2 } + scaleIn(initialScale = 0.7f) + fadeIn() togetherWith
-                                slideOutHorizontally { it }
-                        },
-                        predictivePopTransitionSpec = {
-                            slideInHorizontally { -it / 2 } + scaleIn(initialScale = 0.7f) + fadeIn() togetherWith
-                                slideOutHorizontally { it }
-                        },
                         entryProvider = entryProvider {
                             entry<Screen.Chat>(
-                                metadata = NavDisplay.transitionSpec { fadeIn() togetherWith fadeOut() }
-                                    + NavDisplay.popTransitionSpec { fadeIn() togetherWith fadeOut() }
+                                metadata = rikkaChatTransitions()
                             ) { key ->
                                 ChatPage(
                                     id = Uuid.parse(key.id),
@@ -580,6 +552,15 @@ class RouteActivity : ComponentActivity() {
 }
 
 sealed interface Screen : NavKey {
+    @Serializable data class CompanionResources(val kind: Int) : Screen
+    @Serializable data class CompanionEditor(val kind: String, val id: String) : Screen
+    @Serializable data class CompanionRecoveryPrompt(val sessionId: String, val runId: String, val nodeKey: String) : Screen
+    @Serializable data object CompanionSession : Screen
+    @Serializable data object CompanionPersonas : Screen
+    @Serializable data object CompanionUsage : Screen
+    @Serializable data object CompanionTiles : Screen
+    @Serializable data class CompanionTileEditor(val kind: String, val id: String) : Screen
+    @Serializable data object CompanionPromptPreview : Screen
     @Serializable
     data class Chat(
         val id: String,
@@ -732,3 +713,41 @@ sealed interface Screen : NavKey {
     @Serializable
     data object Stats : Screen
 }
+
+/** The existing RouteActivity navigation implementation, shared by both runtime entry points. */
+@Composable
+internal fun RikkaNavDisplay(
+    backStack: List<NavKey>,
+    onBack: () -> Unit,
+    entryProvider: (NavKey) -> NavEntry<NavKey>,
+) {
+    NavDisplay(
+        backStack = backStack,
+        entryDecorators = listOf(
+            rememberSaveableStateHolderNavEntryDecorator(),
+            rememberViewModelStoreNavEntryDecorator(),
+        ),
+        modifier = Modifier.fillMaxSize(),
+        onBack = onBack,
+        transitionSpec = {
+            if (backStack.size == 1) fadeIn() togetherWith fadeOut()
+            else {
+                slideInHorizontally { it } togetherWith
+                    slideOutHorizontally { -it / 2 } + scaleOut(targetScale = 0.7f) + fadeOut()
+            }
+        },
+        popTransitionSpec = {
+            slideInHorizontally { -it / 2 } + scaleIn(initialScale = 0.7f) + fadeIn() togetherWith
+                slideOutHorizontally { it }
+        },
+        predictivePopTransitionSpec = {
+            slideInHorizontally { -it / 2 } + scaleIn(initialScale = 0.7f) + fadeIn() togetherWith
+                slideOutHorizontally { it }
+        },
+        entryProvider = entryProvider,
+    )
+}
+
+internal fun rikkaChatTransitions() =
+    NavDisplay.transitionSpec { fadeIn() togetherWith fadeOut() } +
+        NavDisplay.popTransitionSpec { fadeIn() togetherWith fadeOut() }

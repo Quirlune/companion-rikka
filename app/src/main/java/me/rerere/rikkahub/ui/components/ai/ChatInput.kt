@@ -138,10 +138,10 @@ fun ChatInput(
     onUpdateChatModel: (Model) -> Unit,
     onUpdateAssistant: (Assistant) -> Unit,
     onUpdateSearchService: (Int) -> Unit,
-    onMoreClick: () -> Unit,
+    onMoreClick: (() -> Unit)?,
     onCancelClick: () -> Unit,
     onSendClick: () -> Unit,
-    onLongSendClick: () -> Unit,
+    onLongSendClick: (() -> Unit)?,
     messageQueue: MessageQueueState = MessageQueueState(),
     onRemoveQueuedMessage: (Uuid) -> Unit = {},
     onBeginEditQueuedMessage: (Uuid) -> QueuedMessage? = { null },
@@ -150,6 +150,7 @@ fun ChatInput(
     onStartVoiceMode: (() -> Unit)? = null,
     voiceState: VoiceSessionState = VoiceSessionState(),
     onStopVoiceMode: () -> Unit = {},
+    textOnly: Boolean = false,
 ) {
     val toaster = LocalToaster.current
     val assistant = settings.getCurrentAssistant()
@@ -183,36 +184,36 @@ fun ChatInput(
     fun sendMessageWithoutAnswer() {
         focusManager.clearFocus(force = true)
         keyboardController?.hide()
-        if (loading && state.isEmpty()) onCancelClick() else onLongSendClick()
+        if (loading && state.isEmpty()) onCancelClick() else onLongSendClick?.invoke()
     }
 
-    val asr = LocalASRState.current
-    val asrState by asr.state.collectAsState()
+    val asr = if (textOnly) null else LocalASRState.current
+    val asrState = asr?.state?.collectAsState()?.value
     val hapticFeedback = LocalHapticFeedback.current
-    val soundEffectPlayer: SoundEffectPlayer = koinInject()
-    LaunchedEffect(Unit) {
-        soundEffectPlayer.preload(R.raw.asr_start, R.raw.asr_stop)
+    val soundEffectPlayer: SoundEffectPlayer? = if (textOnly) null else koinInject()
+    LaunchedEffect(soundEffectPlayer) {
+        soundEffectPlayer?.preload(R.raw.asr_start, R.raw.asr_stop)
     }
-    val asrPermission = rememberPermissionState(PermissionRecordAudio)
-    PermissionManager(permissionState = asrPermission)
+    val asrPermission = if (textOnly) null else rememberPermissionState(PermissionRecordAudio)
+    asrPermission?.let { PermissionManager(permissionState = it) }
     var asrBaseText by remember { mutableStateOf("") }
-    LaunchedEffect(asrState.status) {
-        when (asrState.status) {
+    LaunchedEffect(asrState?.status) {
+        when (asrState?.status) {
             ASRStatus.Listening -> {
                 hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
-                soundEffectPlayer.play(R.raw.asr_start)
+                soundEffectPlayer?.play(R.raw.asr_start)
             }
 
             ASRStatus.Stopping -> {
                 hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureEnd)
-                soundEffectPlayer.play(R.raw.asr_stop)
+                soundEffectPlayer?.play(R.raw.asr_stop)
             }
 
             else -> {}
         }
     }
-    LaunchedEffect(asrState.errorMessage) {
-        asrState.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
+    LaunchedEffect(asrState?.errorMessage) {
+        asrState?.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
             toaster.show(message = message, type = ToastType.Error)
         }
     }
@@ -290,6 +291,7 @@ fun ChatInput(
                         state = state,
                         completionProviders = completionProviders,
                         onSendMessage = { sendMessage() },
+                        textOnly = textOnly,
                     )
 
                     Row(
@@ -316,7 +318,7 @@ fun ChatInput(
                             val enableSearchMsg = stringResource(R.string.web_search_enabled)
                             val disableSearchMsg = stringResource(R.string.web_search_disabled)
                             val chatModel = settings.getCurrentChatModel()
-                            SearchPickerButton(
+                            if (!textOnly) SearchPickerButton(
                                 enableSearch = enableSearch,
                                 settings = settings,
                                 onUpdateSearchMode = { mode ->
@@ -338,7 +340,7 @@ fun ChatInput(
 
                             // Reasoning
                             val model = settings.getCurrentChatModel()
-                            if (model?.abilities?.contains(ModelAbility.REASONING) == true) {
+                            if (!textOnly && model?.abilities?.contains(ModelAbility.REASONING) == true) {
                                 ReasoningButton(
                                     reasoningLevel = assistant.reasoningLevel,
                                     onUpdateReasoningLevel = {
@@ -350,16 +352,17 @@ fun ChatInput(
 
                         }
 
-                        ActionIconButton(
-                            onClick = onMoreClick
-                        ) {
-                            Icon(
-                                imageVector = HugeIcons.Add01,
-                                contentDescription = stringResource(R.string.more_options)
-                            )
+                        onMoreClick?.let { onMore ->
+                            ActionIconButton(onClick = onMore) {
+                                Icon(
+                                    imageVector = HugeIcons.Add01,
+                                    contentDescription = stringResource(R.string.more_options)
+                                )
+                            }
                         }
 
-                        if (!voiceState.isActive && (asrState.isAvailable || asrState.isRecording)) {
+                        if (asr != null && asrState != null && asrPermission != null &&
+                            !voiceState.isActive && (asrState.isAvailable || asrState.isRecording)) {
                             AsrButton(
                                 state = asrState,
                                 onClick = {
@@ -389,7 +392,7 @@ fun ChatInput(
                         }
 
                         AnimatedVisibility(
-                            visible = !asrState.isRecording,
+                            visible = asrState?.isRecording != true,
                             enter = fadeIn() + scaleIn(),
                             exit = fadeOut() + scaleOut(),
                         ) {
@@ -397,7 +400,7 @@ fun ChatInput(
                                 loading = loading,
                                 empty = state.isEmpty(),
                                 onClick = { sendMessage() },
-                                onLongClick = { sendMessageWithoutAnswer() },
+                                onLongClick = if (onLongSendClick == null) null else ({ sendMessageWithoutAnswer() }),
                             )
                         }
                     }
@@ -418,7 +421,7 @@ private fun SendButton(
     loading: Boolean,
     empty: Boolean,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
+    onLongClick: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val showStop = loading && empty
@@ -484,9 +487,10 @@ private fun TextInputRow(
     state: ChatInputState,
     completionProviders: List<ChatCompletionProvider>,
     onSendMessage: () -> Unit,
+    textOnly: Boolean = false,
 ) {
     val settings = LocalSettings.current
-    val filesManager: FilesManager = koinInject()
+    val filesManager: FilesManager? = if (textOnly) null else koinInject()
     val assistant = settings.getCurrentAssistant()
     val quickMessages = remember(settings.quickMessages, assistant.quickMessageIds) {
         settings.getQuickMessagesOfAssistant(assistant)
@@ -507,7 +511,14 @@ private fun TextInputRow(
                         .padding(horizontal = 14.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(text = stringResource(R.string.editing))
+                    Column {
+                        Text(text = stringResource(R.string.editing))
+                        if (textOnly) Text(
+                            text = "修改文本不会重算世界状态",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Spacer(Modifier.weight(1f))
                     Icon(
                         imageVector = HugeIcons.Cancel01,
@@ -531,7 +542,7 @@ private fun TextInputRow(
                             val uri = item.uri
                             if (uri != null) {
                                 state.addImages(
-                                    filesManager.createChatFilesByContents(
+                                    requireNotNull(filesManager).createChatFilesByContents(
                                         listOf(uri)
                                     )
                                 )
@@ -544,7 +555,7 @@ private fun TextInputRow(
                         transferableContent.consume { item ->
                             val text = item.text?.toString()
                             if (text != null && text.length > settings.displaySetting.pasteLongTextThreshold) {
-                                val document = filesManager.createChatTextFile(text)
+                                val document = requireNotNull(filesManager).createChatTextFile(text)
                                 state.addFiles(listOf(document))
                                 true
                             } else {
@@ -612,7 +623,7 @@ private fun TextInputRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("chat_input")
-                .contentReceiver(receiveContentListener)
+                .then(if (textOnly) Modifier else Modifier.contentReceiver(receiveContentListener))
                 .onFocusChanged {
                     isFocused = it.isFocused
                 },

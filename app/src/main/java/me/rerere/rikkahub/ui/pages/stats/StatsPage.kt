@@ -55,51 +55,42 @@ import java.util.Locale
 @Composable
 fun StatsPage(vm: StatsVM = koinViewModel()) {
     val stats by vm.stats.collectAsStateWithLifecycle()
-
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
-
-    Scaffold(
-        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
-        topBar = {
-            LargeFlexibleTopAppBar(
-                title = { Text(stringResource(R.string.stats_page_title)) },
-                navigationIcon = { BackButton() },
-                scrollBehavior = scrollBehavior,
-                colors = CustomColors.topBarColors,
-            )
-        },
-        containerColor = CustomColors.topBarColors.containerColor,
-    ) { padding ->
+    StatsPageLayout(title = stringResource(R.string.stats_page_title)) { padding ->
         if (stats.isLoading) {
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
+                modifier = Modifier.fillMaxSize().padding(padding),
                 contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator()
-            }
+            ) { CircularProgressIndicator() }
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = padding + PaddingValues(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                item {
-                    HeatmapCard(
-                        conversationsPerDay = stats.conversationsPerDay,
-                        modifier = Modifier.padding(horizontal = 8.dp),
-                    )
-                }
-                item {
-                    StatsGrid(
-                        stats = stats,
-                        modifier = Modifier.padding(horizontal = 8.dp),
-                    )
-                }
+                item { HeatmapCard(stats.conversationsPerDay, Modifier.padding(horizontal = 8.dp)) }
+                item { StatsGrid(stats, Modifier.padding(horizontal = 8.dp)) }
             }
         }
     }
+}
+
+/** The original statistics page surface; callers supply their own authoritative statistics. */
+@Composable
+fun StatsPageLayout(title: String, content: @Composable (PaddingValues) -> Unit) {
+    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+
+    Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        topBar = {
+            LargeFlexibleTopAppBar(
+                title = { Text(title) },
+                navigationIcon = { BackButton() },
+                scrollBehavior = scrollBehavior,
+                colors = CustomColors.topBarColors,
+            )
+        },
+        containerColor = CustomColors.topBarColors.containerColor,
+    ) { padding -> content(padding) }
 }
 
 @Composable
@@ -259,7 +250,7 @@ private fun ChatHeatmap(conversationsPerDay: Map<LocalDate, Int>) {
 }
 
 @Composable
-private fun HeatmapCell(alpha: Float, sizeDp: Int) {
+internal fun HeatmapCell(alpha: Float, sizeDp: Int) {
     val color = when {
         alpha < 0f -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f) // future
         alpha == 0f -> MaterialTheme.colorScheme.surfaceVariant

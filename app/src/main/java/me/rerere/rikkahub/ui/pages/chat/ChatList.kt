@@ -135,6 +135,9 @@ fun ChatList(
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
     onToggleFavorite: ((MessageNode) -> Unit)? = null,
     onConversationSystemPromptChange: ((String?) -> Unit)? = null,
+    readOnly: Boolean = false,
+    enableTts: Boolean = true,
+    footer: (@Composable () -> Unit)? = null,
 ) {
     AnimatedContent(
         targetState = previewMode,
@@ -177,6 +180,9 @@ fun ChatList(
                 onToolAnswer = onToolAnswer,
                 onToggleFavorite = onToggleFavorite,
                 onConversationSystemPromptChange = onConversationSystemPromptChange,
+                readOnly = readOnly,
+                enableTts = enableTts,
+                footer = footer,
             )
         }
     }
@@ -207,13 +213,16 @@ private fun ChatListNormal(
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
     onToggleFavorite: ((MessageNode) -> Unit)? = null,
     onConversationSystemPromptChange: ((String?) -> Unit)? = null,
+    readOnly: Boolean = false,
+    enableTts: Boolean = true,
+    footer: (@Composable () -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val loadingState by rememberUpdatedState(loading)
     var isRecentScroll by remember { mutableStateOf(false) }
     val conversationUpdated by rememberUpdatedState(conversation)
     val density = LocalDensity.current
-    val activity = LocalContext.current as? me.rerere.rikkahub.RouteActivity
+    val activity = LocalContext.current as? me.rerere.rikkahub.ui.context.VolumeKeyScrollOwner
 
     DisposableEffect(Unit) {
         val listener: (Boolean) -> Boolean = { isVolumeUp ->
@@ -253,7 +262,7 @@ private fun ChatListNormal(
     // 对话大小警告对话框
     val sizeInfo = rememberConversationSizeInfo(conversation)
     var showSizeWarningDialog by rememberSaveable(conversation.id) { mutableStateOf(true) }
-    if (sizeInfo.showWarning && showSizeWarningDialog) {
+    if (!readOnly && sizeInfo.showWarning && showSizeWarningDialog) {
         ConversationSizeWarningDialog(
             sizeInfo = sizeInfo,
             onDismiss = { showSizeWarningDialog = false }
@@ -364,6 +373,8 @@ private fun ChatListNormal(
                             onToolApproval = onToolApproval,
                             onToolAnswer = onToolAnswer,
                             lastMessage = index == lastMessageIndex,
+                            readOnly = readOnly,
+                            enableTts = enableTts,
                         )
                     }
                 }
@@ -400,6 +411,8 @@ private fun ChatListNormal(
                     }
                 }
             }
+
+            if (footer != null) item(key = "CompanionDashboard") { footer() }
 
             // 为了能正确滚动到这
             item(ScrollBottomKey) {

@@ -29,7 +29,9 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.StreamChunkHandler
 import me.rerere.ai.ui.handleTextGenerationResult
-import me.rerere.ai.ui.limitContext
+import me.rerere.rikkahub.data.ai.runtime.ChatPromptAssembler
+import me.rerere.rikkahub.data.ai.runtime.PromptRequestContext
+import me.rerere.prompt.PromptSnapshot
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.ai.transformers.InputMessageTransformer
 import me.rerere.rikkahub.data.ai.transformers.MessageTransformer
@@ -70,6 +72,7 @@ class GenerationLoop(
     private val context: Context,
     private val providerManager: ProviderManager,
     private val json: Json,
+    private val promptAssembler: ChatPromptAssembler,
 ) {
     fun generateText(
         settings: Settings,
@@ -87,6 +90,9 @@ class GenerationLoop(
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         conversationLorebookIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
+        promptContext: PromptRequestContext? = null,
+        onPromptSnapshot: (PromptSnapshot) -> Unit = {},
+        onRequestPrepared: (List<UIMessage>) -> Unit = {},
     ): Flow<GenerationChunk> = flow {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
@@ -142,6 +148,9 @@ class GenerationLoop(
                     conversationModeInjectionIds = conversationModeInjectionIds,
                     conversationLorebookIds = conversationLorebookIds,
                     workspaceCwd = workspaceCwd,
+                    promptContext = promptContext,
+                    onPromptSnapshot = onPromptSnapshot,
+                    onRequestPrepared = onRequestPrepared,
                 )
                 messages = messages.visualTransforms(
                     transformers = outputTransformers,
@@ -342,35 +351,20 @@ class GenerationLoop(
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         conversationLorebookIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
+        promptContext: PromptRequestContext? = null,
+        onPromptSnapshot: (PromptSnapshot) -> Unit = {},
+        onRequestPrepared: (List<UIMessage>) -> Unit = {},
     ) {
-        val internalMessages = buildList {
-            val system = buildString {
-                val effectiveSystemPrompt =
-                    if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
-                        conversationSystemPrompt
-                    } else {
-                        assistant.systemPrompt
-                    }
-                if (effectiveSystemPrompt.isNotBlank()) {
-                    append(effectiveSystemPrompt)
-                }
-
-                // 记忆
-                if (assistant.enableMemory) {
-                    appendLine()
-                    append(buildMemoryPrompt(memories = memories))
-                }
-                // 工具prompt
-                tools.forEach { tool ->
-                    appendLine()
-                    append(tool.systemPrompt(model, messages))
-                }
-            }
-            if (system.isNotBlank()) {
-                add(UIMessage.system(prompt = system).copy(isSynthetic = true))
-            }
-            addAll(messages.limitContext(assistant.contextMessageLimit))
-        }.transforms(
+        val internalMessages = promptAssembler.assemble(
+            assistant = assistant,
+            model = model,
+            messages = messages,
+            memories = memories,
+            tools = tools,
+            conversationSystemPrompt = conversationSystemPrompt,
+            requestContext = promptContext,
+            onSnapshot = onPromptSnapshot,
+        ).transforms(
             transformers = transformers,
             context = context,
             model = model,
@@ -400,6 +394,7 @@ class GenerationLoop(
             },
             sessionId = (conversationId ?: Uuid.random()).toString(),
         )
+        onRequestPrepared(internalMessages)
         try {
             if (stream) {
                 // 每次重试都从本次模型调用开始前的消息快照重新合并，避免将重试响应

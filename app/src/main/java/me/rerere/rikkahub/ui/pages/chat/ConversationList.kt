@@ -5,6 +5,7 @@ import me.rerere.hugeicons.stroke.Folder01
 import me.rerere.hugeicons.stroke.Forward02
 import me.rerere.hugeicons.stroke.Pin
 import me.rerere.hugeicons.stroke.PinOff
+import me.rerere.hugeicons.stroke.PencilEdit01
 import me.rerere.hugeicons.stroke.Refresh01
 import me.rerere.hugeicons.stroke.Delete01
 import androidx.compose.animation.AnimatedVisibility
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
@@ -56,6 +58,7 @@ import me.rerere.rikkahub.ui.theme.extendColors
 import me.rerere.rikkahub.utils.toLocalString
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import kotlin.uuid.Uuid
 
 /**
@@ -71,6 +74,106 @@ sealed class ConversationListItem {
         val conversation: Conversation
     ) : ConversationListItem()
 }
+
+/** Core sessions are projected to these display rows; the original row renderer remains authoritative. */
+data class CompanionConversationEntry(val conversation: Conversation, val timeLabel: String)
+
+@Composable
+fun ColumnScope.CompanionConversationList(
+    entries: List<CompanionConversationEntry>,
+    currentId: Uuid?,
+    listState: LazyListState,
+    modifier: Modifier = Modifier,
+    onClick: (Conversation) -> Unit,
+    onRegenerateTitle: (Conversation) -> Unit,
+    onSave: (Conversation) -> Unit,
+    onRename: (Conversation) -> Unit,
+    onPin: (Conversation) -> Unit,
+    onDelete: (Conversation) -> Unit,
+) {
+    val zone = ZoneId.systemDefault()
+    val today = LocalDate.now(zone)
+    val dateFormat = remember { DateTimeFormatter.ofPattern("yyyy/M/d") }
+    val pinned = remember(entries) { entries.filter { it.conversation.isPinned } }
+    val grouped = remember(entries, today, zone) {
+        entries.filterNot { it.conversation.isPinned }
+            .groupBy { it.conversation.updateAt.atZone(zone).toLocalDate() }
+    }
+    var hasScrolledToCurrent by remember(currentId) { mutableStateOf(false) }
+    LaunchedEffect(currentId, entries, hasScrolledToCurrent) {
+        if (hasScrolledToCurrent || currentId == null) return@LaunchedEffect
+        val pinnedIndex = pinned.indexOfFirst { it.conversation.id == currentId }
+        var currentIndex = if (pinned.isEmpty()) 0 else pinned.size + 1
+        var found = pinnedIndex >= 0
+        if (found) {
+            currentIndex = pinnedIndex + 1
+        } else {
+            for (rows in grouped.values) {
+                val index = rows.indexOfFirst { it.conversation.id == currentId }
+                if (index >= 0) {
+                    currentIndex += index + 1
+                    found = true
+                    break
+                }
+                currentIndex += rows.size + 1
+            }
+        }
+        if (found) {
+            if (listState.layoutInfo.visibleItemsInfo.none { it.index == currentIndex }) listState.scrollToItem(currentIndex)
+            hasScrolledToCurrent = true
+        }
+    }
+    LazyColumn(state = listState, modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (entries.isEmpty()) item {
+            Surface(modifier = Modifier.fillMaxWidth().padding(16.dp), shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
+                Text(stringResource(R.string.chat_page_no_conversations), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(16.dp))
+            }
+        }
+        if (pinned.isNotEmpty()) {
+            item(key = "pinned_header") { PinnedHeader(modifier = Modifier.animateItem()) }
+            items(pinned, key = { it.conversation.id.toString() }) { row ->
+                ConversationItem(
+                    conversation = row.conversation,
+                    selected = row.conversation.id == currentId,
+                    loading = false,
+                    timeLabel = row.timeLabel,
+                    onClick = onClick,
+                    onDelete = onDelete,
+                    companionActions = CompanionConversationActions(onSave, onRename, onPin, onRegenerateTitle),
+                    modifier = Modifier.animateItem(),
+                )
+            }
+        }
+        grouped.forEach { (date, rows) ->
+            item(key = "date_$date") {
+                DateHeaderItem(label = when (date) {
+                    today -> "今天"
+                    today.minusDays(1) -> "昨天"
+                    else -> date.format(dateFormat)
+                }, modifier = Modifier.animateItem())
+            }
+            items(rows, key = { it.conversation.id.toString() }) { row ->
+                ConversationItem(
+                    conversation = row.conversation,
+                    selected = row.conversation.id == currentId,
+                    loading = false,
+                    timeLabel = row.timeLabel,
+                    onClick = onClick,
+                    onDelete = onDelete,
+                    companionActions = CompanionConversationActions(onSave, onRename, onPin, onRegenerateTitle),
+                    modifier = Modifier.animateItem(),
+                )
+            }
+        }
+    }
+}
+
+private class CompanionConversationActions(
+    val onSave: (Conversation) -> Unit,
+    val onRename: (Conversation) -> Unit,
+    val onPin: (Conversation) -> Unit,
+    val onRegenerateTitle: (Conversation) -> Unit,
+)
 
 @Composable
 fun ColumnScope.ConversationList(
@@ -226,12 +329,14 @@ private fun ConversationItem(
     conversation: Conversation,
     selected: Boolean,
     loading: Boolean,
+    timeLabel: String? = null,
     modifier: Modifier = Modifier,
     onDelete: (Conversation) -> Unit = {},
     onRegenerateTitle: (Conversation) -> Unit = {},
     onPin: (Conversation) -> Unit = {},
     onMoveToAssistant: (Conversation) -> Unit = {},
     onMoveToFolder: (Conversation) -> Unit = {},
+    companionActions: CompanionConversationActions? = null,
     onClick: (Conversation) -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -268,9 +373,10 @@ private fun ConversationItem(
             Text(
                 text = conversation.title.ifBlank { stringResource(id = R.string.chat_page_new_message) },
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
+                modifier = if (timeLabel == null) Modifier else Modifier.weight(1f),
             )
-            Spacer(Modifier.weight(1f))
+            if (timeLabel == null) Spacer(Modifier.weight(1f))
 
             // 置顶图标
             AnimatedVisibility(conversation.isPinned) {
@@ -292,28 +398,51 @@ private fun ConversationItem(
                         }
                 )
             }
+            if (timeLabel != null) {
+                Text(timeLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             DropdownMenu(
                 expanded = showDropdownMenu,
                 onDismissRequest = { showDropdownMenu = false },
             ) {
                 DropdownMenuItem(
                     text = {
-                        Text(
-                            if (conversation.isPinned) stringResource(R.string.unpin_chat) else stringResource(R.string.pin_chat)
-                        )
+                        Text(if (conversation.isPinned) stringResource(R.string.unpin_chat) else stringResource(R.string.pin_chat))
                     },
                     onClick = {
-                        onPin(conversation)
+                        if (companionActions == null) onPin(conversation)
+                        else companionActions.onPin(conversation)
                         showDropdownMenu = false
                     },
                     leadingIcon = {
-                        Icon(
-                            if (conversation.isPinned) HugeIcons.PinOff else HugeIcons.Pin,
-                            null
-                        )
-                    }
+                        Icon(if (conversation.isPinned) HugeIcons.PinOff else HugeIcons.Pin, null)
+                    },
                 )
-
+                if (companionActions != null) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.chat_page_regenerate_title)) },
+                        leadingIcon = { Icon(HugeIcons.Refresh01, null) },
+                        onClick = {
+                            showDropdownMenu = false
+                            companionActions.onRegenerateTitle(conversation)
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("收藏到文件夹") },
+                        leadingIcon = { Icon(HugeIcons.Folder01, null) },
+                        onClick = { showDropdownMenu = false; companionActions.onSave(conversation) },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("重命名") },
+                        leadingIcon = { Icon(HugeIcons.PencilEdit01, null) },
+                        onClick = { showDropdownMenu = false; companionActions.onRename(conversation) },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.chat_page_delete)) },
+                        leadingIcon = { Icon(HugeIcons.Delete01, null) },
+                        onClick = { showDropdownMenu = false; onDelete(conversation) },
+                    )
+                } else {
                 DropdownMenuItem(
                     text = {
                         Text(stringResource(id = R.string.chat_page_regenerate_title))
@@ -365,6 +494,7 @@ private fun ConversationItem(
                         Icon(HugeIcons.Delete01, null)
                     }
                 )
+                }
             }
         }
     }

@@ -1,0 +1,234 @@
+package dev.gray.companion.ui
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.navigation3.runtime.NavKey
+import androidx.navigation3.runtime.entryProvider
+import dev.gray.companion.core.*
+import kotlinx.serialization.Serializable
+import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.PencilEdit01
+import me.rerere.rikkahub.RikkaNavDisplay
+import me.rerere.rikkahub.ui.components.ui.Select
+
+@Serializable
+private sealed interface CallEditorRoute : NavKey {
+    @Serializable data object Home : CallEditorRoute
+    @Serializable data object Calls : CallEditorRoute
+    @Serializable data class Details(val id: String) : CallEditorRoute
+    @Serializable data class Prompt(val id: String) : CallEditorRoute
+    @Serializable data object History : CallEditorRoute
+    @Serializable data object Bindings : CallEditorRoute
+    @Serializable data object Info : CallEditorRoute
+}
+
+private data class PendingMainSwitch(val targetId: String?)
+
+@Composable
+internal fun MainCallEditor(
+    initial: MainCall, onSave: (MainCall) -> Unit, onBack: () -> Unit, saving: Boolean = false,
+    actions: List<ActionDescriptor> = ActionRegistry.defaults().descriptors(),
+    profiles: List<ModelProfile> = emptyList(), library: Library? = null,
+    onSwitchResource: ((MainCall?, String?) -> Unit)? = null,
+) {
+    var item by remember(initial.id) { mutableStateOf(initial) }
+    val stack = remember(initial.id) { mutableStateListOf<NavKey>(CallEditorRoute.Home) }
+    val backs = remember(initial.id) { mutableStateMapOf<NavKey, () -> Unit>() }
+    var promptRequest by remember(initial.id) { mutableStateOf<PromptEditRequest?>(null) }
+    val callDrafts = remember(initial.id) { mutableStateMapOf<String, CallDetailDraft>() }
+    var rename by remember(initial.id) { mutableStateOf(false) }
+    var pendingSwitch by remember(initial.id) { mutableStateOf<PendingMainSwitch?>(null) }
+    fun pop() { if (stack.size > 1) stack.removeAt(stack.lastIndex) else onBack() }
+    fun open(route: CallEditorRoute) { stack.add(route) }
+    fun openDetails(workflow: Workflow) { callDrafts[workflow.id] = CallDetailDraft(workflow, workflow); open(CallEditorRoute.Details(workflow.id)) }
+    fun requestPrompt(request: PromptEditRequest) { promptRequest = request; open(CallEditorRoute.Prompt(newId())) }
+    fun updateWorkflow(changed: Workflow) { item = item.copy(workflows = item.workflows.map { if (it.id == changed.id) changed else it }) }
+    fun mergeWorkflow(changed: Workflow) = if (item.workflows.any { it.id == changed.id }) item.workflows.map { if (it.id == changed.id) changed else it } else item.workflows + changed
+    fun referenceChoices(draft: MainCall = item) = promptReferenceChoices(draft.workflows, library, mainCall = draft)
+    fun requestSwitch(targetId: String?) {
+        if (saving || targetId == item.id) return
+        if (item != initial) pendingSwitch = PendingMainSwitch(targetId)
+        else onSwitchResource?.invoke(null, targetId)
+    }
+    fun addCall() {
+        val key = nextCallOutputKey(outputKeysForNewNodes(library, item.workflows + item.history.processor.workflow), "call")
+        val workflow = Workflow(title = "调用 ${item.workflows.size + 1}", nodes = listOf(WorkflowNode(outputKey = key)))
+        openDetails(workflow)
+    }
+    // Legacy resources without an explicit primary keep their original runtime/output contract.
+    val default = item.workflows.firstOrNull { it.id == item.primaryWorkflowId } ?: item.workflows.firstOrNull()
+    RikkaNavDisplay(stack, { backs[stack.last()]?.invoke() ?: pop() }, entryProvider {
+        entry<CallEditorRoute.Home> { route ->
+            CallEditorPage("主调用", item != initial, onBack, { onSave(item) }, saving, { backs[route] = it }) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    if (onSwitchResource != null) {
+                        val resources = (library?.mainCalls.orEmpty() + item).distinctBy { it.id }.map { it.id to (if (it.id == item.id) item.name else it.name).ifBlank { "未命名主调用" } }
+                        val options = resources.map { (id, name) -> (id as String?) to name } + listOf(null to "新建主调用…")
+                        Select(options, options.first { it.first == item.id }, { requestSwitch(it.first) }, modifier = Modifier.weight(1f), optionToString = { it.second })
+                    } else Text(item.name.ifBlank { "未命名主调用" }, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                    IconButton(onClick = { rename = true }, enabled = !saving) { Icon(HugeIcons.PencilEdit01, "重命名主调用") }
+                }
+                if (default != null) {
+                    CallModelChoice(default.modelProfileId, profiles) { updateWorkflow(default.copy(modelProfileId = it)) }
+                    val modelNodes = default.nodes.filter { node -> actions.firstOrNull { it.id == node.actionId }?.usesModel == true }
+                    val modelNode = modelNodes.lastOrNull { it.enabled && it.visible && it.outputSlot == OutputSlot.BODY }
+                        ?: modelNodes.lastOrNull { it.visible && it.outputSlot == OutputSlot.BODY }
+                        ?: modelNodes.lastOrNull { it.enabled } ?: modelNodes.lastOrNull()
+                    modelNode?.generation?.profileId?.let { overrideId ->
+                        val label = profiles.firstOrNull { it.id == overrideId }?.name?.takeIf { it.isNotBlank() } ?: overrideId
+                        Text("当前正文节点使用：$label（在默认调用设置中调整）", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (modelNode != null) EditorDestinationRow("提示词", "${modelNode.blocks.size} 个提示词块") {
+                        requestPrompt(PromptEditRequest(modelNode.blocks, referencesForWritingNode(referenceChoices(), modelNode.id)) { blocks ->
+                            val current = item.workflows.first { it.id == default.id }
+                            updateWorkflow(current.copy(nodes = current.nodes.map { if (it.id == modelNode.id) it.copy(blocks = blocks) else it }))
+                        })
+                    }
+                    EditorDestinationRow("默认调用设置", if (default.nodes.size > 1) "${default.nodes.size} 个节点" else null) { openDetails(default) }
+                } else OutlinedButton(onClick = {
+                    val key = nextCallOutputKey(outputKeysForNewNodes(library, listOf(item.history.processor.workflow)), "reply")
+                    val workflow = Workflow(nodes = listOf(WorkflowNode(outputKey = key, visible = true)))
+                    item = item.copy(workflows = item.workflows + workflow, primaryWorkflowId = workflow.id)
+                }) { Text("添加默认调用") }
+                EditorDestinationRow("其他调用", "${item.workflows.count { it.id != default?.id }} 项") { open(CallEditorRoute.Calls) }
+                HorizontalDivider()
+                EditorDestinationRow("历史配置", "范围、包装与上下文处理") { open(CallEditorRoute.History) }
+                EditorDestinationRow("关联资源", "${item.boundPackageIds.size} 个提示词包 · ${item.boundGroupIds.size} 个调用组") { open(CallEditorRoute.Bindings) }
+                HorizontalDivider()
+                EditorDestinationRow("资源信息", item.description.lineSequence().firstOrNull()?.take(48)?.takeIf { it.isNotBlank() }) { open(CallEditorRoute.Info) }
+            }
+        }
+        entry<CallEditorRoute.Calls> { route ->
+            CallListEditor("其他调用", item.workflows.filterNot { it.id == default?.id }, ::pop, { id -> item.workflows.firstOrNull { it.id == id }?.let(::openDetails) }, ::addCall,
+                { workflow, enabled -> updateWorkflow(workflow.copy(enabled = enabled)) }, { backs[route] = it })
+        }
+        entry<CallEditorRoute.Details> { route ->
+            callDrafts[route.id]?.let { draft ->
+                val call = draft.value
+                CallDetailsEditor(draft.baseline, call, { callDrafts[route.id] = draft.copy(value = it) }, actions, profiles, outputKeysForNewNodes(library, item.workflows + item.history.processor.workflow + call),
+                    { changed -> referenceChoices(item.copy(workflows = mergeWorkflow(changed))) },
+                    { item = item.copy(workflows = mergeWorkflow(it)); pop() }, ::pop, ::requestPrompt,
+                    onDelete = if (call.id == default?.id) null else ({ item = item.copy(workflows = item.workflows.filterNot { it.id == call.id }); pop() }),
+                    onRegisterBack = { backs[route] = it })
+            }
+        }
+        entry<CallEditorRoute.Prompt> { route -> promptRequest?.let { request ->
+            PromptBlocksEditor(request.blocks, request.references, { request.save(it); pop() }, ::pop, { backs[route] = it })
+        } }
+        entry<CallEditorRoute.History> { route ->
+            var history by remember { mutableStateOf(item.history) }
+            val baseline = remember { item.history }
+            CallEditorPage("历史配置", history != baseline, ::pop, { item = item.copy(history = history); pop() }, onRegisterBack = { backs[route] = it }) {
+                HistoryConfigEditor(history, library, actions, profiles, referenceChoices(item.copy(history = history)), outputKeysForNewNodes(library, item.workflows + history.processor.workflow)) { history = it }
+            }
+        }
+        entry<CallEditorRoute.Bindings> { route ->
+            val baseline = remember { item }
+            var packages by remember { mutableStateOf(item.boundPackageIds) }
+            var groups by remember { mutableStateOf(item.boundGroupIds) }
+            CallEditorPage("关联资源", packages != baseline.boundPackageIds || groups != baseline.boundGroupIds, ::pop,
+                { item = item.copy(boundPackageIds = packages, boundGroupIds = groups); pop() }, onRegisterBack = { backs[route] = it }) {
+                Text("提示词包", style = MaterialTheme.typography.titleSmall)
+                ResourceBindingList(library?.packages.orEmpty().map { it.id to it.name.ifBlank { it.namespace } }, packages) { packages = it }
+                HorizontalDivider()
+                Text("调用组", style = MaterialTheme.typography.titleSmall)
+                ResourceBindingList(library?.groups.orEmpty().map { it.id to it.name.ifBlank { "未命名调用组" } }, groups) { groups = it }
+                Text("关联资源随主调用加载；提示词包通过宏引用参与提示词。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        entry<CallEditorRoute.Info> { route ->
+            val baseline = remember { item }
+            var description by remember { mutableStateOf(item.description) }
+            var primary by remember { mutableStateOf(item.primaryWorkflowId) }
+            CallEditorPage("资源信息", description != baseline.description || primary != baseline.primaryWorkflowId, ::pop,
+                { item = item.copy(description = description, primaryWorkflowId = primary); pop() }, onRegisterBack = { backs[route] = it }) {
+                TextFieldLine("说明", description, { description = it }, minLines = 3)
+                HorizontalDivider()
+                ChoiceLine("默认调用", primary, listOf<Pair<String?, String>>(null to "保留旧配置的显示方式") + item.workflows.map { it.id to it.title.ifBlank { "未命名调用" } }) { primary = it }
+                if (primary == null) Text("此资源保留旧配置；首页展示第一项调用，原节点和输出设置保持原样。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    })
+    if (rename) EditorRenameDialog("主调用名称", item.name, { rename = false }) { item = item.copy(name = it); rename = false }
+    pendingSwitch?.let { pending -> AlertDialog(onDismissRequest = { pendingSwitch = null }, title = { Text("切换主调用？") }, text = { Text("当前主调用有未保存的修改。") },
+        confirmButton = { TextButton(onClick = { pendingSwitch = null; onSwitchResource?.invoke(item, pending.targetId) }, enabled = !saving) { Text("保存并切换") } },
+        dismissButton = { Row { TextButton(onClick = { pendingSwitch = null }) { Text("取消") }; TextButton(onClick = { pendingSwitch = null; onSwitchResource?.invoke(null, pending.targetId) }, enabled = !saving) { Text("放弃并切换") } } }) }
+}
+
+@Composable
+internal fun GroupEditor(
+    initial: CallGroup, packages: List<PromptPackage>, onSave: (CallGroup) -> Unit, onBack: () -> Unit,
+    saving: Boolean = false, actions: List<ActionDescriptor> = ActionRegistry.defaults().descriptors(),
+    profiles: List<ModelProfile> = emptyList(), library: Library? = null,
+) {
+    var item by remember(initial.id) { mutableStateOf(initial) }
+    val stack = remember(initial.id) { mutableStateListOf<NavKey>(CallEditorRoute.Home) }
+    val backs = remember(initial.id) { mutableStateMapOf<NavKey, () -> Unit>() }
+    var promptRequest by remember(initial.id) { mutableStateOf<PromptEditRequest?>(null) }
+    val callDrafts = remember(initial.id) { mutableStateMapOf<String, CallDetailDraft>() }
+    var rename by remember(initial.id) { mutableStateOf(false) }
+    fun pop() { if (stack.size > 1) stack.removeAt(stack.lastIndex) else onBack() }
+    fun open(route: CallEditorRoute) { stack.add(route) }
+    fun openDetails(workflow: Workflow) { callDrafts[workflow.id] = CallDetailDraft(workflow, workflow); open(CallEditorRoute.Details(workflow.id)) }
+    fun requestPrompt(request: PromptEditRequest) { promptRequest = request; open(CallEditorRoute.Prompt(newId())) }
+    fun updateWorkflow(changed: Workflow) { item = item.copy(workflows = item.workflows.map { if (it.id == changed.id) changed else it }) }
+    fun mergeWorkflow(changed: Workflow) = if (item.workflows.any { it.id == changed.id }) item.workflows.map { if (it.id == changed.id) changed else it } else item.workflows + changed
+    fun referenceChoices(draft: CallGroup = item) = promptReferenceChoices(draft.workflows, library, callGroup = draft)
+    fun addCall() {
+        val key = nextCallOutputKey(outputKeysForNewNodes(library, item.workflows), "call")
+        val workflow = Workflow(title = "调用 ${item.workflows.size + 1}", nodes = listOf(WorkflowNode(outputKey = key)))
+        openDetails(workflow)
+    }
+    RikkaNavDisplay(stack, { backs[stack.last()]?.invoke() ?: pop() }, entryProvider {
+        entry<CallEditorRoute.Home> { route ->
+            CallEditorPage("调用组", item != initial, onBack, { onSave(item) }, saving, { backs[route] = it }) {
+                EditorTitleRow(item.name, { rename = true })
+                EditorDestinationRow("组内调用", "${item.workflows.size} 项") { open(CallEditorRoute.Calls) }
+                HorizontalDivider()
+                EditorDestinationRow("关联提示词包", "${item.boundPackageIds.size} 项") { open(CallEditorRoute.Bindings) }
+                EditorDestinationRow("资源信息与默认状态", item.description.lineSequence().firstOrNull()?.take(48)?.takeIf { it.isNotBlank() }) { open(CallEditorRoute.Info) }
+            }
+        }
+        entry<CallEditorRoute.Calls> { route -> CallListEditor("组内调用", item.workflows, ::pop, { id -> item.workflows.firstOrNull { it.id == id }?.let(::openDetails) }, ::addCall,
+            { workflow, enabled -> updateWorkflow(workflow.copy(enabled = enabled)) }, { backs[route] = it }) }
+        entry<CallEditorRoute.Details> { route -> callDrafts[route.id]?.let { draft ->
+            val call = draft.value
+            CallDetailsEditor(draft.baseline, call, { callDrafts[route.id] = draft.copy(value = it) }, actions, profiles, outputKeysForNewNodes(library, item.workflows + call),
+                { changed -> referenceChoices(item.copy(workflows = mergeWorkflow(changed))) },
+                { item = item.copy(workflows = mergeWorkflow(it)); pop() }, ::pop, ::requestPrompt, { item = item.copy(workflows = item.workflows.filterNot { it.id == call.id }); pop() }, { backs[route] = it })
+        } }
+        entry<CallEditorRoute.Prompt> { route -> promptRequest?.let { request -> PromptBlocksEditor(request.blocks, request.references, { request.save(it); pop() }, ::pop, { backs[route] = it }) } }
+        entry<CallEditorRoute.Bindings> { route ->
+            val baseline = remember { item.boundPackageIds }
+            var selected by remember { mutableStateOf(item.boundPackageIds) }
+            CallEditorPage("关联提示词包", selected != baseline, ::pop, { item = item.copy(boundPackageIds = selected); pop() }, onRegisterBack = { backs[route] = it }) {
+                ResourceBindingList(packages.map { it.id to it.name.ifBlank { it.namespace } }, selected) { selected = it }
+            }
+        }
+        entry<CallEditorRoute.Info> { route ->
+            val baseline = remember { item }
+            var description by remember { mutableStateOf(item.description) }
+            var state by remember { mutableStateOf(item.stateDefaults) }
+            CallEditorPage("资源信息与默认状态", description != baseline.description || state != baseline.stateDefaults, ::pop,
+                { item = item.copy(description = description, stateDefaults = state); pop() }, onRegisterBack = { backs[route] = it }) {
+                TextFieldLine("说明", description, { description = it }, minLines = 2)
+                HorizontalDivider()
+                Text("默认状态", style = MaterialTheme.typography.titleSmall)
+                state.forEach { (stateKey, value) -> key(stateKey) {
+                    TextFieldLine(stateKey, value, { state = state + (stateKey to it) })
+                    TextButton(onClick = { state = state - stateKey }) { Text("删除 $stateKey") }
+                } }
+                var newKey by remember { mutableStateOf("") }
+                TextFieldLine("新状态键", newKey, { newKey = it })
+                val candidate = newKey.trim()
+                if (candidate in state) Text("此状态键已存在。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                OutlinedButton(onClick = { state = state + (candidate to ""); newKey = "" }, enabled = candidate.isNotBlank() && candidate !in state) { Text("添加默认状态") }
+            }
+        }
+    })
+    if (rename) EditorRenameDialog("调用组名称", item.name, { rename = false }) { item = item.copy(name = it); rename = false }
+}

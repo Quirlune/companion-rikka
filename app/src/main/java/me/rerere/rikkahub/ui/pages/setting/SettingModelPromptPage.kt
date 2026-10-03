@@ -95,7 +95,7 @@ internal fun PromptSettingsPage(settings: Settings, vm: SettingVM, contentPaddin
 }
 
 @Composable
-private fun PromptSettingItem(
+internal fun PromptSettingItem(
     title: String,
     promptDescription: String,
     promptValue: String,

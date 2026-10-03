@@ -11,8 +11,7 @@ import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.ai.mcp.McpManager
 
 class SettingVM(
-    private val settingsStore: SettingsStore,
-    private val mcpManager: McpManager
+    private val settingsStore: SettingsStore
 ) :
     ViewModel() {
     val settings: StateFlow<Settings> = settingsStore.settingsFlow

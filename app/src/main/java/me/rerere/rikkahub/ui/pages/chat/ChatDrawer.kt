@@ -72,6 +72,7 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.Folder
 import me.rerere.rikkahub.data.repository.ConversationRepository
@@ -178,13 +179,7 @@ fun ChatDrawerContent(
         }
     }
 
-    ModalDrawerSheet(
-        modifier = Modifier.width(300.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+    OriginalDrawerFrame {
             if (updateChecksEnabled && !isPlayStore) {
                 UpdateCard(vm)
             }
@@ -194,64 +189,19 @@ fun ChatDrawerContent(
                 onClick = { navController.navigate(Screen.Backup) },
             )
 
-            // 用户头像和昵称自定义区域
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                UIAvatar(
-                    name = settings.displaySetting.userNickname.ifBlank { stringResource(R.string.user_default_name) },
-                    value = settings.displaySetting.userAvatar,
-                    onUpdate = { newAvatar ->
-                        vm.updateSettings(
-                            settings.copy(
-                                displaySetting = settings.displaySetting.copy(
-                                    userAvatar = newAvatar
-                                )
-                            )
-                        )
-                    },
-                    modifier = Modifier.size(50.dp),
-                )
+            DrawerUserHeader(
+                name = settings.displaySetting.userNickname,
+                avatar = settings.displaySetting.userAvatar,
+                onAvatarUpdate = { newAvatar ->
+                    vm.updateSettings(settings.copy(displaySetting = settings.displaySetting.copy(userAvatar = newAvatar)))
+                },
+                onEditName = { nicknameEditState.open(settings.displaySetting.userNickname) },
+            )
 
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Text(
-                            text = settings.displaySetting.userNickname.ifBlank { stringResource(R.string.user_default_name) },
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.clickable {
-                                nicknameEditState.open(settings.displaySetting.userNickname)
-                            }
-                        )
-
-                        Icon(
-                            imageVector = HugeIcons.PencilEdit01,
-                            contentDescription = "Edit",
-                            modifier = Modifier
-                                .onClick {
-                                    nicknameEditState.open(settings.displaySetting.userNickname)
-                                }
-                                .size(LocalTextStyle.current.fontSize.toDp())
-                        )
-                    }
-                    Greeting(
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                }
-            }
-
-            DrawerActions(navController = navController)
+            DrawerActions(
+                onSearch = { navController.navigate(Screen.MessageSearch) },
+                onHistory = { navController.navigate(Screen.History) },
+            )
 
             FolderBar(
                 folders = folders,
@@ -416,45 +366,15 @@ fun ChatDrawerContent(
                     },
                 )
             }
-        }
     }
 
     // 昵称编辑对话框
     nicknameEditState.EditStateContent { nickname, onUpdate ->
-        AlertDialog(
-            onDismissRequest = {
-                nicknameEditState.dismiss()
-            },
-            title = {
-                Text(stringResource(R.string.chat_page_edit_nickname))
-            },
-            text = {
-                OutlinedTextField(
-                    value = nickname,
-                    onValueChange = onUpdate,
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    placeholder = { Text(stringResource(R.string.chat_page_nickname_placeholder)) }
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        nicknameEditState.confirm()
-                    }
-                ) {
-                    Text(stringResource(R.string.chat_page_save))
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        nicknameEditState.dismiss()
-                    }
-                ) {
-                    Text(stringResource(R.string.chat_page_cancel))
-                }
-            }
+        DrawerNicknameDialog(
+            value = nickname,
+            onValueChange = onUpdate,
+            onSave = nicknameEditState::confirm,
+            onDismiss = nicknameEditState::dismiss,
         )
     }
 
@@ -692,72 +612,115 @@ fun ChatDrawerContent(
 }
 
 @Composable
-private fun DrawerActions(navController: Navigator) {
-    Column {
-        // 搜索入口
-        Surface(
-            onClick = { navController.navigate(Screen.MessageSearch) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 4.dp),
-            shape = MaterialTheme.shapes.medium,
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Icon(
-                    imageVector = HugeIcons.Search01,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    text = stringResource(R.string.chat_page_search_chats),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-        }
+fun OriginalDrawerFrame(content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    ModalDrawerSheet(modifier = Modifier.width(300.dp)) {
+        Column(
+            modifier = Modifier.padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            content = content,
+        )
+    }
+}
 
-        // 历史记录入口
-        Surface(
-            onClick = { navController.navigate(Screen.History) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 4.dp),
-            shape = MaterialTheme.shapes.medium,
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Icon(
-                    imageVector = HugeIcons.TransactionHistory,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurface,
-                )
+@Composable
+fun DrawerUserHeader(
+    name: String,
+    avatar: Avatar,
+    onAvatarUpdate: (Avatar) -> Unit,
+    onEditName: () -> Unit,
+) {
+    val displayName = name.ifBlank { stringResource(R.string.user_default_name) }
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        UIAvatar(
+            name = displayName,
+            value = avatar,
+            onUpdate = onAvatarUpdate,
+            modifier = Modifier.size(50.dp),
+        )
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    text = stringResource(R.string.chat_page_history),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    text = displayName,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.clickable(onClick = onEditName),
+                )
+                Icon(
+                    imageVector = HugeIcons.PencilEdit01,
+                    contentDescription = "Edit",
+                    modifier = Modifier.onClick(onClick = onEditName).size(LocalTextStyle.current.fontSize.toDp()),
                 )
             }
+            Greeting(style = MaterialTheme.typography.labelMedium)
         }
     }
 }
 
 @Composable
-private fun DrawerAction(
+fun DrawerNicknameDialog(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.chat_page_edit_nickname)) },
+        text = {
+            OutlinedTextField(
+                value = value,
+                onValueChange = onValueChange,
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                placeholder = { Text(stringResource(R.string.chat_page_nickname_placeholder)) },
+            )
+        },
+        confirmButton = { TextButton(onClick = onSave) { Text(stringResource(R.string.chat_page_save)) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.chat_page_cancel)) } },
+    )
+}
+
+@Composable
+fun DrawerActions(onSearch: () -> Unit, onHistory: () -> Unit, historyLabel: String? = null) {
+    Column {
+        // 搜索入口
+        DrawerActionRow(HugeIcons.Search01, stringResource(R.string.chat_page_search_chats), onSearch)
+
+        // 历史记录入口
+        DrawerActionRow(
+            if (historyLabel == null) HugeIcons.TransactionHistory else HugeIcons.InLove,
+            historyLabel ?: stringResource(R.string.chat_page_history),
+            onHistory,
+        )
+    }
+}
+
+@Composable
+fun DrawerActionRow(icon: ImageVector, title: String, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurface)
+            Text(title, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+        }
+    }
+}
+
+@Composable
+fun DrawerAction(
     modifier: Modifier = Modifier,
     icon: @Composable () -> Unit,
     label: @Composable () -> Unit,

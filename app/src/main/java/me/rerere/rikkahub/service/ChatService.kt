@@ -42,6 +42,7 @@ import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.ai.GenerationChunk
 import me.rerere.rikkahub.data.ai.GenerationLoop
+import me.rerere.rikkahub.data.ai.runtime.PromptRuntimeService
 import me.rerere.rikkahub.data.ai.TranslationHandler
 import me.rerere.rikkahub.data.ai.mcp.McpManager
 import me.rerere.rikkahub.data.ai.tools.ChatToolFactory
@@ -162,6 +163,7 @@ class ChatService(
     private val filesManager: FilesManager,
     private val workspaceRepository: WorkspaceRepository,
     private val folderRepository: FolderRepository,
+    private val promptRuntime: PromptRuntimeService,
 ) {
     // workspace 系统提示注入 (依赖 workspaceRepository, 故在类内构造)
     private val workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository)
@@ -648,20 +650,24 @@ class ChatService(
 
             // start generating
             val session = sessionManager.getOrCreate(conversationId)
+            val generationMessages = conversation.currentMessages.let {
+                if (messageRange != null) it.subList(messageRange.start, messageRange.endInclusive + 1) else it
+            }
+            val promptContext = promptRuntime.context(conversation, generationMessages)
+            var promptSnapshot: me.rerere.prompt.PromptSnapshot? = null
             generationLoop.generateText(
                 settings = settings,
                 model = model,
                 processingStatus = session.processingStatus,
-                messages = conversation.currentMessages.let {
-                    if (messageRange != null) {
-                        it.subList(messageRange.start, messageRange.endInclusive + 1)
-                    } else {
-                        it
-                    }
-                },
+                messages = generationMessages,
                 assistant = assistant,
                 conversationId = conversationId,
                 conversationSystemPrompt = conversation.customSystemPrompt,
+                promptContext = promptContext,
+                onPromptSnapshot = { promptSnapshot = it },
+                onRequestPrepared = { messages ->
+                    promptRuntime.recordRequest(promptContext, requireNotNull(promptSnapshot), messages)
+                },
                 conversationModeInjectionIds = conversation.modeInjectionIds,
                 conversationLorebookIds = conversation.lorebookIds,
                 workspaceCwd = conversation.workspaceCwd,
@@ -721,6 +727,7 @@ class ChatService(
             Logging.log(TAG, it.stackTraceToString())
         }.onSuccess {
             val finalConversation = getConversationFlow(conversationId).value
+            promptRuntime.onReplyCompleted(finalConversation)
 
             sessionManager.launchWithSession(conversationId) {
                 generateTitle(conversationId, finalConversation)

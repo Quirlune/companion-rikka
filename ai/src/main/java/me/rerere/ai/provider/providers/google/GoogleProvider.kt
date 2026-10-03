@@ -28,6 +28,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.util.withHttpStatus
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.BuiltInTools
@@ -301,7 +302,8 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     e.printStackTrace()
                     exception = e
                 } finally {
-                    close(exception ?: Exception("Stream failed"))
+                    val failure = exception ?: Exception("Stream failed")
+                    close(failure.withHttpStatus(response?.code))
                 }
             }
 

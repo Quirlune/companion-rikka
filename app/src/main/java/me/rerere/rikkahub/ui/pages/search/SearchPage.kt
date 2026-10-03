@@ -68,6 +68,42 @@ import kotlin.uuid.Uuid
 @Composable
 fun SearchPage(vm: SearchVM = koinViewModel()) {
     val navController = LocalNavController.current
+    SearchPageContent(
+        searchQuery = vm.searchQuery,
+        searchScope = vm.searchScope,
+        sortOrder = vm.sortOrder,
+        results = vm.results,
+        isLoading = vm.isLoading,
+        onQueryChange = vm::onQueryChange,
+        onScopeChange = vm::onScopeChange,
+        onSortChange = vm::onSortChange,
+        onSearch = vm::search,
+        onResultClick = { result ->
+            navigateToChatPage(navController, chatId = Uuid.parse(result.conversationId), nodeId = Uuid.parse(result.nodeId))
+        },
+        isRebuilding = vm.isRebuilding,
+        rebuildProgress = vm.rebuildProgress,
+        onRebuildIndex = vm::rebuildIndex,
+    )
+}
+
+/** Original search controls and result rows, with the source and navigation supplied by the caller. */
+@Composable
+fun SearchPageContent(
+    searchQuery: String,
+    searchScope: MessageSearchScope,
+    sortOrder: MessageSearchSort,
+    results: List<MessageSearchResult>,
+    isLoading: Boolean,
+    onQueryChange: (String) -> Unit,
+    onScopeChange: (MessageSearchScope) -> Unit,
+    onSortChange: (MessageSearchSort) -> Unit,
+    onSearch: () -> Unit,
+    onResultClick: (MessageSearchResult) -> Unit,
+    isRebuilding: Boolean = false,
+    rebuildProgress: Pair<Int, Int> = 0 to 0,
+    onRebuildIndex: (() -> Unit)? = null,
+) {
     val focusRequester = remember { FocusRequester() }
     var showRebuildDialog by remember { mutableStateOf(false) }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -85,7 +121,7 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
                 TextButton(
                     onClick = {
                         showRebuildDialog = false
-                        vm.rebuildIndex()
+                        onRebuildIndex?.invoke()
                     }
                 ) {
                     Text(stringResource(R.string.confirm))
@@ -106,12 +142,12 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
                 title = { Text(stringResource(R.string.search_page_title)) },
                 actions = {
                     SortMenuButton(
-                        current = vm.sortOrder,
-                        onSortChange = { vm.onSortChange(it) },
+                        current = sortOrder,
+                        onSortChange = onSortChange,
                     )
-                    IconButton(
+                    if (onRebuildIndex != null) IconButton(
                         onClick = { showRebuildDialog = true },
-                        enabled = !vm.isRebuilding,
+                        enabled = !isRebuilding,
                     ) {
                         Icon(
                             HugeIcons.Refresh01,
@@ -132,8 +168,8 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
                 .padding(contentPadding)
         ) {
             OutlinedTextField(
-                value = vm.searchQuery,
-                onValueChange = { vm.onQueryChange(it) },
+                value = searchQuery,
+                onValueChange = onQueryChange,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
@@ -143,7 +179,7 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(
-                    onSearch = { vm.search() }
+                    onSearch = { onSearch() }
                 ),
             )
 
@@ -155,8 +191,8 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
             ) {
                 MessageSearchScope.entries.forEachIndexed { index, scope ->
                     SegmentedButton(
-                        selected = vm.searchScope == scope,
-                        onClick = { vm.onScopeChange(scope) },
+                        selected = searchScope == scope,
+                        onClick = { onScopeChange(scope) },
                         shape = SegmentedButtonDefaults.itemShape(
                             index = index,
                             count = MessageSearchScope.entries.size,
@@ -175,17 +211,17 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
             }
 
             Box(modifier = Modifier.weight(1f)) {
-                if (vm.isLoading || vm.isRebuilding) {
+                if (isLoading || isRebuilding) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
 
                 when {
-                    vm.isRebuilding -> {
+                    isRebuilding -> {
                         Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
-                            val (current, total) = vm.rebuildProgress
+                            val (current, total) = rebuildProgress
                             Text(
                                 text = if (total > 0) stringResource(
                                     R.string.search_page_rebuilding,
@@ -197,7 +233,7 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
                             )
                         }
                     }
-                    vm.searchQuery.isBlank() -> {
+                    searchQuery.isBlank() -> {
                         Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
@@ -210,7 +246,7 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
                         }
                     }
 
-                    vm.results.isEmpty() && !vm.isLoading -> {
+                    results.isEmpty() && !isLoading -> {
                         Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
@@ -229,16 +265,10 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.fillMaxSize(),
                         ) {
-                            items(vm.results) { result ->
+                            items(results, key = { "${it.conversationId}:${it.messageId}" }) { result ->
                                 SearchResultItem(
                                     result = result,
-                                    onClick = {
-                                        navigateToChatPage(
-                                            navController,
-                                            chatId = Uuid.parse(result.conversationId),
-                                            nodeId = Uuid.parse(result.nodeId),
-                                        )
-                                    }
+                                    onClick = { onResultClick(result) },
                                 )
                             }
                         }

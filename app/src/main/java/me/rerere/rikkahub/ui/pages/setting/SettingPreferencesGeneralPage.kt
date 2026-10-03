@@ -39,7 +39,7 @@ import org.koin.androidx.compose.koinViewModel
 import kotlin.math.roundToInt
 
 @Composable
-fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
+fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel(), textOnly: Boolean = false) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     var displaySetting by remember(settings) { mutableStateOf(settings.displaySetting) }
     var ttsPlaybackSpeed by remember(settings.defaultTTSPlaybackSpeed) {
@@ -213,39 +213,41 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
                             )
                         },
                     )
-                    item(
-                        headlineContent = { Text(stringResource(R.string.setting_display_page_paste_long_text_as_file_title)) },
-                        supportingContent = { Text(stringResource(R.string.setting_display_page_paste_long_text_as_file_desc)) },
-                        trailingContent = {
-                            Switch(
-                                checked = displaySetting.pasteLongTextAsFile,
-                                onCheckedChange = {
-                                    updateDisplaySetting(displaySetting.copy(pasteLongTextAsFile = it))
-                                }
-                            )
-                        },
-                    )
-                    if (displaySetting.pasteLongTextAsFile) {
+                    if (!textOnly) {
                         item(
-                            headlineContent = { Text(stringResource(R.string.setting_display_page_paste_long_text_threshold_title)) },
-                            supportingContent = {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    Slider(
-                                        value = displaySetting.pasteLongTextThreshold.toFloat(),
-                                        onValueChange = {
-                                            updateDisplaySetting(displaySetting.copy(pasteLongTextThreshold = it.toInt()))
-                                        },
-                                        valueRange = 100f..10000f,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    Text(text = "${displaySetting.pasteLongTextThreshold}")
-                                }
+                            headlineContent = { Text(stringResource(R.string.setting_display_page_paste_long_text_as_file_title)) },
+                            supportingContent = { Text(stringResource(R.string.setting_display_page_paste_long_text_as_file_desc)) },
+                            trailingContent = {
+                                Switch(
+                                    checked = displaySetting.pasteLongTextAsFile,
+                                    onCheckedChange = {
+                                        updateDisplaySetting(displaySetting.copy(pasteLongTextAsFile = it))
+                                    }
+                                )
                             },
                         )
+                        if (displaySetting.pasteLongTextAsFile) {
+                            item(
+                                headlineContent = { Text(stringResource(R.string.setting_display_page_paste_long_text_threshold_title)) },
+                                supportingContent = {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Slider(
+                                            value = displaySetting.pasteLongTextThreshold.toFloat(),
+                                            onValueChange = {
+                                                updateDisplaySetting(displaySetting.copy(pasteLongTextThreshold = it.toInt()))
+                                            },
+                                            valueRange = 100f..10000f,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Text(text = "${displaySetting.pasteLongTextThreshold}")
+                                    }
+                                },
+                            )
+                        }
                     }
                     item(
                         headlineContent = { Text(stringResource(R.string.setting_display_page_volume_key_scroll_title)) },
@@ -285,7 +287,7 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
                 }
             }
 
-            item {
+            if (!textOnly) item {
                 CardGroup(
                     modifier = Modifier.padding(horizontal = 8.dp),
                     title = { Text(stringResource(R.string.setting_page_tts_settings)) },

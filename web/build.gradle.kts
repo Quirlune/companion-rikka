@@ -42,7 +42,7 @@ android {
 }
 
 tasks.named("preBuild") {
-    dependsOn(buildWebUi)
+    if (providers.gradleProperty("buildOriginalWebUi").orNull == "true") dependsOn(buildWebUi)
 }
 
 dependencies {

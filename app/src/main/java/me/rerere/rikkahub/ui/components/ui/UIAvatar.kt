@@ -99,7 +99,8 @@ fun UIAvatar(
     onUpdate: ((Avatar) -> Unit)? = null,
     onClick: (() -> Unit)? = null
 ) {
-    val filesManager: FilesManager = koinInject()
+    val avatarKoin = org.koin.compose.getKoin()
+    val filesManager = remember(avatarKoin) { lazy { avatarKoin.get<FilesManager>() } }
     val context = LocalContext.current
     var showPickOption by remember { mutableStateOf(false) }
     var showEmojiPicker by remember { mutableStateOf(false) }
@@ -108,7 +109,7 @@ fun UIAvatar(
     var preCropTempFile by remember { mutableStateOf<File?>(null) }
 
     fun saveAvatarImage(uri: Uri) {
-        val localUris = filesManager.createChatFilesByContents(listOf(uri))
+        val localUris = filesManager.value.createChatFilesByContents(listOf(uri))
         localUris.firstOrNull()?.let { localUri ->
             onUpdate?.invoke(Avatar.Image(localUri.toString()))
         }
@@ -163,7 +164,11 @@ fun UIAvatar(
                 when (value) {
                     is Avatar.Image -> {
                         AsyncImage(
-                            model = value.url,
+                            model = remember(value.url) {
+                                if (value.url.startsWith("data:image/") && value.url.contains(";base64,"))
+                                    android.util.Base64.decode(value.url.substringAfter(";base64,"), android.util.Base64.DEFAULT)
+                                else value.url
+                            },
                             contentDescription = null,
                             modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.Crop,

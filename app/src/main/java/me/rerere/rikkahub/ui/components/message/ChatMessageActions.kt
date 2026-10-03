@@ -75,6 +75,8 @@ fun ColumnScope.ChatMessageActionButtons(
     onOpenActionSheet: () -> Unit,
     onTranslate: ((UIMessage, Locale) -> Unit)? = null,
     onClearTranslation: (UIMessage) -> Unit = {},
+    readOnly: Boolean = false,
+    enableTts: Boolean = true,
 ) {
     val context = LocalContext.current
     val settings = LocalSettings.current
@@ -106,7 +108,7 @@ fun ColumnScope.ChatMessageActionButtons(
             tint = actionIconColor
         )
 
-        Icon(
+        if (!readOnly) Icon(
             imageVector = HugeIcons.Refresh03,
             contentDescription = stringResource(R.string.regenerate),
             modifier = Modifier
@@ -123,7 +125,7 @@ fun ColumnScope.ChatMessageActionButtons(
             tint = actionIconColor
         )
 
-        if (message.role == MessageRole.ASSISTANT) {
+        if (message.role == MessageRole.ASSISTANT && !readOnly && enableTts) {
             val tts = LocalTTSState.current
             val isSpeaking by tts.isSpeaking.collectAsState()
             val isAvailable by tts.isAvailable.collectAsState()
@@ -157,6 +159,8 @@ fun ColumnScope.ChatMessageActionButtons(
                 tint = if (isAvailable) actionIconColor else actionIconColor.copy(alpha = 0.38f)
             )
 
+        }
+        if (message.role == MessageRole.ASSISTANT) {
             // Translation button
             if (onTranslate != null) {
                 Icon(
@@ -195,10 +199,7 @@ fun ColumnScope.ChatMessageActionButtons(
             tint = actionIconColor
         )
 
-        ChatMessageBranchSelector(
-            node = node,
-            onUpdate = onUpdate,
-        )
+        if (!readOnly) ChatMessageBranchSelector(node = node, onUpdate = onUpdate)
 
         if (settings.displaySetting.showDateTimeInMessage) {
             Text(
@@ -254,7 +255,8 @@ fun ChatMessageActionsSheet(
     isFavorite: Boolean = false,
     onToggleFavorite: (() -> Unit)? = null,
     onWebViewPreview: () -> Unit,
-    onDismissRequest: () -> Unit
+    onDismissRequest: () -> Unit,
+    readOnly: Boolean = false,
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
@@ -327,7 +329,7 @@ fun ChatMessageActionsSheet(
             }
 
             // Edit
-            Card(
+            if (!readOnly) Card(
                 onClick = {
                     onDismissRequest()
                     onEdit()
@@ -381,7 +383,7 @@ fun ChatMessageActionsSheet(
             }
 
             // Create a Fork
-            Card(
+            if (!readOnly) Card(
                 onClick = {
                     onDismissRequest()
                     onFork()
@@ -407,7 +409,7 @@ fun ChatMessageActionsSheet(
                 }
             }
 
-            if (onToggleFavorite != null) {
+            if (!readOnly && onToggleFavorite != null) {
                 Card(
                     onClick = {
                         onDismissRequest()
@@ -439,7 +441,7 @@ fun ChatMessageActionsSheet(
             }
 
             // Delete
-            Card(
+            if (!readOnly) Card(
                 onClick = {
                     onDismissRequest()
                     onDelete()

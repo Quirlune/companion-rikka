@@ -13,6 +13,10 @@ import me.rerere.rikkahub.data.ai.AIRequestInterceptor
 import me.rerere.rikkahub.data.ai.RequestLoggingInterceptor
 import me.rerere.rikkahub.data.ai.transformers.AssistantTemplateLoader
 import me.rerere.rikkahub.data.ai.GenerationLoop
+import me.rerere.rikkahub.data.ai.runtime.ChatPromptAssembler
+import me.rerere.prompt.FileRuntimePersistence
+import me.rerere.prompt.RuntimeStore
+import java.io.File
 import me.rerere.rikkahub.data.ai.TranslationHandler
 import me.rerere.rikkahub.data.ai.transformers.TemplateTransformer
 import me.rerere.rikkahub.data.api.RikkaHubAPI
@@ -106,8 +110,12 @@ val dataSourceModule = module {
             context = get(),
             providerManager = get(),
             json = get(),
+            promptAssembler = get(),
         )
     }
+
+    single { RuntimeStore(FileRuntimePersistence(File(get<Context>().filesDir, "prompt-runtime/state.json"))) }
+    single { ChatPromptAssembler(get()) }
 
     single {
         TranslationHandler(providerManager = get())

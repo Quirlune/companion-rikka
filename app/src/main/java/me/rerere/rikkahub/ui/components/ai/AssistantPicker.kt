@@ -41,6 +41,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.Edit03
 import me.rerere.hugeicons.stroke.LookTop
 import me.rerere.rikkahub.R
@@ -60,6 +61,26 @@ fun AssistantPicker(
     onClickSetting: () -> Unit,
 ) {
     val state = rememberAssistantState(settings, onUpdateSettings)
+    AssistantPickerDisplay(
+        settings = settings,
+        currentAssistant = state.currentAssistant,
+        onAssistantSelected = state::setSelectAssistant,
+        onEditAssistant = onClickSetting,
+        modifier = modifier,
+    )
+}
+
+/** The original drawer item and sheet, also used by the Companion character projection. */
+@Composable
+fun AssistantPickerDisplay(
+    settings: Settings,
+    currentAssistant: Assistant,
+    onAssistantSelected: (Assistant) -> Unit,
+    onEditAssistant: () -> Unit,
+    modifier: Modifier = Modifier,
+    onEditSheetAssistant: ((Assistant) -> Unit)? = null,
+    onCreateAssistant: (() -> Unit)? = null,
+) {
     val defaultAssistantName = stringResource(R.string.assistant_page_default_assistant)
     var showPicker by remember { mutableStateOf(false) }
 
@@ -72,7 +93,7 @@ fun AssistantPicker(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = state.currentAssistant.name.ifEmpty { defaultAssistantName },
+                    text = currentAssistant.name.ifEmpty { defaultAssistantName },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -80,9 +101,9 @@ fun AssistantPicker(
                 Spacer(Modifier.weight(1f))
 
                 UIAvatar(
-                    name = state.currentAssistant.name.ifEmpty { defaultAssistantName },
-                    value = state.currentAssistant.avatar,
-                    onClick = onClickSetting
+                    name = currentAssistant.name.ifEmpty { defaultAssistantName },
+                    value = currentAssistant.avatar,
+                    onClick = onEditAssistant
                 )
             }
         },
@@ -96,14 +117,16 @@ fun AssistantPicker(
     if (showPicker) {
         AssistantPickerSheet(
             settings = settings,
-            currentAssistant = state.currentAssistant,
+            currentAssistant = currentAssistant,
             onAssistantSelected = { assistant ->
                 showPicker = false
-                state.setSelectAssistant(assistant)
+                onAssistantSelected(assistant)
             },
             onDismiss = {
                 showPicker = false
-            }
+            },
+            onEditAssistant = onEditSheetAssistant,
+            onCreateAssistant = onCreateAssistant,
         )
     }
 }
@@ -113,7 +136,9 @@ private fun AssistantPickerSheet(
     settings: Settings,
     currentAssistant: Assistant,
     onAssistantSelected: (Assistant) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onEditAssistant: ((Assistant) -> Unit)? = null,
+    onCreateAssistant: (() -> Unit)? = null,
 ) {
     val sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
     val scope = rememberCoroutineScope()
@@ -144,11 +169,28 @@ private fun AssistantPickerSheet(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(
-                text = stringResource(R.string.assistant_page_title),
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
+            if (onCreateAssistant == null) {
+                Text(
+                    text = stringResource(R.string.assistant_page_title),
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stringResource(R.string.assistant_page_title),
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.weight(1f).padding(bottom = 8.dp)
+                    )
+                    IconButton(onClick = {
+                        scope.launch {
+                            sheetState.hide()
+                            onDismiss()
+                            onCreateAssistant?.invoke()
+                        }
+                    }) { Icon(HugeIcons.Add01, contentDescription = null) }
+                }
+            }
 
             // 标签过滤器
             if (settings.assistantTags.isNotEmpty()) {
@@ -198,7 +240,11 @@ private fun AssistantPickerSheet(
                                 scope.launch {
                                     sheetState.hide()
                                     onDismiss()
-                                    navController.navigate(Screen.AssistantDetail(assistant.id.toString()))
+                                    if (onEditAssistant != null) {
+                                        onEditAssistant(assistant)
+                                    } else {
+                                        navController.navigate(Screen.AssistantDetail(assistant.id.toString()))
+                                    }
                                 }
                             }
                         )

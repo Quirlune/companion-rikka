@@ -5,6 +5,12 @@ import com.google.firebase.analytics.analytics
 import com.google.firebase.crashlytics.crashlytics
 import kotlinx.serialization.json.Json
 import me.rerere.rikkahub.AppScope
+import me.rerere.prompt.EventRuntime
+import me.rerere.rikkahub.data.ai.runtime.ModelTaskAction
+import me.rerere.rikkahub.data.ai.runtime.PromptRuntimeService
+import me.rerere.rikkahub.data.ai.runtime.ContextHistoryApi
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import me.rerere.rikkahub.data.ai.tools.local.LocalTools
 import me.rerere.rikkahub.data.ai.tools.ChatToolFactory
 import me.rerere.rikkahub.data.event.AppEventBus
@@ -41,6 +47,15 @@ val appModule = module {
     single {
         AppScope()
     }
+
+    single { ModelTaskAction(get(), get(), get()) }
+    single {
+        EventRuntime(get(), CoroutineScope(get<AppScope>().coroutineContext + Dispatchers.Default)).apply {
+            registerAction(ModelTaskAction.ID, get<ModelTaskAction>())
+        }
+    }
+    single { PromptRuntimeService(get(), get<AppScope>(), get(), get()) }
+    single { ContextHistoryApi(get()) }
 
     single<EmojiData> {
         EmojiUtils.loadEmoji(get())
@@ -105,7 +120,8 @@ val appModule = module {
             mcpManager = get(),
             filesManager = get(),
             workspaceRepository = get(),
-            folderRepository = get()
+            folderRepository = get(),
+            promptRuntime = get(),
         )
     }
 

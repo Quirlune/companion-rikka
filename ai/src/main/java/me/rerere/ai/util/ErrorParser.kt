@@ -8,8 +8,16 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
 
 class HttpException(
-    message: String
-) : RuntimeException(message)
+    message: String,
+    val statusCode: Int? = null,
+    cause: Throwable? = null,
+) : RuntimeException(message, cause)
+
+/** Keep transport status even when parsing a provider's error body replaces the exception. */
+fun Throwable?.withHttpStatus(statusCode: Int?): Throwable? =
+    if (statusCode != null && statusCode >= 400)
+        HttpException(this?.message ?: "HTTP $statusCode", statusCode, this)
+    else this
 
 fun JsonElement.parseErrorDetail(): HttpException {
     return when (this) {
