@@ -141,7 +141,7 @@ class MacroRetentionTest {
         assertEquals("<body>A</body>", first.results["raw_reply"])
         assertEquals("A", first.messages.last().text)
         assertEquals(rawA, first.messages.last().rawText)
-        assertFalse("result.raw_reply" in first.macroHistory)
+        assertEquals(rawA, first.macroHistory.getValue("result.raw_reply").single().rawText)
         assertEquals("A", first.macroHistory.getValue("result.body").single().text)
         val candidate = MessageOperations.prepareRegeneration(first, before.messages.single().id).session!!
         assertTrue(candidate.currentOnlyMacros.isEmpty())
@@ -199,19 +199,20 @@ class MacroRetentionTest {
         val json = LibraryFormat.json
         val restored = json.decodeFromString(Session.serializer(), json.encodeToString(Session.serializer(), saved))
         val receipt = restored.pendingRun!!.accepted.single()
-        assertTrue(receipt.publication.macroAppends.isEmpty())
-        assertEquals(1, receipt.publication.headWrites.getValue("result.good").version)
+        assertEquals(" kept ", receipt.publication.macroAppends.getValue("result.good").single().rawText)
+        assertTrue(receipt.publication.headWrites.isEmpty())
         assertEquals(" kept ", receipt.reply!!.rawText)
         val resumed = engine.resume(lib, restored, gateway, restored.pendingRun!!,
             RecoveryDecision(RecoveryDecisionKind.MANUAL, "flow/bad", manualText = "<ok>fixed</ok>"))
         assertEquals(RunStatus.SUCCESS, resumed.status)
         assertEquals(1, goodCalls)
-        assertEquals(first.currentOnlyMacros.getValue("result.good"), resumed.currentOnlyMacros.getValue("result.good"))
+        assertEquals(first.macroHistory.getValue("result.good"), resumed.macroHistory.getValue("result.good"))
         assertEquals(receipt.reply, resumed.replies.first { it.nodeId == "good" })
         assertNull(resumed.replies.first { it.nodeId == "bad" }.rawText)
         val finished = MessageOperations.continuePartialTurn(restored, resumed).session!!
         assertNull(finished.pendingRun)
-        assertTrue(finished.macroHistory.isEmpty())
+        assertEquals(setOf("result.good", "result.bad"), finished.macroHistory.keys)
+        assertNull(finished.macroHistory.getValue("result.bad").single().rawText)
         assertEquals("kept", finished.results["good"])
     }
 

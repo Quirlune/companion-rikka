@@ -18,7 +18,7 @@ internal class OutcomePublisher(
         compiledModelTargets: Set<String>,
         processingHistory: Boolean,
         automaticSegment: HistoryMemorySegment? = null,
-        rawBodyText: String? = null
+        rawModelText: String? = null
     ): RecoveryReceipt {
         val origin = ResultOrigin(resourceByWorkflow.getValue(ref.workflow.id), ref.workflow.id,
             ref.node.id, ref.node.resultCategory)
@@ -63,7 +63,8 @@ internal class OutcomePublisher(
         if (ownAddress !in activations) values.putIfAbsent(ownAddress, outcome.text)
         for (address in (values.keys + activations.keys).distinct()) {
             val copy = ref.node.regexOutputCopy
-            val record = executionVersion < 3 || if (copy.enabled && address == "result.${copy.outputKey}")
+            val modelOwnResult = executionVersion >= 4 && address == ownAddress && ref.action?.descriptor?.usesModel == true
+            val record = executionVersion < 3 || modelOwnResult || if (copy.enabled && address == "result.${copy.outputKey}")
                 copy.recordTrajectory else ref.node.recordTrajectory
             val head = heads[address]
             if (record && head == null && address !in history && address.startsWith("result.")) {
@@ -85,7 +86,8 @@ internal class OutcomePublisher(
             val contentOrigin = if (address in values) null else priorContentOrigin
             if (record) {
                 MacroReferences.publish(history, address, value, enabled, origin, turn, userMessageId, contentOrigin,
-                    minimumVersion = head?.version ?: 0, precedingGap = head?.gap)
+                    minimumVersion = head?.version ?: 0, precedingGap = head?.gap,
+                    rawText = rawModelText.takeIf { modelOwnResult })
                 heads.remove(address)
             } else {
                 val number = Math.addExact(maxOf(head?.version ?: 0, history[address]?.lastOrNull()?.version ?: 0), 1)
@@ -140,7 +142,7 @@ internal class OutcomePublisher(
             ChatMessage(role = Role.ASSISTANT, text = text, outputSlot = ref.node.outputSlot,
                 turnId = userMessageId, workflowId = ref.workflow.id, nodeId = ref.node.id,
                 speakerName = library.characters.firstOrNull { it.id == current.characterId }?.name,
-                rawText = rawBodyText.takeIf { ref.node.outputSlot == OutputSlot.BODY })
+                rawText = rawModelText.takeIf { ref.node.outputSlot == OutputSlot.BODY })
         else null
         return RecoveryReceipt(ref.key, outcome, reply, publication)
     }

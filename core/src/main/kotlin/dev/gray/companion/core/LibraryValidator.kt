@@ -1,7 +1,7 @@
 package dev.gray.companion.core
 
 object LibraryValidator {
-    fun validate(library: Library, executionVersion: Int = 3): List<Issue> {
+    fun validate(library: Library, executionVersion: Int = 4): List<Issue> {
         val issues = mutableListOf<Issue>()
         if (library.schemaVersion != LibraryFormat.CURRENT_VERSION) issues += Issue("library.schemaVersion", "不支持的资源版本")
         checkMetadata(library, issues)
@@ -103,6 +103,22 @@ object LibraryValidator {
             if (main.primaryWorkflowId != null && main.workflows.none { it.id == main.primaryWorkflowId })
                 issues += Issue("main.${main.id}.primaryWorkflowId", "默认调用不存在")
             main.boundGroupIds.forEach { id -> if (library.groups.none { it.id == id }) issues += Issue("main.${main.id}.boundGroupIds", "绑定的调用组不存在") }
+            main.bodySourceTileId?.let { sourceId ->
+                val source = (main.tiles + library.groups.flatMap { it.tiles }).firstOrNull { it.id == sourceId }
+                val path = "main.${main.id}.bodySourceTileId"
+                when {
+                    source == null -> issues += Issue(path, "正文显示模板不存在；使用原正文", error = false)
+                    !source.enabled || source.placement != MacroTilePlacement.CHAT ||
+                        source.kind !in setOf(MacroTileKind.TEXT, MacroTileKind.HTML) ->
+                        issues += Issue(path, "正文来源须为已启用的聊天文本或 HTML 模板；使用原正文", error = false)
+                    source.kind == MacroTileKind.HTML -> {
+                        if (main.bodyTextTemplate.isBlank()) issues += Issue("main.${main.id}.bodyTextTemplate", "HTML 正文须指定供历史、复制与导出使用的文本模板；使用原正文", error = false)
+                        val displayIssues = mutableListOf<Issue>()
+                        checkTemplate(main.bodyTextTemplate, "main.${main.id}.bodyTextTemplate", displayIssues)
+                        issues += displayIssues.map { it.copy(error = false) }
+                    }
+                }
+            }
             checkHistory(main, issues)
         }
         val tiles = library.mainCalls.flatMap { it.tiles } + library.groups.flatMap { it.tiles }

@@ -119,6 +119,7 @@ fun ChatMessage(
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
     readOnly: Boolean = false,
     enableTts: Boolean = true,
+    assistantTextContent: (@Composable () -> Unit)? = null,
 ) {
     val message = node.messages[node.selectIndex]
     val settings = LocalSettings.current.displaySetting
@@ -171,6 +172,7 @@ fun ChatMessage(
                 onToolApproval = onToolApproval,
                 onToolAnswer = onToolAnswer,
                 onUserMessageClick = if (!readOnly && message.role == MessageRole.USER) onEdit else null,
+                assistantTextContent = assistantTextContent,
             )
 
             message.translation?.let { translation ->
@@ -278,6 +280,7 @@ private fun MessagePartsBlock(
     onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
     onUserMessageClick: (() -> Unit)? = null,
+    assistantTextContent: (@Composable () -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
@@ -395,7 +398,7 @@ private fun MessagePartsBlock(
                                         color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = settings.displaySetting.bubbleOpacity),
                                     ) {
                                         Column(modifier = Modifier.padding(8.dp)) {
-                                            MarkdownBlock(
+                                            if (assistantTextContent != null) assistantTextContent() else MarkdownBlock(
                                                 content = part.text.replaceRegexes(
                                                     assistant = assistant,
                                                     scope = AssistantAffectScope.ASSISTANT,
@@ -406,7 +409,7 @@ private fun MessagePartsBlock(
                                         }
                                     }
                                 } else {
-                                    MarkdownBlock(
+                                    if (assistantTextContent != null) assistantTextContent() else MarkdownBlock(
                                         content = part.text.replaceRegexes(
                                             assistant = assistant,
                                             scope = AssistantAffectScope.ASSISTANT,

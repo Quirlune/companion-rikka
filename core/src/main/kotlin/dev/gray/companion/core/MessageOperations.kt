@@ -304,7 +304,7 @@ object MessageOperations {
         if (userIndex < 0) return unavailable("turn.$turnId", "用户消息不存在")
         val tombstones = session.messages.drop(userIndex + 1).map { reply -> reply.copy(
             text = "", textRevisions = emptyList(), activeTextRevisionId = null,
-            activeTextRevisionCreatedAt = null, deleted = true
+            activeTextRevisionCreatedAt = null, deleted = true, bodyDisplay = null
         ) }
         return MessageOperationResult(restore(session, record.checkpoint.runtime).copy(
             messages = session.messages.take(userIndex + 1) + tombstones,
@@ -320,9 +320,9 @@ object MessageOperations {
             text = text,
             textRevisions = current.textRevisions + TextRevision(
                 current.activeTextRevisionId ?: current.id, current.text,
-                current.activeTextRevisionCreatedAt ?: current.createdAt
+                current.activeTextRevisionCreatedAt ?: current.createdAt, current.bodyDisplay
             ),
-            activeTextRevisionId = newId(), activeTextRevisionCreatedAt = nextRevisionTime(current)
+            activeTextRevisionId = newId(), activeTextRevisionCreatedAt = nextRevisionTime(current), bodyDisplay = null
         )
     }
 
@@ -334,9 +334,9 @@ object MessageOperations {
                     text = chosen.text,
                     textRevisions = current.textRevisions.filterNot { it.id == revisionId } + TextRevision(
                         current.activeTextRevisionId ?: current.id, current.text,
-                        current.activeTextRevisionCreatedAt ?: current.createdAt
+                        current.activeTextRevisionCreatedAt ?: current.createdAt, current.bodyDisplay
                     ),
-                    activeTextRevisionId = chosen.id, activeTextRevisionCreatedAt = chosen.createdAt
+                    activeTextRevisionId = chosen.id, activeTextRevisionCreatedAt = chosen.createdAt, bodyDisplay = chosen.bodyDisplay
                 )
             }
         }
@@ -346,11 +346,11 @@ object MessageOperations {
         val replacement = current.textRevisions.maxWithOrNull(compareBy<TextRevision> { it.createdAt }.thenBy { it.id })
         if (replacement == null) current.copy(
             text = "", textRevisions = emptyList(), activeTextRevisionId = null,
-            activeTextRevisionCreatedAt = null, deleted = true
+            activeTextRevisionCreatedAt = null, deleted = true, bodyDisplay = null
         ) else current.copy(
             text = replacement.text,
             textRevisions = current.textRevisions.filterNot { it.id == replacement.id },
-            activeTextRevisionId = replacement.id, activeTextRevisionCreatedAt = replacement.createdAt
+            activeTextRevisionId = replacement.id, activeTextRevisionCreatedAt = replacement.createdAt, bodyDisplay = replacement.bodyDisplay
         )
     }
 

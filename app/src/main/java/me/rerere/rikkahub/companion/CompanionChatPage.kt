@@ -32,6 +32,7 @@ import dev.gray.companion.core.RecoveryFailure
 import dev.gray.companion.core.Role
 import me.rerere.ai.ui.UIMessagePart
 import dev.gray.companion.ui.MacroTileDashboard
+import dev.gray.companion.ui.FrozenHtmlBody
 import dev.gray.companion.ui.MacroSidebarPanel
 import dev.gray.companion.ui.RecoveryFooter
 import dev.gray.companion.ui.hasMacroSidebar
@@ -83,6 +84,11 @@ fun CompanionChatPage(
             }
         }
     }
+    val displayIssue = if (active && !activeBusy)
+        controllerState.traces.lastOrNull { it.status == "display" }?.detail else null
+    LaunchedEffect(displayIssue) {
+        displayIssue?.let { snackbar.showSnackbar("正文显示未完成：$it；已保留原正文") }
+    }
     if (session == null) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Box(contentAlignment = Alignment.Center) { Text("请选择会话") }
@@ -96,6 +102,11 @@ fun CompanionChatPage(
     val sidebarAvailable = remember(library, displaySession) { hasMacroSidebar(library, displaySession) }
     var sidebarOpen by remember(session.id) { mutableStateOf(false) }
     val history = remember(displaySession.messages, displaySession.turnRecords) { projectCompanionHistory(displaySession) }
+    val frozenHtml = remember(history.bodyDisplays) {
+        history.bodyDisplays.filterValues { it.html != null }.mapValues { (id, display) ->
+            @Composable { FrozenHtmlBody(display, id.toString()) }
+        }
+    }
     val presentation = remember(appearanceSettings, library, session.characterId, session.mainCallId) {
         projectCompanionSettings(appearanceSettings, library, session)
     }
@@ -293,6 +304,7 @@ fun CompanionChatPage(
                     },
                     readOnly = activeBusy,
                     enableTts = false,
+                    assistantTextContent = frozenHtml,
                     footer = {
                         MacroTileDashboard(library, displaySession)
                         RecoveryFooter(

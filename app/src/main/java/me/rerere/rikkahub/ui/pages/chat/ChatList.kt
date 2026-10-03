@@ -138,6 +138,7 @@ fun ChatList(
     readOnly: Boolean = false,
     enableTts: Boolean = true,
     footer: (@Composable () -> Unit)? = null,
+    assistantTextContent: Map<Uuid, @Composable () -> Unit> = emptyMap(),
 ) {
     AnimatedContent(
         targetState = previewMode,
@@ -183,6 +184,7 @@ fun ChatList(
                 readOnly = readOnly,
                 enableTts = enableTts,
                 footer = footer,
+                assistantTextContent = assistantTextContent,
             )
         }
     }
@@ -216,6 +218,7 @@ private fun ChatListNormal(
     readOnly: Boolean = false,
     enableTts: Boolean = true,
     footer: (@Composable () -> Unit)? = null,
+    assistantTextContent: Map<Uuid, @Composable () -> Unit> = emptyMap(),
 ) {
     val scope = rememberCoroutineScope()
     val loadingState by rememberUpdatedState(loading)
@@ -375,6 +378,7 @@ private fun ChatListNormal(
                             lastMessage = index == lastMessageIndex,
                             readOnly = readOnly,
                             enableTts = enableTts,
+                            assistantTextContent = assistantTextContent[node.currentMessage.id],
                         )
                     }
                 }

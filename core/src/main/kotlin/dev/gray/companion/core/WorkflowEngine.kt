@@ -41,7 +41,7 @@ class WorkflowEngine(
         decision: RecoveryDecision,
         onUpdate: suspend (RunUpdate) -> Unit = {}
     ): RunResult {
-        if (recovery.formatVersion != 1 || recovery.executionVersion !in 1..3)
+        if (recovery.formatVersion != 1 || recovery.executionVersion !in 1..4)
             return conflict(recovery, "恢复断点版本不受支持；已接受的数据可保留，请结束此断点后开始新一轮")
         if (decision.nodeKey !in recovery.failures.map { it.nodeKey } ||
             currentSession.pendingRun?.id != recovery.id ||
@@ -164,7 +164,7 @@ class WorkflowEngine(
         onUpdate: suspend (RunUpdate) -> Unit
     ): RunResult {
         val traces = mutableListOf<RunTrace>()
-        val executionVersion = previous?.executionVersion ?: 3
+        val executionVersion = previous?.executionVersion ?: 4
         val legacy = executionVersion == 1
         val updateMutex = Mutex()
         suspend fun trace(ref: PlannedNode?, status: String, detail: String) {
@@ -281,6 +281,10 @@ class WorkflowEngine(
             currentOnlyMacros = stagedHeads.toMap()
         )
         val replies = mutableListOf<ChatMessage>()
+        var bodyDisplayReceipt = previous?.bodyDisplayReceipt
+        fun publishedReplies(): List<ChatMessage> = replies.map { reply ->
+            bodyDisplayReceipt?.takeIf { it.id == reply.id } ?: reply
+        }
         val replyRank = mutableMapOf<String, Int>()
         var nextReplyRank = 0
         fun orderReplies() {
@@ -289,7 +293,7 @@ class WorkflowEngine(
         val recoveryBase = previous ?: RunRecovery(
             id = newId(), sessionId = session.id, turnId = currentUserMessageId.orEmpty(), input = input,
             checkpoint = MessageOperations.captureCheckpoint(session), initialSession = session.copy(pendingRun = null),
-            frozenResources = freezeResources(library, session), executionVersion = 3
+            frozenResources = freezeResources(library, session), executionVersion = 4
         )
         fun replayIncomplete(): Boolean = previous != null && !replayedOldKeys.containsAll(oldAcceptedKeys)
         fun recoverySnapshot(): RunRecovery = recoveryBase.copy(
@@ -305,10 +309,11 @@ class WorkflowEngine(
             macroHistory = if (replayIncomplete()) previous!!.macroHistory else stagedHistory.toMap(),
             promptInjections = if (replayIncomplete()) previous!!.promptInjections else stagedInjections.toList(),
             historyDigests = if (replayIncomplete()) previous!!.historyDigests else stagedDigests.toMap(),
-            replies = if (replayIncomplete()) previous!!.replies else replies.toList(), traces = traces.toList(),
+            replies = if (replayIncomplete()) previous!!.replies else publishedReplies(), traces = traces.toList(),
             historyMemory = if (replayIncomplete()) previous!!.historyMemory else stagedMemory,
             completedWorkflowIds = completedWorkflowIds.toSet(),
-            currentOnlyMacros = if (replayIncomplete()) previous!!.currentOnlyMacros else stagedHeads.toMap()
+            currentOnlyMacros = if (replayIncomplete()) previous!!.currentOnlyMacros else stagedHeads.toMap(),
+            bodyDisplayReceipt = bodyDisplayReceipt
         )
         fun partialResult(): RunResult {
             val checkpoint = recoverySnapshot()
@@ -340,7 +345,8 @@ class WorkflowEngine(
             }
             if (!pureModel) {
                 val outcome = semaphore.withPermit { ref.action!!.handler.execute(item.context) }
-                return Completed(ref, ValidatedCandidate(outcomeValidator.validate(ref, item.context, outcome)))
+                return Completed(ref, ValidatedCandidate(outcomeValidator.validate(ref, item.context, outcome),
+                    outcome.text.takeIf { executionVersion >= 4 && ref.action?.descriptor?.usesModel == true }))
             }
             val profile = item.context.profile ?: throw NodeExecutionFailure(ref, "未选择模型", RecoveryFailureKind.CONFIGURATION, retryable = false)
             val capacity = gateway.maxParallelCandidates(profile).coerceIn(1, 2)
@@ -375,7 +381,7 @@ class WorkflowEngine(
                             )
                             val raw = semaphore.withPermit { ref.action!!.handler.execute(requestContext) }
                             ValidatedCandidate(outcomeValidator.validate(ref, item.context, raw),
-                                raw.text.takeIf { ref.node.outputSlot == OutputSlot.BODY }) to null
+                                raw.text.takeIf { executionVersion >= 4 || ref.node.outputSlot == OutputSlot.BODY }) to null
                         } catch (cancelled: CancellationException) {
                             throw cancelled
                         } catch (failure: NodeExecutionFailure) {
@@ -683,7 +689,7 @@ class WorkflowEngine(
                                     processingCandidate.messages, processor.workflow.id) else null
                             outcomePublisher.prepare(item.ref, item.outcome,
                                 snapshot(stagedState.toMap(), stagedResults.toMap()).copy(messages = session.messages + replies),
-                                compiledModelTargets, processingEvent, automaticSegment, item.candidate.rawBodyText)
+                                compiledModelTargets, processingEvent, automaticSegment, item.candidate.rawModelText)
                         } catch (failure: NodeExecutionFailure) {
                             recordFailure(failure)
                             continue
@@ -841,7 +847,25 @@ class WorkflowEngine(
             progress()
             return paused
         }
-        return RunResult(stagedState.toMap(), stagedResults.toMap(), replies.toList(), traces.toList(),
+        if (executionVersion >= 4 && main.bodySourceTileId != null && bodyDisplayReceipt == null) {
+            val primaryWorkflowId = main.primaryWorkflowId ?: main.workflows.firstOrNull()?.id
+            val target = replies.lastOrNull { it.workflowId == primaryWorkflowId &&
+                it.outputSlot == OutputSlot.BODY && !it.deleted && it.text.isNotBlank() }
+            if (target != null) {
+                val finalSession = snapshot(stagedState.toMap(), visibleResults()).copy(messages = session.messages + replies)
+                val frozen = MacroDisplay.freezeBody(library, finalSession, main, target)
+                if (frozen.error != null) trace(null, "display", frozen.error)
+                else {
+                    val publicationContext = currentCoroutineContext()
+                    withContext(NonCancellable) {
+                        publicationContext.ensureActive()
+                        bodyDisplayReceipt = frozen.message
+                        progress()
+                    }
+                }
+            } else trace(null, "display", "主交互链没有可替换的正文回复")
+        }
+        return RunResult(stagedState.toMap(), stagedResults.toMap(), publishedReplies(), traces.toList(),
             RunStatus.SUCCESS, stagedOrigins.toMap(), stagedHistory.toMap(), stagedInjections.toList(), stagedDigests.toMap(),
             unavailableResultKeys = maskedKeys.toSet(), historyMemory = stagedMemory, currentOnlyMacros = stagedHeads.toMap())
     }

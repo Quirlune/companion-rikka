@@ -22,6 +22,7 @@ private sealed interface CallEditorRoute : NavKey {
     @Serializable data class Details(val id: String) : CallEditorRoute
     @Serializable data class Prompt(val id: String) : CallEditorRoute
     @Serializable data object History : CallEditorRoute
+    @Serializable data object BodyDisplay : CallEditorRoute
     @Serializable data object Bindings : CallEditorRoute
     @Serializable data object Info : CallEditorRoute
 }
@@ -115,10 +116,7 @@ internal fun MainCallEditor(
                             updateWorkflow(current.copy(nodes = current.nodes.map { if (it.id == modelNode.id) it.copy(blocks = blocks) else it }))
                         })
                     }
-                    if (modelNode != null) NodeTrajectoryControl(modelNode) { changed ->
-                        val current = item.workflows.firstOrNull { it.id == default.id } ?: return@NodeTrajectoryControl
-                        updateWorkflow(current.copy(nodes = current.nodes.map { if (it.id == modelNode.id) changed else it }))
-                    }
+                    if (modelNode != null) NodeTrajectoryControl(modelNode, {}, usesModel = true)
                     if (modelNode != null) RegexOutputCopyEditor(modelNode, outputKeysForNewNodes(library, item.workflows + item.history.processor.workflow)) { copy ->
                         val current = item.workflows.firstOrNull { it.id == default.id } ?: return@RegexOutputCopyEditor
                         updateWorkflow(current.copy(nodes = current.nodes.map { if (it.id == modelNode.id) it.copy(regexOutputCopy = copy) else it }))
@@ -133,6 +131,9 @@ internal fun MainCallEditor(
                 }) { Text("添加默认调用") }
                 EditorDestinationRow("其他调用", "${item.workflows.count { it.id != default?.id }} 项") { open(CallEditorRoute.Calls) }
                 HorizontalDivider()
+                EditorDestinationRow("正文显示", item.bodySourceTileId?.let { selected ->
+                    (item.tiles + library?.groups.orEmpty().flatMap { it.tiles }).firstOrNull { it.id == selected }?.title ?: "所选模板已不可用"
+                } ?: "原模型正文") { open(CallEditorRoute.BodyDisplay) }
                 EditorDestinationRow("历史配置", "范围、角色、包装与插入项") { open(CallEditorRoute.History) }
                 EditorDestinationRow("关联资源", "${item.boundPackageIds.size} 个提示词包 · ${item.boundGroupIds.size} 个调用组") { open(CallEditorRoute.Bindings) }
                 HorizontalDivider()
@@ -162,6 +163,43 @@ internal fun MainCallEditor(
             val baseline = remember { item.history }
             CallEditorPage("历史配置", history != baseline, ::pop, { item = item.copy(history = history); pop() }, onRegisterBack = { backs[route] = it }) {
                 HistoryConfigEditor(history, library, referenceChoices(item.copy(history = history))) { history = it }
+            }
+        }
+        entry<CallEditorRoute.BodyDisplay> { route ->
+            val baseline = remember { item }
+            var tiles by remember { mutableStateOf(item.tiles) }
+            var sourceId by remember { mutableStateOf(item.bodySourceTileId) }
+            var textTemplate by remember { mutableStateOf(item.bodyTextTemplate) }
+            var invalid by remember { mutableStateOf(false) }
+            val selectedSession = library?.sessions?.firstOrNull { it.id == library.selectedSessionId && it.mainCallId == item.id }
+            val groups = if (selectedSession != null) library?.loadedCallGroups(selectedSession, item).orEmpty()
+                else library?.groups.orEmpty().filter { it.id in item.boundGroupIds }
+            val candidates = (tiles + groups.flatMap { it.tiles }).filter {
+                it.enabled && it.placement == MacroTilePlacement.CHAT && it.kind in setOf(MacroTileKind.TEXT, MacroTileKind.HTML)
+            }.distinctBy { it.id }
+            val chosen = candidates.firstOrNull { it.id == sourceId }
+            val choices = listOf<Pair<String?, String>>(null to "原模型正文") + candidates.map { it.id to it.title.ifBlank { "未命名显示模板" } }
+            CallEditorPage("正文显示", tiles != baseline.tiles || sourceId != baseline.bodySourceTileId || textTemplate != baseline.bodyTextTemplate,
+                ::pop, {
+                    invalid = sourceId != null && (chosen == null || (chosen.kind == MacroTileKind.HTML && textTemplate.isBlank()))
+                    if (!invalid) { item = item.copy(tiles = tiles, bodySourceTileId = sourceId, bodyTextTemplate = textTemplate); pop() }
+                }, onRegisterBack = { backs[route] = it }) {
+                Text("每轮完成后，将所选显示模板冻结为该轮正文；原模型输出仍保留。旧聊天及下方面板的显示保持原样。",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                ChoiceLine("正文来源", sourceId, choices + if (sourceId != null && chosen == null) listOf(sourceId to "所选模板已不可用") else emptyList()) {
+                    sourceId = it; invalid = false
+                }
+                if (chosen?.kind == MacroTileKind.HTML) {
+                    PromptTemplateField("HTML 正文的语义文本", textTemplate, referenceChoices(item.copy(tiles = tiles)), { textTemplate = it }, minLines = 3)
+                    Text("这段文字供历史、复制和导出使用；HTML 只负责画面。", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (invalid) Text("请选择可用的聊天文本或 HTML 模板；HTML 还需填写语义文本。", color = MaterialTheme.colorScheme.error)
+                HorizontalDivider()
+                Text("本主调用的显示模板", style = MaterialTheme.typography.titleMedium)
+                MacroTilesEditor(tiles, referenceChoices(item.copy(tiles = tiles))) { tiles = it; invalid = false }
+                if (groups.isNotEmpty()) Text("已关联调用组的可用模板也能作为正文来源；编辑它们请进入对应调用组的显示磁贴设置。",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         entry<CallEditorRoute.Bindings> { route ->

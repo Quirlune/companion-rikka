@@ -44,7 +44,7 @@ data class ActionContext(
     val session: Session? = null,
     val library: Library? = null,
     val workflowId: String = "",
-    val executionVersion: Int = 3,
+    val executionVersion: Int = 4,
     val macroTarget: MacroTargetSnapshot? = null
 )
 

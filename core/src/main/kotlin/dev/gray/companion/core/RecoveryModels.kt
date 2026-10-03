@@ -96,7 +96,8 @@ import kotlinx.serialization.Serializable
     val executionVersion: Int = 1,
     val historyMemory: HistoryMemoryState = HistoryMemoryState(),
     val completedWorkflowIds: Set<String> = emptySet(),
-    val currentOnlyMacros: Map<String, MacroHead> = emptyMap()
+    val currentOnlyMacros: Map<String, MacroHead> = emptyMap(),
+    val bodyDisplayReceipt: ChatMessage? = null
 ) {
     val acceptedCount: Int get() = accepted.size
 }

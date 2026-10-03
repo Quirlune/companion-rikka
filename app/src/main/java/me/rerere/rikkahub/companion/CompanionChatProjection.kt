@@ -3,6 +3,7 @@ package me.rerere.rikkahub.companion
 import dev.gray.companion.PendingOutput
 import dev.gray.companion.core.AvatarImage
 import dev.gray.companion.core.ChatMessage
+import dev.gray.companion.core.BodyDisplaySnapshot
 import dev.gray.companion.core.Library
 import dev.gray.companion.core.OutputSlot
 import dev.gray.companion.core.Role
@@ -143,6 +144,7 @@ internal data class CompanionHistoryProjection(
     val nodes: List<MessageNode>,
     val branchChoices: Map<Uuid, List<CompanionBranchChoice>>,
     val logicalMessageIds: Map<Uuid, String>,
+    val bodyDisplays: Map<Uuid, BodyDisplaySnapshot>,
 )
 
 /** Display-only MessageNodes keep the original branch selector and selected-index behavior. */
@@ -165,6 +167,7 @@ internal fun projectCompanionHistory(session: Session): CompanionHistoryProjecti
 
     val choices = mutableMapOf<Uuid, List<CompanionBranchChoice>>()
     val logicalIds = mutableMapOf<Uuid, String>()
+    val bodyDisplays = mutableMapOf<Uuid, BodyDisplaySnapshot>()
     val regionOccurrences = mutableMapOf<String, Int>()
     val nodes = visible.map { message ->
         val anchorTurn = anchorTurns[message.id]
@@ -196,31 +199,48 @@ internal fun projectCompanionHistory(session: Session): CompanionHistoryProjecti
                 val replies = MessageOperations.repliesForVariant(session, turnRecord, variant, activeById)
                 val representative = replies.firstOrNull { !it.deleted && it.outputSlot == OutputSlot.BODY }
                     ?: replies.firstOrNull { !it.deleted } ?: turnUser
+                val frozen = representative.textRevisions.firstOrNull { it.bodyDisplay != null }
                 val original = representative.textRevisions.firstOrNull { it.id == representative.id }
-                val originalId = original?.id ?: representative.activeTextRevisionId ?: representative.id
-                val originalText = original?.text ?: representative.text
-                val originalTime = original?.createdAt ?: representative.activeTextRevisionCreatedAt ?: representative.createdAt
+                val generationId = when {
+                    representative.bodyDisplay != null -> representative.activeTextRevisionId ?: representative.id
+                    frozen != null -> frozen.id
+                    else -> original?.id ?: representative.activeTextRevisionId ?: representative.id
+                }
+                val generationText = when {
+                    representative.bodyDisplay != null -> representative.text
+                    frozen != null -> frozen.text
+                    else -> original?.text ?: representative.text
+                }
+                val generationTime = when {
+                    representative.bodyDisplay != null -> representative.activeTextRevisionCreatedAt ?: representative.createdAt
+                    frozen != null -> frozen.createdAt
+                    else -> original?.createdAt ?: representative.activeTextRevisionCreatedAt ?: representative.createdAt
+                }
+                val generationDisplay = representative.bodyDisplay ?: frozen?.bodyDisplay ?: original?.bodyDisplay
                 val uiId = stableUuid("generation:${turnUser.id}:${variant.id}")
                 if (variant.id == turnRecord.selectedVariantId &&
-                    (representative.activeTextRevisionId ?: representative.id) == originalId) {
+                    (representative.activeTextRevisionId ?: representative.id) == generationId) {
                     selectedIndex = uiMessages.size
                 }
-                uiMessages += representative.copy(text = originalText).toDisplayMessage(uiId, originalTime)
+                uiMessages += representative.copy(text = generationText).toDisplayMessage(uiId, generationTime)
+                generationDisplay?.let { bodyDisplays[uiId] = it }
                 branchChoices += CompanionBranchChoice.Generation(
                     turnUser.id, variant.id,
-                    representative.id, originalId,
+                    representative.id, generationId,
                 )
                 logicalIds[uiId] = message.id
             }
+            val selectedGenerationId = branchChoices.filterIsInstance<CompanionBranchChoice.Generation>()
+                .firstOrNull { it.variantId == turnRecord.selectedVariantId }?.revisionId
             val editedCandidates = (message.textRevisions.map { Triple(it.id, it.text, it.createdAt) } +
                 Triple(activeId, message.text, message.activeTextRevisionCreatedAt ?: message.createdAt))
-                .filterNot { it.first == (message.textRevisions.firstOrNull { revision -> revision.id == message.id }?.id
-                    ?: message.activeTextRevisionId ?: message.id) }
+                .filterNot { it.first == selectedGenerationId }
                 .sortedWith(compareBy<Triple<String, String, Long>> { it.third }.thenBy { it.first })
             editedCandidates.forEach { (revisionId, text, createdAt) ->
                 val uiId = stableUuid("text:${message.id}:$revisionId")
                 if (revisionId == activeId) selectedIndex = uiMessages.size
                 uiMessages += message.copy(text = text).toDisplayMessage(uiId, createdAt)
+                message.displayForRevision(revisionId)?.let { bodyDisplays[uiId] = it }
                 branchChoices += CompanionBranchChoice.Text(message.id, revisionId)
                 logicalIds[uiId] = message.id
             }
@@ -229,6 +249,7 @@ internal fun projectCompanionHistory(session: Session): CompanionHistoryProjecti
                 val uiId = stableUuid("text:${message.id}:$revisionId")
                 if (revisionId == activeId) selectedIndex = uiMessages.size
                 uiMessages += message.copy(text = text).toDisplayMessage(uiId, createdAt)
+                message.displayForRevision(revisionId)?.let { bodyDisplays[uiId] = it }
                 branchChoices += CompanionBranchChoice.Text(message.id, revisionId)
                 logicalIds[uiId] = message.id
             }
@@ -236,8 +257,12 @@ internal fun projectCompanionHistory(session: Session): CompanionHistoryProjecti
         choices[nodeId] = branchChoices
         MessageNode(id = nodeId, messages = uiMessages, selectIndex = selectedIndex)
     }
-    return CompanionHistoryProjection(nodes, choices, logicalIds)
+    return CompanionHistoryProjection(nodes, choices, logicalIds, bodyDisplays)
 }
+
+private fun ChatMessage.displayForRevision(revisionId: String): BodyDisplaySnapshot? =
+    if ((activeTextRevisionId ?: id) == revisionId) bodyDisplay
+    else textRevisions.firstOrNull { it.id == revisionId }?.bodyDisplay
 
 private fun ChatMessage.toDisplayMessage(id: Uuid, timestamp: Long = createdAt): UIMessage = UIMessage(
     id = id,

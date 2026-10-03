@@ -9,7 +9,7 @@ internal class NodeExecutionFailure(
 ) : RuntimeException()
 
 /** Provenance is captured by the engine, never supplied as a handler effect. */
-internal data class ValidatedCandidate(val outcome: ActionOutcome, val rawBodyText: String? = null)
+internal data class ValidatedCandidate(val outcome: ActionOutcome, val rawModelText: String? = null)
 
 /** Pure candidate checks. No state, versions, replies or events are published here. */
 internal class OutcomeValidator(private val library: Library, session: Session) {

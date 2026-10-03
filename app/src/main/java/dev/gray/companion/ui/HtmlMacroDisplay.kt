@@ -27,6 +27,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import dev.gray.companion.core.BodyDisplaySnapshot
 import java.io.ByteArrayInputStream
 import kotlin.math.roundToInt
 
@@ -34,15 +35,17 @@ import kotlin.math.roundToInt
 @Composable
 internal fun HtmlMacroDisplay(item: ResolvedTile) {
     val tile = item.tile
+    val error = item.error
+    val html = item.html
     val foreground = tileColor(tile.style.foreground) ?: MaterialTheme.colorScheme.onSurface
     val background = tileColor(tile.style.background) ?: MaterialTheme.colorScheme.surfaceContainerLow
     Surface(shape = RoundedCornerShape(tile.style.cornerRadius.dp), color = background, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(tile.title, style = MaterialTheme.typography.titleSmall, color = foreground)
             when {
-                item.error != null -> Text(item.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                error != null -> Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 item.waiting -> Text("等待首次生成", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                item.html != null -> InertHtmlView(item.html, foreground, background, tile.style.fontSize, tile.id)
+                html != null -> InertHtmlView(html, foreground, background, tile.style.fontSize, tile.id)
                 else -> Text("尚无可显示的内容", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -50,7 +53,15 @@ internal fun HtmlMacroDisplay(item: ResolvedTile) {
 }
 
 @Composable
-private fun InertHtmlView(fragment: String, foreground: Color, background: Color, fontSize: Int, tileId: String) {
+internal fun FrozenHtmlBody(snapshot: BodyDisplaySnapshot, messageId: String) {
+    val html = snapshot.html ?: return
+    val foreground = tileColor(snapshot.style.foreground) ?: MaterialTheme.colorScheme.onSurface
+    val background = tileColor(snapshot.style.background) ?: Color.Transparent
+    InertHtmlView(html, foreground, background, snapshot.style.fontSize, messageId)
+}
+
+@Composable
+internal fun InertHtmlView(fragment: String, foreground: Color, background: Color, fontSize: Int, tileId: String) {
     val fontScale = LocalDensity.current.fontScale
     var height by remember(tileId) { mutableStateOf(120.dp) }
     val document = remember(fragment, foreground, background, fontSize) {

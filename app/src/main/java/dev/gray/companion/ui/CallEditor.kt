@@ -207,7 +207,7 @@ private fun CallNodeActions(
     val nodeReferences = referencesForWritingNode(references, node.id)
     val usesModel = action?.usesModel == true
     EditorTitleRow(node.title, { rename = true }) { Switch(node.enabled, { onChange(node.copy(enabled = it)) }) }
-    NodeTrajectoryControl(node, onChange)
+    NodeTrajectoryControl(node, onChange, usesModel)
     PromptTagSelector(tags, node.tagIds) { onChange(node.copy(tagIds = it)) }
     val primaryActions = actions.filter { it.presentation == ActionPresentation.STANDARD }
     val choices = primaryActions.map { it.id to (when (it.id) { "macro.process" -> "宏处理"; "prompt.inject" -> "管理提示词 · 插入/更新"; "prompt.remove" -> "管理提示词 · 移除"; "history.view.copy" -> "复制历史视图 · 压缩/展开"; else -> it.title }) }.distinctBy { it.first } +
@@ -277,10 +277,14 @@ private fun CallNodeActions(
 }
 
 @Composable
-internal fun NodeTrajectoryControl(node: WorkflowNode, onChange: (WorkflowNode) -> Unit) {
-    ToggleLine("记录轨迹", node.recordTrajectory) { onChange(node.copy(recordTrajectory = it)) }
-    Text("控制此节点写入的结果、状态和宏处理目标。关闭时只更新当前值；每轮分支与恢复数据仍完整保留，已有轨迹不会删除。",
-        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+internal fun NodeTrajectoryControl(node: WorkflowNode, onChange: (WorkflowNode) -> Unit, usesModel: Boolean = false) {
+    if (usesModel) Text("模型结果自动保存；若有原始输出，也会留档。", style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+    else {
+        ToggleLine("记录轨迹", node.recordTrajectory) { onChange(node.copy(recordTrajectory = it)) }
+        Text("控制此节点写入的结果、状态和宏处理目标。关闭时只更新当前值；每轮分支与恢复数据仍完整保留，已有轨迹不会删除。",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
 }
 
 internal fun nextCallOutputKey(used: Set<String>, stem: String): String = generateSequence(1) { it + 1 }.map { "${stem}_$it" }.first { it !in used }

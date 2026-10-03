@@ -6,7 +6,7 @@ internal data class InvocationEnvironment(
     val input: String,
     val history: HistoryContext,
     val currentUserMessageId: String?,
-    val executionVersion: Int = 3
+    val executionVersion: Int = 4
 )
 
 internal data class RenderedInvocationInput(

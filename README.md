@@ -8,7 +8,7 @@ Native resource editors provide a shared display name / English slug dialog and 
 
 Regex output copies, workflow-completed triggers, source-backed memory and independently versioned History views use the same execution/recovery core. Generic local HTML/CSS macro templates supplement native text/progress/XML displays without adding a JSON-specific dashboard.
 
-New calls replace the current macro value by default, with optional trajectory recording and an independent option for regex copies. Complete per-round snapshots remain available for branches, variants and recovery; new model BODY replies retain raw output separately from edited/processed display text. Existing configurations and older execution journals keep their recording behavior. Wire5 reads1–5, new execution3, SQLite table1.
+New executions always archive model results with their captured original text. Program writes normally replace the current value, with optional trajectory recording and an independent option for regex copies. Complete per-round snapshots remain available for branches, variants and recovery. An optional main-call body source freezes a processed macro's TEXT or inert HTML into the original message and generation branch; older floors never resolve today's macros or templates. HTML has explicit semantic text for History/copy/export. Wire6 reads1–6, new execution4, older execution1–3 retain their behavior, SQLite table1.
 
 This is a development project. Real provider behavior, broad device adaptation and runtime plugin installation are not claimed as complete.
 

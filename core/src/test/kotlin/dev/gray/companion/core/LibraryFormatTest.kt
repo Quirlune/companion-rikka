@@ -18,7 +18,7 @@ class LibraryFormatTest {
         val pending = original.copy(pendingRun = recovery)
         val legacy = frozen.copy(sessions = listOf(pending), selectedSessionId = original.id,
             savedChats = listOf(SavedChat(id = "archive", folderId = "folder", snapshot = pending)))
-        for (version in 1..4) {
+        for (version in 1..5) {
         // Encode the actual legacy shape, rather than a current model with an old version number.
         val oldDocument = withoutMetadata(LibraryFormat.json.encodeToJsonElement(Library.serializer(), legacy))
         val oldWire = oldDocument.toString().replace("\"schemaVersion\":1", "\"schemaVersion\":$version")
@@ -70,19 +70,27 @@ class LibraryFormatTest {
     @Test fun currentHeadsRawBodyAndPoliciesRoundTrip() {
         val origin = ResultOrigin("main", "flow", "node")
         val current = MacroHead(3, origin, turn = 2, gap = MacroGap(1))
-        val reply = ChatMessage(role = Role.ASSISTANT, text = "visible", rawText = "<think>raw</think>visible")
+        val display = BodyDisplaySnapshot("body", "<p>visible</p>", MacroTileStyle(fontSize = 18))
+        val reply = ChatMessage(role = Role.ASSISTANT, text = "visible", rawText = "<think>raw</think>visible",
+            bodyDisplay = display, textRevisions = listOf(TextRevision(id = "draft", text = "draft",
+                bodyDisplay = display.copy(html = "<p>draft</p>"))))
         val session = Session(results = mapOf("reply" to "processed"), messages = listOf(reply),
-            currentOnlyMacros = mapOf("result.reply" to current))
+            currentOnlyMacros = mapOf("result.reply" to current), macroHistory = mapOf("result.model" to listOf(
+                MacroVersion(1, "processed", origin, rawText = "raw model response"))))
         val node = WorkflowNode(recordTrajectory = false,
             regexOutputCopy = RegexOutputCopy(recordTrajectory = false))
         val library = LibraryFormat.upgrade(Library(sessions = listOf(session), mainCalls = listOf(
-            MainCall(name = "Main", workflows = listOf(Workflow(nodes = listOf(node)))))))
+            MainCall(name = "Main", workflows = listOf(Workflow(nodes = listOf(node))), bodySourceTileId = "body",
+                bodyTextTemplate = "{{result.reply}}", tiles = listOf(MacroTile(id = "body", kind = MacroTileKind.HTML,
+                    htmlTemplate = "<p>visible</p>"))))))
         val restored = LibraryFormat.decode(LibraryFormat.encode(library))
         assertEquals(library, restored)
         assertFalse(restored.mainCalls.single().workflows.single().nodes.single().recordTrajectory)
         assertFalse(restored.mainCalls.single().workflows.single().nodes.single().regexOutputCopy.recordTrajectory)
         assertEquals(current, restored.sessions.single().currentOnlyMacros["result.reply"])
         assertEquals(reply.rawText, restored.sessions.single().messages.single().rawText)
+        assertEquals(display, restored.sessions.single().messages.single().bodyDisplay)
+        assertEquals("raw model response", restored.sessions.single().macroHistory.getValue("result.model").single().rawText)
     }
 
     private fun withoutMetadata(value: JsonElement): JsonElement = when (value) {
@@ -90,7 +98,8 @@ class LibraryFormatTest {
         is JsonObject -> JsonObject(value.filterKeys { key ->
             key !in setOf("slug", "tagIds", "promptTags", "afterWorkflowId", "regexOutputCopy",
                 "historyMemory", "historyWrites", "completedWorkflowIds", "htmlTemplate", "htmlCss", "htmlBindings",
-                "recordTrajectory", "currentOnlyMacros", "headWrites", "headRemovals", "precedingGap", "rawText") &&
+                "recordTrajectory", "currentOnlyMacros", "headWrites", "headRemovals", "precedingGap", "rawText",
+                "bodySourceTileId", "bodyTextTemplate", "bodyDisplay", "bodyDisplayReceipt") &&
                 !(key == "title" && "key" in value && "text" in value && "category" in value)
         }.mapValues { (_, item) -> withoutMetadata(item) })
         else -> value

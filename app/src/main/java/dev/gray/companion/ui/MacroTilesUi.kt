@@ -40,21 +40,18 @@ import dev.gray.companion.core.Library
 import dev.gray.companion.core.HtmlTemplate
 import dev.gray.companion.core.MacroHtmlBinding
 import dev.gray.companion.core.MacroHtmlValueKind
-import dev.gray.companion.core.MacroResolver
+import dev.gray.companion.core.MacroDisplay
+import dev.gray.companion.core.ResolvedMacroDisplay
 import dev.gray.companion.core.MacroTile
 import dev.gray.companion.core.MacroTileKind
 import dev.gray.companion.core.MacroTilePlacement
 import dev.gray.companion.core.MacroStatusField
 import dev.gray.companion.core.MacroTileStyle
-import dev.gray.companion.core.MacroOutputContracts
-import dev.gray.companion.core.MacroReferences
 import dev.gray.companion.core.OutputSlot
-import dev.gray.companion.core.ResultReferences
 import dev.gray.companion.core.SafePatterns
 import dev.gray.companion.core.StatusFields
 import dev.gray.companion.core.Session
 import dev.gray.companion.core.TileCss
-import dev.gray.companion.core.loadedCallGroups
 import kotlinx.serialization.json.Json
 
 @Composable
@@ -226,49 +223,16 @@ private val TILE_COLOR = Regex("^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$")
 private fun validTileColor(value: String): Boolean = value.isEmpty() || TILE_COLOR.matches(value)
 internal fun tileColor(value: String): Color? = if (validTileColor(value) && value.isNotEmpty()) Color(android.graphics.Color.parseColor(value)) else null
 
-internal data class ResolvedTile(val tile: MacroTile, val value: String, val error: String?, val waiting: Boolean = false, val html: String? = null)
+internal typealias ResolvedTile = ResolvedMacroDisplay
 
-internal fun configuredMacroTiles(library: Library, session: Session): List<MacroTile> {
-    val main = library.mainCalls.firstOrNull { it.id == session.mainCallId }
-    return main?.tiles.orEmpty() + library.loadedCallGroups(session, main).flatMap { it.tiles }
-}
+internal fun configuredMacroTiles(library: Library, session: Session): List<MacroTile> = MacroDisplay.configuredTiles(library, session)
 
 internal fun hasMacroSidebar(library: Library, session: Session): Boolean =
     configuredMacroTiles(library, session).any { it.enabled && it.placement == MacroTilePlacement.SIDEBAR }
 
 internal fun resolveMacroTiles(library: Library, session: Session, placement: MacroTilePlacement): List<ResolvedTile> {
-    val resolver = MacroResolver(library, session)
-    return configuredMacroTiles(library, session).filter { it.enabled && it.placement == placement }.map { tile ->
-        val patternIssue = SafePatterns.validate(tile.pattern, tile.captureGroup)
-        val rendered = resolver.render(tile.template)
-        val currentSource = MacroOutputContracts.sourceAddress(tile)?.let { address ->
-            when {
-                address.startsWith("result.") -> MacroReferences.currentVersion(library, session, address) != null ||
-                    session.results.containsKey(address.removePrefix("result."))
-                address.startsWith("state.") -> session.state.containsKey(address.removePrefix("state."))
-                else -> false
-            }
-        } == true
-        val pending = tile.kind in setOf(MacroTileKind.STATUS, MacroTileKind.HTML) && rendered.isEmpty() && isDeclaredPending(tile, library, session)
-        val contract = if (patternIssue == null && !pending && (currentSource || tile.kind == MacroTileKind.HTML))
-            MacroOutputContracts.read(tile, rendered) else null
-        val value = if (patternIssue == null) contract?.value ?: SafePatterns.extract(tile.pattern, rendered, tile.captureGroup).orEmpty() else ""
-        val error = patternIssue ?: contract?.error
-        val waiting = pending && value.isEmpty() && error == null
-        ResolvedTile(tile, value, error, waiting, contract?.html)
-    }.filter { !it.tile.hideWhenEmpty || it.value.isNotEmpty() || it.error != null || it.waiting }
-}
-
-private fun isDeclaredPending(tile: MacroTile, library: Library, session: Session): Boolean {
-    val address = tile.template.trim().removeSurrounding("{{", "}}").trim()
-    val key = when {
-        address.startsWith("result.") -> address.removePrefix("result.")
-        address.startsWith("macro.") -> address.removePrefix("macro.")
-        else -> return false
-    }
-    if (key.isBlank() || key.any { it in "@#{}" }) return false
-    if (ResultReferences.declarations(library, session).none { it.key == key }) return false
-    return "result.$key" !in session.macroHistory && "result.$key" !in session.currentOnlyMacros && key !in session.results
+    val bodySourceId = library.mainCalls.firstOrNull { it.id == session.mainCallId }?.bodySourceTileId
+    return MacroDisplay.resolve(library, session, placement).filterNot { it.tile.id == bodySourceId }
 }
 
 /** Current dashboard only. Historical message regions are not rebound to later macro values. */
@@ -313,13 +277,14 @@ internal fun MacroTileDashboard(library: Library, session: Session) {
 @Composable
 internal fun CurrentTile(item: ResolvedTile) {
     val tile = item.tile
+    val error = item.error
     val style = tile.style
     val fg = tileColor(style.foreground) ?: MaterialTheme.colorScheme.onSurface
     val bg = tileColor(style.background) ?: MaterialTheme.colorScheme.surfaceContainer
     OutlinedCard(shape = RoundedCornerShape(style.cornerRadius.dp), colors = CardDefaults.outlinedCardColors(containerColor = bg), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(tile.title, color = fg, style = MaterialTheme.typography.labelMedium)
-            if (item.error != null) Text(item.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            if (error != null) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             else when (tile.kind) {
                 MacroTileKind.TEXT -> SelectionContainer { Text(item.value, color = fg, fontSize = style.fontSize.sp) }
                 MacroTileKind.NUMBER -> {

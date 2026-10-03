@@ -92,7 +92,7 @@ object HistoryMemory {
         val resolved = if ((message.activeTextRevisionId ?: message.id) == ref.revisionId) message else {
             val revision = message.textRevisions.firstOrNull { it.id == ref.revisionId } ?: return null
             message.copy(text = revision.text, activeTextRevisionId = revision.id,
-                activeTextRevisionCreatedAt = revision.createdAt)
+                activeTextRevisionCreatedAt = revision.createdAt, bodyDisplay = revision.bodyDisplay)
         }
         return resolved.takeIf { source(it) == ref }
     }

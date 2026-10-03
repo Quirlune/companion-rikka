@@ -116,11 +116,11 @@ object MacroReferences {
     fun publish(
         history: MutableMap<String, List<MacroVersion>>, address: String, text: String, enabled: Boolean,
         origin: ResultOrigin, turn: Int, turnId: String?, valueOrigin: ResultOrigin? = null,
-        minimumVersion: Int = 0, precedingGap: MacroGap? = null
+        minimumVersion: Int = 0, precedingGap: MacroGap? = null, rawText: String? = null
     ): MacroVersion {
         val previous = history[address].orEmpty()
         val version = MacroVersion(Math.addExact(maxOf(previous.lastOrNull()?.version ?: 0, minimumVersion), 1),
-            text, origin, enabled, turn, turnId, valueOrigin, precedingGap)
+            text, origin, enabled, turn, turnId, valueOrigin, precedingGap, rawText)
         history[address] = previous + version
         return version
     }
