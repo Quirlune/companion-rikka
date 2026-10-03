@@ -361,6 +361,25 @@ fun SettingPreferencesUIPage(vm: SettingVM = koinViewModel()) {
                             }
                         }
                     )
+                    item(
+                        headlineContent = { Text("正文与状态面板间距") },
+                        supportingContent = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Slider(
+                                    value = displaySetting.companionBodyStatusGapDp.coerceIn(0f, 48f),
+                                    onValueChange = { updateDisplaySetting(displaySetting.copy(companionBodyStatusGapDp = it)) },
+                                    valueRange = 0f..48f,
+                                    steps = 11,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Text("${displaySetting.companionBodyStatusGapDp.roundToInt()} dp")
+                            }
+                        },
+                    )
                 }
             }
 

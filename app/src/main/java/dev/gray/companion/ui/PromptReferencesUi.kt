@@ -76,20 +76,27 @@ internal fun promptReferenceChoices(
     val historyOwners = listOfNotNull(mainOwner)
     add(choice("结构化历史", "{{history}}", "history", "聊天历史", "按主调用的历史规则插入消息", historyOwners))
     add(choice("原始历史", "{{history.raw}}", "history", "聊天历史", "读取原始 BODY 楼层", historyOwners))
+    add(choice("最终展示正文历史", "{{history.display}}", "history", "聊天历史", "读取最终语义 BODY 正文；与用户看到的正文一致", historyOwners))
+    add(choice("模型原文历史", "{{history.model}}", "history", "聊天历史", "读取已归档的初始模型原文；旧楼层若未留存原文会报告缺失", historyOwners))
     add(choice("历史纯文本", "{{history.text}}", "history", "聊天历史", "将投影后的历史展开为文本", historyOwners))
     add(choice("历史楼层数量", "{{history.count}}", "history", "聊天历史", "投影后的历史消息数量", historyOwners))
     add(choice("历史摘要与记忆标识", "{{history.summary}}", "history", "聊天历史", "历史处理成功生成的摘要和可供普通调用选择的记忆段标识；未生成时为空", historyOwners))
+    add(choice("展示正文记忆标识", "{{history.display.summary}}", "history", "聊天历史", "最终展示正文来源的有效摘要与记忆段标识", historyOwners))
+    add(choice("模型原文记忆标识", "{{history.model.summary}}", "history", "聊天历史", "模型初始原文来源的有效摘要与记忆段标识", historyOwners))
     add(choice("完整原始结构化历史", "{{type:builtin.in:history.name:messages}}", "history", "聊天历史", "原始 BODY 楼层；整块插入时保留角色与消息顺序", historyOwners))
+    add(choice("完整模型原文结构化历史", "{{type:builtin.in:history.name:messages.source:model}}", "history", "聊天历史", "读取已归档的初始模型原文；整块插入时保留角色与消息顺序", historyOwners))
     add(choice("完整处理后结构化历史", "{{type:builtin.in:history.name:context}}", "history", "聊天历史", "按主调用历史规则与记忆摘要投影；整块插入时保留消息角色", historyOwners))
     add(choice("最早三层原文", "{{type:builtin.in:history.name:messages.from:start-1.through:start-3}}", "history", "聊天历史", "按最早三条 BODY 楼层选取", historyOwners))
     add(choice("最近三层原文", "{{type:builtin.in:history.name:messages.from:end-3.through:end-1}}", "history", "聊天历史", "按最近三条 BODY 楼层选取", historyOwners))
     add(choice("中间区段原文", "{{type:builtin.in:history.name:messages.from:percent-34.through:percent-66}}", "history", "聊天历史", "按历史楼层位置的百分比选取", historyOwners))
     session?.historyMemory?.views.orEmpty().forEach { (viewId, revisions) ->
         revisions.lastOrNull()?.let { latest ->
-            add(choice("历史副本 · ${latest.name}", "{{type:builtin.in:history.name:context.view:$viewId}}", "history", "聊天历史",
-                "副本第 ${latest.revision} 版 · 结构化历史，可再指定范围；原聊天楼层保持独立", historyOwners))
-            add(choice("历史副本 · ${latest.name} · 第 ${latest.revision} 版", "{{type:builtin.in:history.name:context.view:$viewId.revision:${latest.revision}}}", "history", "聊天历史",
-                "固定读取第 ${latest.revision} 版", historyOwners))
+            val source = if (latest.sourceKind == HistorySourceKind.MODEL_RAW) ".source:model" else ""
+            val sourceTitle = if (latest.sourceKind == HistorySourceKind.MODEL_RAW) "模型初始原文" else "最终展示正文"
+            add(choice("历史副本 · ${latest.name}", "{{type:builtin.in:history.name:context$source.view:$viewId}}", "history", "聊天历史",
+                "副本第 ${latest.revision} 版 · $sourceTitle · 结构化历史，可再指定范围；原聊天楼层保持独立", historyOwners))
+            add(choice("历史副本 · ${latest.name} · 第 ${latest.revision} 版", "{{type:builtin.in:history.name:context$source.view:$viewId.revision:${latest.revision}}}", "history", "聊天历史",
+                "固定读取第 ${latest.revision} 版 · $sourceTitle", historyOwners))
         }
     }
     val entries = card?.let(CharacterFields::normalize)?.entries.orEmpty()
@@ -325,6 +332,7 @@ internal fun PromptReferenceSheet(
 private fun HistoryReferenceComposer(choices: List<PromptReferenceChoice>, onInsert: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     var processed by remember { mutableStateOf(false) }
+    var source by remember { mutableStateOf("display") }
     var range by remember { mutableStateOf(true) }
     var fromAnchor by remember { mutableStateOf("end") }
     var fromNumber by remember { mutableStateOf("3") }
@@ -334,12 +342,18 @@ private fun HistoryReferenceComposer(choices: List<PromptReferenceChoice>, onIns
     var fixedRevision by remember { mutableStateOf(false) }
     var revision by remember { mutableStateOf("1") }
     val viewPattern = Regex("\\.view:([a-z][a-z0-9_-]*)")
-    val views = choices.mapNotNull { choice -> viewPattern.find(choice.macro)?.groupValues?.getOrNull(1)?.let { it to choice.title.substringBefore(" · 第") } }.distinctBy { it.first }
+    val views = choices.filter { (".source:model" in it.macro) == (source == "model") }
+        .mapNotNull { choice -> viewPattern.find(choice.macro)?.groupValues?.getOrNull(1)?.let { it to choice.title.substringBefore(" · 第") } }
+        .distinctBy { it.first }
     TextButton(onClick = { open = !open }) { Text(if (open) "收起历史范围选择" else "自选历史范围与副本") }
     if (!open) return
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("每条引用独立选择楼层；整块插入可保留消息角色。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         ChoiceLine("读取内容", processed, listOf(false to "原始楼层", true to "历史规则与摘要处理后")) { processed = it }
+        ChoiceLine("正文来源", source, listOf("display" to "最终展示正文", "model" to "模型初始原文")) {
+            source = it; viewId = null; fixedRevision = false
+        }
+        if (source == "model") Text("早期楼层若没有归档模型原文，会明确提示缺失。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             SuggestionChip(onClick = { range = true; fromAnchor = "start"; fromNumber = "1"; throughAnchor = "start"; throughNumber = "3" }, label = { Text("最早三层") })
             SuggestionChip(onClick = { range = true; fromAnchor = "end"; fromNumber = "3"; throughAnchor = "end"; throughNumber = "1" }, label = { Text("最近三层") })
@@ -364,6 +378,7 @@ private fun HistoryReferenceComposer(choices: List<PromptReferenceChoice>, onIns
         val okay = (!range || (valid(fromAnchor, fromNumber) && valid(throughAnchor, throughNumber))) && (!fixedRevision || viewId == null || (revision.toIntOrNull() ?: 0) > 0)
         val expression = buildString {
             append("{{type:builtin.in:history.name:${if (processed) "context" else "messages"}")
+            append(".source:$source")
             if (range) append(".from:$fromAnchor-$fromNumber.through:$throughAnchor-$throughNumber")
             viewId?.let { append(".view:$it") }
             if (viewId != null && fixedRevision) append(".revision:$revision")

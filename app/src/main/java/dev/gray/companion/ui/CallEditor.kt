@@ -305,7 +305,7 @@ private fun HistoryActionEditor(node: WorkflowNode, onChange: (WorkflowNode) -> 
     val copyView = node.actionId == "history.view.copy"
     val args = node.arguments
     fun set(name: String, value: String) = onChange(node.copy(arguments = args + (name to value)))
-    Text("历史来源使用完整引用，如 {{type:builtin.in:history.name:messages.from:end-3.through:end-1}}。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Text("历史来源使用完整引用；在下方选取资料中可选最终正文／模型原文、范围与副本。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     val sourceExpression = args["source"] ?: "{{history}}"
     TextFieldLine("来源历史引用", sourceExpression, { set("source", it) }, minLines = 2)
     if (HistoryViews.selection(sourceExpression) == null) Text("请输入有效的历史引用。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)

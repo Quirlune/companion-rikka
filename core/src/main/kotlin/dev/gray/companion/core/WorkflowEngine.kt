@@ -41,7 +41,7 @@ class WorkflowEngine(
         decision: RecoveryDecision,
         onUpdate: suspend (RunUpdate) -> Unit = {}
     ): RunResult {
-        if (recovery.formatVersion != 1 || recovery.executionVersion !in 1..4)
+        if (recovery.formatVersion != 1 || recovery.executionVersion !in 1..5)
             return conflict(recovery, "恢复断点版本不受支持；已接受的数据可保留，请结束此断点后开始新一轮")
         if (decision.nodeKey !in recovery.failures.map { it.nodeKey } ||
             currentSession.pendingRun?.id != recovery.id ||
@@ -164,7 +164,7 @@ class WorkflowEngine(
         onUpdate: suspend (RunUpdate) -> Unit
     ): RunResult {
         val traces = mutableListOf<RunTrace>()
-        val executionVersion = previous?.executionVersion ?: 4
+        val executionVersion = previous?.executionVersion ?: 5
         val legacy = executionVersion == 1
         val updateMutex = Mutex()
         suspend fun trace(ref: PlannedNode?, status: String, detail: String) {
@@ -199,7 +199,9 @@ class WorkflowEngine(
         val groups = library.loadedCallGroups(session, main)
         groups.forEach { group -> group.stateDefaults.forEach { (key, value) -> stagedState.putIfAbsent(key, value) } }
         val processor = main.history.processor
-        val processingCandidate = HistoryContext(library, session, main, legacyProcessing = legacy).pendingCandidate()
+        val initialHistory = HistoryContext(library, session, main, legacyProcessing = legacy, executionVersion = executionVersion)
+        val processingCandidate = initialHistory.pendingCandidate()
+        initialHistory.issues.forEach { trace(null, "history", it.message) }
         val workflows = main.workflows + groups.flatMap { it.workflows } +
             listOfNotNull(processor.workflow.takeIf { it.enabled })
         val availableActions = actions.snapshot()
@@ -293,7 +295,7 @@ class WorkflowEngine(
         val recoveryBase = previous ?: RunRecovery(
             id = newId(), sessionId = session.id, turnId = currentUserMessageId.orEmpty(), input = input,
             checkpoint = MessageOperations.captureCheckpoint(session), initialSession = session.copy(pendingRun = null),
-            frozenResources = freezeResources(library, session), executionVersion = 4
+            frozenResources = freezeResources(library, session), executionVersion = 5
         )
         fun replayIncomplete(): Boolean = previous != null && !replayedOldKeys.containsAll(oldAcceptedKeys)
         fun recoverySnapshot(): RunRecovery = recoveryBase.copy(
@@ -467,12 +469,12 @@ class WorkflowEngine(
                 val environmentId = "$event:$waveIndex"
                 environments.putIfAbsent(environmentId, RecoveryEnvironment(environmentId, event,
                     waveSession.copy(pendingRun = null), eventInput))
-                val waveHistory = HistoryContext(library, waveSession, main, processingEvent, processingCandidate, legacy)
+                val waveHistory = HistoryContext(library, waveSession, main, processingEvent, processingCandidate, legacy, executionVersion = executionVersion)
                 val waveEnvironment = InvocationEnvironment(waveSession, eventInput, waveHistory, currentUserMessageId, executionVersion)
                 val waveIssues = mutableListOf<Issue>()
                 val waveRenderer = TemplateRenderer(
-                    loadedResources(library, waveSession, waveState, waveResults, eventInput, waveIssues, waveOrigins, waveHistory),
-                    eventInput, waveResults, waveState, waveIssues, waveOrigins, waveSession, waveHistory
+                    loadedResources(library, waveSession, waveState, waveResults, eventInput, waveIssues, waveOrigins, waveHistory, executionVersion),
+                    eventInput, waveResults, waveState, waveIssues, waveOrigins, waveSession, waveHistory, executionVersion
                 )
                 // Admit once at the first ready wave of this level, using one shared snapshot
                 // for peers. Higher levels can observe the completed lower levels.
@@ -604,7 +606,7 @@ class WorkflowEngine(
                     val contextState = contextSession.state
                     val contextResults = contextSession.results
                     val contextHistory = if (frozenEnvironment == null) waveHistory else
-                        HistoryContext(library, contextSession, main, processingEvent, processingCandidate, legacy)
+                        HistoryContext(library, contextSession, main, processingEvent, processingCandidate, legacy, executionVersion = executionVersion)
                     val preparation = try {
                         invocationPreparer.prepare(ref, InvocationEnvironment(contextSession,
                             frozenEnvironment?.input ?: eventInput, contextHistory, currentUserMessageId, executionVersion),
@@ -685,8 +687,8 @@ class WorkflowEngine(
                             val automaticSegment = if (!legacy && processingEvent && processingCandidate != null &&
                                 item.ref.workflow.id == processor.workflow.id && item.ref.node.id ==
                                     processor.workflow.nodes.lastOrNull { it.enabled && it.outputKey == processor.outputKey }?.id &&
-                                item.outcome.text.isNotBlank()) HistoryMemory.segment("历史摘要", item.outcome.text,
-                                    processingCandidate.messages, processor.workflow.id) else null
+                                item.outcome.text.isNotBlank()) HistoryMemory.segmentFromSources("历史摘要", item.outcome.text,
+                                    processingCandidate.sources, processor.workflow.id) else null
                             outcomePublisher.prepare(item.ref, item.outcome,
                                 snapshot(stagedState.toMap(), stagedResults.toMap()).copy(messages = session.messages + replies),
                                 compiledModelTargets, processingEvent, automaticSegment, item.candidate.rawModelText)
@@ -853,7 +855,7 @@ class WorkflowEngine(
                 it.outputSlot == OutputSlot.BODY && !it.deleted && it.text.isNotBlank() }
             if (target != null) {
                 val finalSession = snapshot(stagedState.toMap(), visibleResults()).copy(messages = session.messages + replies)
-                val frozen = MacroDisplay.freezeBody(library, finalSession, main, target)
+                val frozen = MacroDisplay.freezeBody(library, finalSession, main, target, executionVersion)
                 if (frozen.error != null) trace(null, "display", frozen.error)
                 else {
                     val publicationContext = currentCoroutineContext()

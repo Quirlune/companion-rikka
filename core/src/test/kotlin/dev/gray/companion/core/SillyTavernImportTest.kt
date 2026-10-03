@@ -44,25 +44,30 @@ class SillyTavernImportTest {
         assertEquals(7.0, fields.last().maximum, 0.0)
         assertTrue(imported.warnings.contains("导入说明：仅导入安全内容"))
         assertTrue(imported.warnings.none { it.contains("格式分隔符") })
+        // The imported status contract requires every declared field, not only location.
+        val statusReply = "<StatusBlock><location>咖啡馆</location><date>2026-10-03</date>" +
+            "<time>下午</time><weather>晴</weather><top>衬衫</top><bottom>长裤</bottom>" +
+            "<shoes>运动鞋</shoes><pose>坐着</pose><posture>交谈</posture><state>平静</state>" +
+            "<closeup>微笑</closeup><person>甲和角色</person><love>42</love><level>1</level></StatusBlock>"
         val gatewayCalls = mutableListOf<List<ChatMessage>>()
         val gateway = object : ModelGateway {
             override suspend fun generate(profile: ModelProfile, messages: List<ChatMessage>,
                                           onDelta: suspend (String) -> Unit): String {
                 gatewayCalls += messages
                 return if (gatewayCalls.size == 1) "好的" else
-                    "前缀<StatusBlock><location>咖啡馆</location></StatusBlock>后缀"
+                    "前缀${statusReply}后缀"
             }
         }
         val profile = ModelProfile(id = "model", model = "test")
         val active = bundle.copy(profiles = listOf(profile), selectedProfileId = profile.id,
             sessions = listOf(current))
         val result = WorkflowEngine().run(active, current, "coffee", gateway)
-        assertEquals(RunStatus.SUCCESS, result.status)
+        assertEquals(result.traces.toString(), RunStatus.SUCCESS, result.status)
         assertEquals(2, gatewayCalls.size)
         assertTrue(gatewayCalls.first().any { it.text == "记住咖啡" })
         assertTrue(gatewayCalls.last().any { it.text == "好的" })
         assertEquals("好的", result.replies.single().text)
-        assertEquals("<StatusBlock><location>咖啡馆</location></StatusBlock>", result.results["status"])
+        assertEquals(statusReply, result.results["status"])
         val rejected = runCatching { SillyTavernImport.convert(envelope.replace("\"sanitized\":true", "\"sanitized\":false"), Library()) }
         assertTrue(rejected.isFailure)
     }

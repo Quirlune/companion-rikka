@@ -6,7 +6,7 @@ internal data class InvocationEnvironment(
     val input: String,
     val history: HistoryContext,
     val currentUserMessageId: String?,
-    val executionVersion: Int = 4
+    val executionVersion: Int = 5
 )
 
 internal data class RenderedInvocationInput(
@@ -29,9 +29,9 @@ internal class InvocationPreparer(private val library: Library) {
         val issues = mutableListOf<Issue>()
         val renderer = TemplateRenderer(
             loadedResources(library, session, session.state, session.results, environment.input,
-                issues, session.resultOrigins, environment.history),
+                issues, session.resultOrigins, environment.history, environment.executionVersion),
             environment.input, session.results, session.state, issues, session.resultOrigins,
-            session, environment.history
+            session, environment.history, environment.executionVersion
         )
         val input = try {
             TextProcessing.apply(ref.node.inputProcessing,
@@ -64,7 +64,7 @@ internal class InvocationPreparer(private val library: Library) {
         val session = environment.session
         val preview = PromptCompiler().preview(
             library, session, ref.node, environment.input, session.results, session.state,
-            environment.currentUserMessageId, session.resultOrigins, environment.history, inputs.text
+            environment.currentUserMessageId, session.resultOrigins, environment.history, inputs.text, environment.executionVersion
         )
         val configIssues = RegexOutputCopies.validate(ref.node.regexOutputCopy, "node.${ref.node.id}.regexOutputCopy") +
             if (ref.node.regexOutputCopy.enabled && ref.node.regexOutputCopy.outputKey == ref.node.outputKey)

@@ -75,8 +75,9 @@ internal fun HistoryConfigEditor(
     val messages = session?.messages.orEmpty().filter { it.outputSlot == OutputSlot.BODY && !it.deleted }
     val currentById = messages.associateBy { it.id }
     val memoryByFloor = session?.historyMemory?.segments.orEmpty().values.flatMap { segment -> segment.sources.map { source ->
-        val current = currentById[source.messageId]?.let { HistoryMemory.source(it) == source } == true
-        source.messageId to (segment.title.ifBlank { segment.id.take(12) } + if (current) "" else "（旧版本）")
+        val current = currentById[source.messageId]?.let { runCatching { HistoryMemory.source(it, source.sourceKind) == source }.getOrDefault(false) } == true
+        val sourceLabel = if (source.sourceKind == HistorySourceKind.MODEL_RAW) "模型原文 · " else ""
+        source.messageId to (sourceLabel + segment.title.ifBlank { segment.id.take(12) } + if (current) "" else "（旧版本）")
     } }.groupBy({ it.first }, { it.second })
     val choices = messages.map { message ->
         val marker = memoryByFloor[message.id].orEmpty().distinct().takeIf { it.isNotEmpty() }?.joinToString("、", prefix = " · 记忆：") ?: ""
@@ -132,9 +133,11 @@ internal fun HistoryMemoryInspector(session: Session?) {
             OutlinedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(segment.title.ifBlank { "记忆段 ${segment.id.take(8)}" }, style = MaterialTheme.typography.titleSmall)
                 Text(segment.summary, style = MaterialTheme.typography.bodyMedium)
+                val sourceLabel = if (segment.sources.firstOrNull()?.sourceKind == HistorySourceKind.MODEL_RAW) "模型初始原文" else "最终展示正文"
+                Text("来源：$sourceLabel", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("来源楼层：" + segment.sources.joinToString("、") { source ->
                     floorNumbers[source.messageId]?.let { floor ->
-                        "第 ${floor} 层" + if (original.firstOrNull { it.id == source.messageId }?.let { HistoryMemory.source(it) == source } == true) "" else "（旧版本）"
+                        "第 ${floor} 层" + if (original.firstOrNull { it.id == source.messageId }?.let { runCatching { HistoryMemory.source(it, source.sourceKind) == source }.getOrDefault(false) } == true) "" else "（旧版本）"
                     } ?: "已不在当前聊天 · ${source.messageId.take(8)}"
                 }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("记忆标识：${segment.id}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -145,8 +148,9 @@ internal fun HistoryMemoryInspector(session: Session?) {
         state?.views.orEmpty().forEach { (id, revisions) ->
             revisions.lastOrNull()?.let { latest ->
                 val captured = state?.captures?.get(latest.captureId).orEmpty()
-                Text("${latest.name} · $id · 第 ${latest.revision} 版 · ${captured.size} 层", style = MaterialTheme.typography.bodyMedium)
-                Text("{{type:builtin.in:history.name:context.view:$id}}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                val source = if (latest.sourceKind == HistorySourceKind.MODEL_RAW) ".source:model" else ""
+                Text("${latest.name} · $id · 第 ${latest.revision} 版 · ${captured.size} 层 · ${if (source.isNotEmpty()) "模型初始原文" else "最终展示正文"}", style = MaterialTheme.typography.bodyMedium)
+                Text("{{type:builtin.in:history.name:context$source.view:$id}}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             }
         }
         Text("楼层上的记忆标记由来源映射生成；主调用的历史配置可管理该楼层的角色与包装。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

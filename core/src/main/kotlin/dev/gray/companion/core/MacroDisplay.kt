@@ -53,20 +53,20 @@ object MacroDisplay {
         return "result.$key" !in session.macroHistory && "result.$key" !in session.currentOnlyMacros && key !in session.results
     }
 
-    internal fun freezeBody(library: Library, session: Session, main: MainCall, reply: ChatMessage): BodyFreezeResult {
+    internal fun freezeBody(library: Library, session: Session, main: MainCall, reply: ChatMessage, executionVersion: Int = 5): BodyFreezeResult {
         val tile = configuredTiles(library, session).singleOrNull { it.id == main.bodySourceTileId }
             ?: return BodyFreezeResult(error = "正文磁贴未加载或不存在")
         if (!tile.enabled || tile.placement != MacroTilePlacement.CHAT ||
             tile.kind !in setOf(MacroTileKind.TEXT, MacroTileKind.HTML))
             return BodyFreezeResult(error = "正文来源必须是已启用的聊天 TEXT / HTML 磁贴")
-        val sourceResolver = MacroResolver(library, session)
+        val sourceResolver = MacroResolver(library, session, executionVersion = executionVersion)
         val display = evaluate(library, session, tile, sourceResolver)
         if (sourceResolver.issues.isNotEmpty()) return BodyFreezeResult(error = "正文磁贴引用不可用")
         if (display.error != null || display.waiting || display.value.isBlank())
             return BodyFreezeResult(error = display.error ?: "正文磁贴内容为空或尚未生成")
         val text = if (tile.kind == MacroTileKind.HTML) {
             if (main.bodyTextTemplate.isBlank()) return BodyFreezeResult(error = "HTML 正文需要语义文本模板")
-            val resolver = MacroResolver(library, session)
+            val resolver = MacroResolver(library, session, executionVersion = executionVersion)
             val semantic = resolver.render(main.bodyTextTemplate)
             if (resolver.issues.isNotEmpty() || semantic.isBlank() || display.html.isNullOrBlank())
                 return BodyFreezeResult(error = "HTML 正文或语义文本不可用")

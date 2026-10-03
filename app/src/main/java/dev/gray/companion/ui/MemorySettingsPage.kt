@@ -48,6 +48,12 @@ internal fun MemorySettingsPage(
         Text("历史上下文处理", style = MaterialTheme.typography.titleMedium)
         Text("积累足够新楼层时运行独立调用，结果作为摘要参与之后的历史投影。默认关闭。", style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ChoiceLine("记忆正文来源", processor.sourceKind, listOf(
+            HistorySourceKind.DISPLAY to "最终展示正文",
+            HistorySourceKind.MODEL_RAW to "模型初始原文",
+        )) { processor = processor.copy(sourceKind = it) }
+        Text("待处理历史会使用这里选定的来源；缺少旧模型原文时会报告缺失。", style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
         NumberLine("触发所需新增楼层", processor.minimumNewFloors, 1) { processor = processor.copy(minimumNewFloors = it) }
         NumberLine("保留最近楼层", processor.keepRecentFloors) { processor = processor.copy(keepRecentFloors = it) }
         ChoiceLine("摘要来自节点", processor.outputKey, processor.workflow.nodes.map { it.outputKey to "${it.title} · ${it.outputKey}" }) {

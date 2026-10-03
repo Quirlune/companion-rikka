@@ -18,7 +18,7 @@ class LibraryFormatTest {
         val pending = original.copy(pendingRun = recovery)
         val legacy = frozen.copy(sessions = listOf(pending), selectedSessionId = original.id,
             savedChats = listOf(SavedChat(id = "archive", folderId = "folder", snapshot = pending)))
-        for (version in 1..5) {
+        for (version in 1..6) {
         // Encode the actual legacy shape, rather than a current model with an old version number.
         val oldDocument = withoutMetadata(LibraryFormat.json.encodeToJsonElement(Library.serializer(), legacy))
         val oldWire = oldDocument.toString().replace("\"schemaVersion\":1", "\"schemaVersion\":$version")
@@ -99,7 +99,7 @@ class LibraryFormatTest {
             key !in setOf("slug", "tagIds", "promptTags", "afterWorkflowId", "regexOutputCopy",
                 "historyMemory", "historyWrites", "completedWorkflowIds", "htmlTemplate", "htmlCss", "htmlBindings",
                 "recordTrajectory", "currentOnlyMacros", "headWrites", "headRemovals", "precedingGap", "rawText",
-                "bodySourceTileId", "bodyTextTemplate", "bodyDisplay", "bodyDisplayReceipt") &&
+                "bodySourceTileId", "bodyTextTemplate", "bodyDisplay", "bodyDisplayReceipt", "sourceKind") &&
                 !(key == "title" && "key" in value && "text" in value && "category" in value)
         }.mapValues { (_, item) -> withoutMetadata(item) })
         else -> value

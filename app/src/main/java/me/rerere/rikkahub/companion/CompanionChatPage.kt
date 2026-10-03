@@ -30,6 +30,7 @@ import dev.gray.companion.core.RecoveryDecision
 import dev.gray.companion.core.RecoveryDecisionKind
 import dev.gray.companion.core.RecoveryFailure
 import dev.gray.companion.core.Role
+import dev.gray.companion.core.OutputSlot
 import me.rerere.ai.ui.UIMessagePart
 import dev.gray.companion.ui.MacroTileDashboard
 import dev.gray.companion.ui.FrozenHtmlBody
@@ -102,6 +103,16 @@ fun CompanionChatPage(
     val sidebarAvailable = remember(library, displaySession) { hasMacroSidebar(library, displaySession) }
     var sidebarOpen by remember(session.id) { mutableStateOf(false) }
     val history = remember(displaySession.messages, displaySession.turnRecords) { projectCompanionHistory(displaySession) }
+    val statusBodyNodeId = remember(displaySession.messages, history.nodes, history.logicalMessageIds) {
+        val bodyIndex = displaySession.messages.indexOfLast {
+            !it.deleted && it.role == Role.ASSISTANT && it.outputSlot == OutputSlot.BODY
+        }
+        val userIndex = displaySession.messages.indexOfLast { !it.deleted && it.role == Role.USER }
+        if (bodyIndex <= userIndex || bodyIndex < 0) null else {
+            val bodyId = displaySession.messages[bodyIndex].id
+            history.nodes.lastOrNull { node -> history.logicalMessageIds[node.currentMessage.id] == bodyId }?.id
+        }
+    }
     val frozenHtml = remember(history.bodyDisplays) {
         history.bodyDisplays.filterValues { it.html != null }.mapValues { (id, display) ->
             @Composable { FrozenHtmlBody(display, id.toString()) }
@@ -305,8 +316,12 @@ fun CompanionChatPage(
                     readOnly = activeBusy,
                     enableTts = false,
                     assistantTextContent = frozenHtml,
+                    afterMessage = { node ->
+                        if (node.id == statusBodyNodeId) MacroTileDashboard(
+                            library, displaySession, settings.displaySetting.companionBodyStatusGapDp.toInt()
+                        )
+                    },
                     footer = {
-                        MacroTileDashboard(library, displaySession)
                         RecoveryFooter(
                             recovery = pendingRecovery,
                             busy = !active || activeBusy,

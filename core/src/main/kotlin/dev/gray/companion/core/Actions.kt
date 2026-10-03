@@ -44,7 +44,7 @@ data class ActionContext(
     val session: Session? = null,
     val library: Library? = null,
     val workflowId: String = "",
-    val executionVersion: Int = 4,
+    val executionVersion: Int = 5,
     val macroTarget: MacroTargetSnapshot? = null
 )
 
@@ -162,12 +162,12 @@ class ActionRegistry {
                 }
                 val base = when (config.mode) {
                     MacroProcessMode.SET -> context.input
-                    MacroProcessMode.UPDATE -> existing ?: MacroResolver(library, session, context.input).render(config.initial)
+                    MacroProcessMode.UPDATE -> existing ?: MacroResolver(library, session, context.input, context.executionVersion).render(config.initial)
                     MacroProcessMode.COPY -> readCopySource(library, session, config.source, capturedTarget)
                         ?: error("源宏或指定版本不存在")
                     else -> error("处理模式无效")
                 }
-                val resolver = MacroResolver(library, session, context.input)
+                val resolver = MacroResolver(library, session, context.input, context.executionVersion)
                 val value = TextProcessing.apply(config.steps, base, context.state, context.results) { resolver.read(it) }
                 if (address.startsWith("state.")) ActionOutcome(value, stateWrites = mapOf(address.substring(6) to value))
                 else ActionOutcome(value, macroWrites = mapOf(address to value))
@@ -191,10 +191,10 @@ class ActionRegistry {
                 ActionFieldDescriptor("title", "记忆标题", defaultValue = "记忆")
             ))) { context ->
                 val session = requireNotNull(context.session)
-                val selection = HistoryViews.selection(context.arguments.getValue("source")) ?: error("History 来源引用无效")
+                val selection = HistoryViews.selection(context.arguments.getValue("source"), context.executionVersion) ?: error("History 来源引用无效")
                 val main = requireNotNull(context.library).mainCalls.first { it.id == session.mainCallId }
-                val segment = HistoryMemory.segment(context.arguments["title"].orEmpty(), context.input,
-                    HistoryViews.originalMessages(session, selection, main), context.workflowId)
+                val segment = HistoryMemory.segmentFromSources(context.arguments["title"].orEmpty(), context.input,
+                    HistoryViews.sources(session, selection, main), context.workflowId)
                 ActionOutcome(segment.id, historyWrites = HistoryMemoryPatch(segments = listOf(segment)))
             }
             .register(ActionDescriptor("history.view.copy", "History 压缩或展开副本", "通过记忆 ID 创建独立历史视图，不复制原文", listOf(
@@ -207,7 +207,7 @@ class ActionRegistry {
                 ActionFieldDescriptor("pattern", "ID 提取正则"),
                 ActionFieldDescriptor("captureGroup", "捕获组", ActionFieldType.NUMBER, defaultValue = "0", integer = true)
             ))) { context ->
-                val selection = HistoryViews.selection(context.arguments.getValue("source")) ?: error("History 来源引用无效")
+                val selection = HistoryViews.selection(context.arguments.getValue("source"), context.executionVersion) ?: error("History 来源引用无效")
                 val ids = HistoryActions.selectedIds(context.arguments["ids"].orEmpty(),
                     context.arguments["pattern"].orEmpty(), context.arguments.getValue("captureGroup").toInt())
                 val target = context.arguments.getValue("targetId").trim()

@@ -237,35 +237,38 @@ internal fun resolveMacroTiles(library: Library, session: Session, placement: Ma
 
 /** Current dashboard only. Historical message regions are not rebound to later macro values. */
 @Composable
-internal fun MacroTileDashboard(library: Library, session: Session) {
+internal fun MacroTileDashboard(library: Library, session: Session, bodyGapDp: Int = 12) {
     val resolved = remember(library, session) { resolveMacroTiles(library, session, MacroTilePlacement.CHAT) }
     if (resolved.isEmpty()) return
-    val statuses = resolved.filter { it.tile.kind == MacroTileKind.STATUS || it.tile.kind == MacroTileKind.HTML }
     val bodyIndex = session.messages.indexOfLast { !it.deleted && it.role == dev.gray.companion.core.Role.ASSISTANT && it.outputSlot == OutputSlot.BODY }
     val userIndex = session.messages.indexOfLast { !it.deleted && it.role == dev.gray.companion.core.Role.USER }
-    val showStatus = bodyIndex >= 0 && bodyIndex > userIndex
-    if (showStatus && statuses.isNotEmpty()) Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        statuses.forEach { item -> key(item.tile.id) {
-            if (item.tile.kind == MacroTileKind.HTML) HtmlMacroDisplay(item) else MacroStatusPanel(item.tile, item.value, item.error, item.waiting)
-        } }
-    }
+    if (bodyIndex < 0 || bodyIndex <= userIndex) return
+    val statuses = resolved.filter { it.tile.kind == MacroTileKind.STATUS || it.tile.kind == MacroTileKind.HTML }
     val legacyTiles = resolved.filter { it.tile.kind != MacroTileKind.STATUS && it.tile.kind != MacroTileKind.HTML }
-    if (legacyTiles.isEmpty()) return
-    var expanded by remember(session.id) { mutableStateOf(true) }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起当前磁贴" else "查看当前磁贴（${legacyTiles.size}）") }
-        if (expanded) Column(Modifier.fillMaxWidth().heightIn(max = 220.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(OutputSlot.BEFORE_BODY, OutputSlot.BODY, OutputSlot.AFTER_BODY).forEach { slot ->
-                val section = legacyTiles.filter { it.tile.slot == slot }
-                if (section.isNotEmpty()) {
-                    Text(when (slot) { OutputSlot.BEFORE_BODY -> "正文之前"; OutputSlot.BODY -> "正文区域"; OutputSlot.AFTER_BODY -> "正文之后" }, style = MaterialTheme.typography.labelMedium)
-                    BoxWithConstraints(Modifier.fillMaxWidth()) {
-                        val twoColumns = maxWidth >= 320.dp && LocalDensity.current.fontScale < 1.5f
-                        val halfWidth = (maxWidth - 8.dp) / 2
-                        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            section.forEach { item -> key(item.tile.id) {
-                                Box(if (twoColumns && item.tile.style.widthPercent == 50) Modifier.width(halfWidth) else Modifier.fillMaxWidth()) { CurrentTile(item) }
-                            } }
+    Column(Modifier.fillMaxWidth().padding(top = bodyGapDp.coerceIn(0, 48).dp)) {
+        if (statuses.isNotEmpty()) Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            statuses.forEach { item -> key(item.tile.id) {
+                if (item.tile.kind == MacroTileKind.HTML) HtmlMacroDisplay(item) else MacroStatusPanel(item.tile, item.value, item.error, item.waiting)
+            } }
+        }
+        if (legacyTiles.isNotEmpty()) {
+            var expanded by remember(session.id) { mutableStateOf(true) }
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起当前磁贴" else "查看当前磁贴（${legacyTiles.size}）") }
+                if (expanded) Column(Modifier.fillMaxWidth().heightIn(max = 220.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(OutputSlot.BEFORE_BODY, OutputSlot.BODY, OutputSlot.AFTER_BODY).forEach { slot ->
+                        val section = legacyTiles.filter { it.tile.slot == slot }
+                        if (section.isNotEmpty()) {
+                            Text(when (slot) { OutputSlot.BEFORE_BODY -> "正文之前"; OutputSlot.BODY -> "正文区域"; OutputSlot.AFTER_BODY -> "正文之后" }, style = MaterialTheme.typography.labelMedium)
+                            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                                val twoColumns = maxWidth >= 320.dp && LocalDensity.current.fontScale < 1.5f
+                                val halfWidth = (maxWidth - 8.dp) / 2
+                                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    section.forEach { item -> key(item.tile.id) {
+                                        Box(if (twoColumns && item.tile.style.widthPercent == 50) Modifier.width(halfWidth) else Modifier.fillMaxWidth()) { CurrentTile(item) }
+                                    } }
+                                }
+                            }
                         }
                     }
                 }

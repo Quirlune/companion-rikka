@@ -14,7 +14,8 @@ internal fun macroExpressionError(expression: String): String? {
     val base = tagged.substringBefore('@')
     val parts = base.split('.')
     val valid = base == "input" || base in setOf("user.name", "user.prompt", "history", "history.raw", "history.text",
-        "history.pending", "history.summary", "history.count", "history.pending.count") ||
+        "history.pending", "history.summary", "history.count", "history.pending.count",
+        "history.display", "history.model", "history.display.summary", "history.model.summary") ||
         (parts.size == 2 && parts[0] == "character" && parts[1].isNotBlank()) ||
         (parts[0] in setOf("category", "result", "results", "state", "macro") && base.substringAfter('.', "").isNotBlank()) ||
         (parts.size == 3 && parts[0] == "pack" && parts[1].isNotBlank() && parts[2].isNotBlank())
@@ -200,11 +201,11 @@ internal class MacroReadView(val library: Library, val session: Session) {
 }
 
 /** Shared display/template entry point. It never invokes a model or executes behavior. */
-class MacroResolver(library: Library, session: Session, input: String = "") {
+class MacroResolver(library: Library, session: Session, input: String = "", executionVersion: Int = 5) {
     private val mutableIssues = mutableListOf<Issue>()
     private val renderer = TemplateRenderer(
-        loadedResources(library, session, session.state, session.results, input, mutableIssues),
-        input, session.results, session.state, mutableIssues, session.resultOrigins, session
+        loadedResources(library, session, session.state, session.results, input, mutableIssues, executionVersion = executionVersion),
+        input, session.results, session.state, mutableIssues, session.resultOrigins, session, executionVersion = executionVersion
     )
     val issues: List<Issue> get() = mutableIssues.toList()
     fun render(template: String): String = renderer.render(template, "macro")

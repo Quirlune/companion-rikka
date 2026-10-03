@@ -1,7 +1,7 @@
 package dev.gray.companion.core
 
 object LibraryValidator {
-    fun validate(library: Library, executionVersion: Int = 4): List<Issue> {
+    fun validate(library: Library, executionVersion: Int = 5): List<Issue> {
         val issues = mutableListOf<Issue>()
         if (library.schemaVersion != LibraryFormat.CURRENT_VERSION) issues += Issue("library.schemaVersion", "不支持的资源版本")
         checkMetadata(library, issues)
@@ -351,21 +351,28 @@ object LibraryValidator {
     private fun checkMemory(memory: HistoryMemoryState, path: String, issues: MutableList<Issue>) {
         memory.segments.forEach { (id, segment) ->
             if (id != segment.id || segment.summary.isBlank() || segment.sources.isEmpty() ||
-                segment.sources.map { it.messageId }.distinct().size != segment.sources.size)
+                segment.sources.map { it.messageId }.distinct().size != segment.sources.size ||
+                segment.sources.map { it.sourceKind }.distinct().size > 1)
                 issues += Issue("$path.segments.$id", "记忆段身份、摘要或来源无效")
         }
         memory.captures.forEach { (id, sources) ->
             if (id.isBlank() || sources.map { it.messageId }.distinct().size != sources.size ||
-                sources.any { it.messageId.isBlank() || it.revisionId.isBlank() || it.fingerprint.isBlank() })
+                sources.any { it.messageId.isBlank() || it.revisionId.isBlank() || it.fingerprint.isBlank() } ||
+                sources.map { it.sourceKind }.distinct().size > 1)
                 issues += Issue("$path.captures.$id", "历史捕获来源无效")
         }
         memory.views.forEach { (id, versions) ->
             if (!MacroNaming.isValidSlug(id) || versions.isEmpty()) issues += Issue("$path.views.$id", "历史副本标识或版本无效")
             versions.forEachIndexed { index, view ->
                 if (view.viewId != id || view.revision != index + 1 || view.name.isBlank() || view.captureId !in memory.captures ||
-                    (view.baseViewId == null) != (view.baseRevision == null) || view.segmentModes.keys.any { it !in memory.segments })
+                    (view.baseViewId == null) != (view.baseRevision == null) || view.segmentModes.keys.any { id ->
+                        memory.segments[id]?.sources?.all { it.sourceKind == view.sourceKind } != true
+                    } ||
+                    memory.captures[view.captureId].orEmpty().any { it.sourceKind != view.sourceKind })
                     issues += Issue("$path.views.$id.${view.revision}", "历史副本结构无效")
-                if (view.baseViewId != null && memory.views[view.baseViewId].orEmpty().none { it.revision == view.baseRevision })
+                if (view.baseViewId != null && memory.views[view.baseViewId].orEmpty().none {
+                    it.revision == view.baseRevision && it.sourceKind == view.sourceKind && it.captureId == view.captureId
+                })
                     issues += Issue("$path.views.$id.${view.revision}", "历史副本基础版本不存在")
             }
         }

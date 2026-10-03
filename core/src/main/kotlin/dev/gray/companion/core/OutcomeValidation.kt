@@ -27,7 +27,7 @@ internal class OutcomeValidator(private val library: Library, session: Session) 
         val processedText = if (ref.node.outputProcessing.isEmpty()) outcome else try {
             require(outcome.stateWrites.isEmpty() && outcome.macroWrites.isEmpty() &&
                 outcome.activationWrites.isEmpty())
-            val resolver = MacroResolver(library, requireNotNull(context.session), context.input)
+            val resolver = MacroResolver(library, requireNotNull(context.session), context.input, context.executionVersion)
             outcome.copy(text = TextProcessing.apply(ref.node.outputProcessing,
                 outcome.text, context.state, context.results) { resolver.read(it) })
         } catch (failure: OutputFormatException) {

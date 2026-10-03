@@ -6,7 +6,8 @@ import kotlinx.serialization.Serializable
 @Serializable enum class HistorySegmentMode { COMPRESS, EXPAND }
 
 /** References an existing text revision, never a second stored copy of its text. */
-@Serializable data class HistorySourceRef(val messageId: String, val revisionId: String, val fingerprint: String)
+@Serializable data class HistorySourceRef(val messageId: String, val revisionId: String, val fingerprint: String,
+    val sourceKind: HistorySourceKind = HistorySourceKind.DISPLAY)
 @Serializable data class HistoryMemorySegment(
     val id: String, val title: String, val summary: String,
     val sources: List<HistorySourceRef>, val workflowId: String
@@ -14,7 +15,8 @@ import kotlinx.serialization.Serializable
 @Serializable data class HistoryViewRevision(
     val viewId: String, val name: String, val revision: Int, val captureId: String,
     val baseViewId: String? = null, val baseRevision: Int? = null,
-    val segmentModes: Map<String, HistorySegmentMode> = emptyMap()
+    val segmentModes: Map<String, HistorySegmentMode> = emptyMap(),
+    val sourceKind: HistorySourceKind = HistorySourceKind.DISPLAY
 )
 @Serializable data class HistoryMemoryState(
     val segments: Map<String, HistoryMemorySegment> = emptyMap(),
@@ -32,7 +34,7 @@ import kotlinx.serialization.Serializable
 }
 @Serializable data class HistorySelection(
     val viewId: String? = null, val revision: Int? = null, val range: HistoryRange = HistoryRange(),
-    val compressed: Boolean = false
+    val compressed: Boolean = false, val sourceKind: HistorySourceKind = HistorySourceKind.DISPLAY
 )
 data class HistoryProjection(
     val messages: List<ChatMessage>, val issues: List<Issue> = emptyList(),
@@ -50,19 +52,36 @@ object HistoryMemory {
         } }
     }
 
-    fun source(message: ChatMessage): HistorySourceRef = HistorySourceRef(message.id,
-        message.activeTextRevisionId ?: message.id,
-        hash("${message.role}\u0000${message.outputSlot}\u0000${message.text}"))
+    /** Model text is immutable provenance. User/system floors keep their selected text revision. */
+    fun source(message: ChatMessage): HistorySourceRef = source(message, HistorySourceKind.DISPLAY)
+
+    fun source(message: ChatMessage, kind: HistorySourceKind): HistorySourceRef {
+        val original = sourceMessage(message, kind)
+        val identity = "${original.role}\u0000${original.outputSlot}\u0000${original.text}"
+        val fingerprint = hash(if (kind == HistorySourceKind.DISPLAY) identity else "MODEL_RAW\u0000$identity")
+        return HistorySourceRef(original.id, original.activeTextRevisionId ?: original.id, fingerprint, kind)
+    }
+
+    internal fun sourceMessage(message: ChatMessage, kind: HistorySourceKind): ChatMessage =
+        if (kind == HistorySourceKind.MODEL_RAW && message.role == Role.ASSISTANT) message.copy(
+            text = requireNotNull(message.rawText) { "初始模型原文缺失：${message.id}" },
+            activeTextRevisionId = message.id, activeTextRevisionCreatedAt = message.createdAt, bodyDisplay = null
+        ) else message
 
     fun captureId(sources: List<HistorySourceRef>): String = "capture-" + hash(sources.joinToString("\n") {
-        "${it.messageId}\u0000${it.revisionId}\u0000${it.fingerprint}"
+        val identity = "${it.messageId}\u0000${it.revisionId}\u0000${it.fingerprint}"
+        if (it.sourceKind == HistorySourceKind.DISPLAY) identity else "MODEL_RAW\u0000$identity"
     })
 
     fun segment(title: String, summary: String, messages: List<ChatMessage>, workflowId: String): HistoryMemorySegment {
-        require(summary.isNotBlank() && messages.isNotEmpty()) { "记忆摘要和来源不能为空" }
         require(messages.all { it.outputSlot == OutputSlot.BODY && !it.deleted }) { "记忆来源必须是有效正文楼层" }
-        val sources = messages.map(::source)
+        return segmentFromSources(title, summary, messages.map(::source), workflowId)
+    }
+
+    fun segmentFromSources(title: String, summary: String, sources: List<HistorySourceRef>, workflowId: String): HistoryMemorySegment {
+        require(summary.isNotBlank() && sources.isNotEmpty()) { "记忆摘要和来源不能为空" }
         require(sources.map { it.messageId }.distinct().size == sources.size) { "记忆来源不能重复" }
+        require(sources.map { it.sourceKind }.distinct().size == 1) { "记忆段不能混合历史来源" }
         val id = "memory-" + hash("$workflowId\u0000${captureId(sources)}\u0000$summary")
         return HistoryMemorySegment(id, title, summary, sources, workflowId)
     }
@@ -76,8 +95,11 @@ object HistoryMemory {
         return segment("旧版历史摘要", digest.text, body.take(digest.coveredFloors), digest.workflowId)
     }
 
-    fun effectiveSegments(session: Session, main: MainCall): Map<String, HistoryMemorySegment> =
-        session.historyMemory.segments + listOfNotNull(legacySegment(session, main)).associateBy { it.id }
+    fun effectiveSegments(session: Session, main: MainCall,
+                          sourceKind: HistorySourceKind = HistorySourceKind.DISPLAY): Map<String, HistoryMemorySegment> =
+        session.historyMemory.segments.filterValues { segment ->
+            segment.sources.isNotEmpty() && segment.sources.all { it.sourceKind == sourceKind }
+        } + listOfNotNull(if (sourceKind == HistorySourceKind.DISPLAY) legacySegment(session, main) else null).associateBy { it.id }
 
     /** The selected messages are authoritative; inactive generations provide only missing identities. */
     fun sourceIndex(session: Session): Map<String, ChatMessage> = buildMap {
@@ -89,20 +111,24 @@ object HistoryMemory {
 
     fun resolve(ref: HistorySourceRef, index: Map<String, ChatMessage>): ChatMessage? {
         val message = index[ref.messageId]?.takeUnless { it.deleted || it.outputSlot != OutputSlot.BODY } ?: return null
-        val resolved = if ((message.activeTextRevisionId ?: message.id) == ref.revisionId) message else {
+        val resolved = if (ref.sourceKind == HistorySourceKind.MODEL_RAW && message.role == Role.ASSISTANT) {
+            if (message.rawText == null || ref.revisionId != message.id) return null
+            sourceMessage(message, ref.sourceKind)
+        } else if ((message.activeTextRevisionId ?: message.id) == ref.revisionId) message else {
             val revision = message.textRevisions.firstOrNull { it.id == ref.revisionId } ?: return null
             message.copy(text = revision.text, activeTextRevisionId = revision.id,
                 activeTextRevisionCreatedAt = revision.createdAt, bodyDisplay = revision.bodyDisplay)
         }
-        return resolved.takeIf { source(it) == ref }
+        return resolved.takeIf { source(it, ref.sourceKind) == ref }
     }
 
     fun isCurrent(segment: HistoryMemorySegment, messages: List<ChatMessage>): Boolean {
-        val sources = messages.filterNot { it.deleted }.map(::source)
-        return matches(segment, sources, sources.withIndex().associate { it.value.messageId to it.index })
+        val kind = segment.sources.firstOrNull()?.sourceKind ?: return false
+        val sources = messages.filterNot { it.deleted }.map { runCatching { source(it, kind) }.getOrNull() }
+        return matches(segment, sources, sources.withIndex().mapNotNull { indexed -> indexed.value?.let { it.messageId to indexed.index } }.toMap())
     }
 
-    internal fun matches(segment: HistoryMemorySegment, sources: List<HistorySourceRef>, positions: Map<String, Int>): Boolean {
+    internal fun matches(segment: HistoryMemorySegment, sources: List<HistorySourceRef?>, positions: Map<String, Int>): Boolean {
         val start = segment.sources.firstOrNull()?.messageId?.let(positions::get) ?: return false
         return segment.sources.indices.all { offset -> sources.getOrNull(start + offset) == segment.sources[offset] }
     }
@@ -121,7 +147,7 @@ object HistoryMemory {
             current = if (item.baseViewId == null) null else {
                 val base = view(state, item.baseViewId, requireNotNull(item.baseRevision))
                     ?: error("历史副本的基础版本不存在")
-                require(base.captureId == item.captureId) { "历史副本捕获来源不一致" }
+                require(base.captureId == item.captureId && base.sourceKind == item.sourceKind) { "历史副本捕获来源不一致" }
                 base
             }
         }
@@ -136,6 +162,7 @@ object HistoryMemory {
         val segments = state.segments.toMutableMap()
         patch.segments.forEach { segment ->
             require(segment.sources.isNotEmpty() && segment.summary.isNotBlank()) { "记忆来源或摘要为空" }
+            require(segment.sources.map { it.sourceKind }.distinct().size == 1) { "记忆段不能混合历史来源" }
             require(segment.sources.map { it.messageId }.distinct().size == segment.sources.size) { "记忆来源重复" }
             require(segments[segment.id] == null || segments[segment.id] == segment) { "记忆身份冲突" }
             segments[segment.id] = segment
@@ -143,6 +170,7 @@ object HistoryMemory {
         val captures = state.captures.toMutableMap()
         patch.captures.forEach { (id, sources) ->
             require(id == captureId(sources)) { "历史捕获身份不一致" }
+            require(sources.map { it.sourceKind }.distinct().size <= 1) { "历史捕获不能混合来源" }
             require(sources.map { it.messageId }.distinct().size == sources.size) { "历史来源楼层重复" }
             require(captures[id] == null || captures[id] == sources) { "历史捕获身份冲突" }
             captures[id] = sources
@@ -160,6 +188,7 @@ object HistoryMemory {
             if (item.baseViewId != null) require(view(interim, item.baseViewId, item.baseRevision) != null) { "历史副本基础版本不存在" }
             val effective = modes(interim, item)
             val sources = captures.getValue(item.captureId)
+            require(sources.all { it.sourceKind == item.sourceKind }) { "历史副本来源类型不一致" }
             val compressed = mutableSetOf<String>()
             effective.forEach { (id, mode) ->
                 val segment = segments[id] ?: error("记忆段不存在：$id")

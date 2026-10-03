@@ -99,7 +99,7 @@ object PromptReferenceLanguage {
     private enum class Field(val keyword: String) {
         TYPE("type"), IN("in"), CALL("call"), FOLDER("folder"), UNDER("under"), NAME("name"),
         TAG("tag"), ANY("any"), NOT("not"), AT("at"), XML("xml"),
-        FROM("from"), THROUGH("through"), VIEW("view"), REVISION("revision")
+        FROM("from"), THROUGH("through"), VIEW("view"), REVISION("revision"), SOURCE("source")
     }
     private data class Value(val text: String, val span: SourceSpan, val quoted: Boolean)
     private data class ParsedField(val name: String, val span: SourceSpan, val values: List<Value>) {
@@ -198,7 +198,7 @@ object PromptReferenceLanguage {
             issue(Code.UNSUPPORTED_FIELD, "${singleOnly.keyword} 仅用于有 name 的单取引用", it)
         }
         val isHistory = sourceType == SourceType.BUILTIN && source == SourceScope.Named("history") && name in setOf("messages", "context")
-        val historyFields = listOf(Field.FROM, Field.THROUGH, Field.VIEW, Field.REVISION)
+        val historyFields = listOf(Field.FROM, Field.THROUGH, Field.VIEW, Field.REVISION, Field.SOURCE)
         if (!isHistory) historyFields.forEach { key -> field(key)?.let {
             issue(Code.UNSUPPORTED_FIELD, "${key.keyword} 仅支持 builtin history messages", it)
         } }
@@ -226,8 +226,13 @@ object PromptReferenceLanguage {
             val revision = text(Field.REVISION)?.toIntOrNull()
             if (Field.REVISION in fields && (revision == null || revision < 1 || viewId == null))
                 invalid(Field.REVISION, "revision 须为正整数，且须指定 view")
+            val sourceKind = when (text(Field.SOURCE)) {
+                null, "display" -> HistorySourceKind.DISPLAY
+                "model" -> HistorySourceKind.MODEL_RAW
+                else -> { invalid(Field.SOURCE, "source 须为 display 或 model"); HistorySourceKind.DISPLAY }
+            }
             HistorySelection(viewId, revision, HistoryRange(point(Field.FROM, HistoryPoint()),
-                point(Field.THROUGH, HistoryPoint(HistoryAnchor.END, 1.0))), compressed = name == "context")
+                point(Field.THROUGH, HistoryPoint(HistoryAnchor.END, 1.0))), compressed = name == "context", sourceKind = sourceKind)
         } else null
         if (diagnostics.isNotEmpty()) return CompileResult(null, diagnostics, locations)
         return CompileResult(QueryPlan(requireNotNull(sourceType), requireNotNull(source), call, folder, name,

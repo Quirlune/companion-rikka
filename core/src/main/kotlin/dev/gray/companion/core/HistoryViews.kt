@@ -2,28 +2,53 @@ package dev.gray.companion.core
 
 /** Reads source references without publishing captures or macro versions. */
 object HistoryViews {
-    fun selection(expression: String): HistorySelection? {
+    fun selection(expression: String, executionVersion: Int = 5): HistorySelection? {
         val result = PromptReferenceLanguage.compile(expression)
         val ref = result.reference ?: return null
+        if (executionVersion < 5 && result.fields.any { it.name == "source" }) return null
         return when (ref) {
-            is PromptReferenceLanguage.LegacyReference -> if (ref.expression in setOf("history", "history.raw", "history.text"))
-                HistorySelection(compressed = ref.expression != "history.raw") else null
+            is PromptReferenceLanguage.LegacyReference -> when (ref.expression) {
+                "history", "history.raw", "history.text" -> HistorySelection(compressed = ref.expression != "history.raw")
+                "history.display" -> if (executionVersion >= 5) HistorySelection() else null
+                "history.model" -> if (executionVersion >= 5) HistorySelection(sourceKind = HistorySourceKind.MODEL_RAW) else null
+                else -> null
+            }
             is PromptReferenceLanguage.QueryPlan -> ref.historySelection
         }
     }
 
     fun sources(session: Session, selection: HistorySelection, main: MainCall? = null): List<HistorySourceRef> {
-        val all = if (selection.viewId == null) session.messages.filter { !it.deleted && it.outputSlot == OutputSlot.BODY }.map(HistoryMemory::source)
-        else {
-            require(selection.revision != null || selection.viewId !in session.historyMemory.unavailableViewIds) { "当前历史副本尚未生成：${selection.viewId}" }
-            val view = HistoryMemory.view(session.historyMemory, selection.viewId, selection.revision)
-                ?: error("历史副本或版本不存在：${selection.viewId}")
-            session.historyMemory.captures[view.captureId] ?: error("历史副本来源捕获不存在")
-        }
         val range = if (selection.compressed && selection.viewId == null && selection.range == HistoryRange())
             main?.history?.range ?: selection.range else selection.range
+        if (selection.viewId == null) {
+            val floors = session.messages.filter { !it.deleted && it.outputSlot == OutputSlot.BODY }
+            require(HistoryContext.rangeValid(range, floors.size)) { "历史范围起点晚于终点" }
+            return floors.slice(HistoryContext.selectedRange(range, floors.size)).map {
+                HistoryMemory.source(it, selection.sourceKind)
+            }
+        }
+        require(selection.revision != null || selection.viewId !in session.historyMemory.unavailableViewIds) {
+            "当前历史副本尚未生成：${selection.viewId}"
+        }
+        val view = HistoryMemory.view(session.historyMemory, selection.viewId, selection.revision)
+            ?: error("历史副本或版本不存在：${selection.viewId}")
+        require(view.sourceKind == selection.sourceKind) { "历史副本来源类型不一致：${selection.viewId}" }
+        val all = session.historyMemory.captures[view.captureId] ?: error("历史副本来源捕获不存在")
+        require(all.all { it.sourceKind == selection.sourceKind }) { "历史捕获来源类型不一致" }
         require(HistoryContext.rangeValid(range, all.size)) { "历史范围起点晚于终点" }
         return all.slice(HistoryContext.selectedRange(range, all.size))
+    }
+
+    fun summaries(session: Session, main: MainCall, kind: HistorySourceKind): List<HistoryMemorySegment> {
+        val floors = session.messages.filter { !it.deleted && it.outputSlot == OutputSlot.BODY }
+        val sources = floors.map { message ->
+            if (kind == HistorySourceKind.MODEL_RAW && message.role == Role.ASSISTANT && message.rawText == null) null
+            else HistoryMemory.source(message, kind)
+        }
+        val positions = floors.withIndex().associate { it.value.id to it.index }
+        return HistoryMemory.effectiveSegments(session, main, kind).values.filter {
+            HistoryMemory.matches(it, sources, positions)
+        }
     }
 
     fun originalMessages(session: Session, selection: HistorySelection, main: MainCall? = null): List<ChatMessage> {
@@ -43,7 +68,7 @@ object HistoryViews {
         }
         val state = session.historyMemory
         val view = selection.viewId?.let { HistoryMemory.view(state, it, selection.revision) ?: error("历史副本不存在") }
-        val segments = HistoryMemory.effectiveSegments(session, main)
+        val segments = HistoryMemory.effectiveSegments(session, main, selection.sourceKind)
         val selectedPositions = selectedSources.withIndex().associate { it.value.messageId to it.index }
         val modes = view?.let { HistoryMemory.modes(state, it) } ?: if (selection.compressed)
             defaultModes(main, selectedSources, segments) else emptyMap()
@@ -88,7 +113,9 @@ object HistoryViews {
         val state = session.historyMemory
         val base = resolvedSelection.viewId?.let { HistoryMemory.view(state, it, resolvedSelection.revision) ?: error("历史副本不存在") }
         val sameCapture = base?.captureId == captureId
-        val effective = if (main == null) state.segments else HistoryMemory.effectiveSegments(session, main)
+        val effective = if (main == null) state.segments.filterValues { segment ->
+            segment.sources.all { it.sourceKind == selection.sourceKind }
+        } else HistoryMemory.effectiveSegments(session, main, selection.sourceKind)
         val inherited = if (base == null && selection.compressed && main != null) defaultModes(main, selected, effective)
         else if (base == null || sameCapture) emptyMap() else HistoryMemory.modes(state, base).filter { (id, _) ->
             state.segments[id]?.sources?.let { refs ->
@@ -99,7 +126,7 @@ object HistoryViews {
         val revision = state.views[targetId]?.lastOrNull()?.revision ?: 0
         val view = HistoryViewRevision(targetId, name.ifBlank { targetId }, revision + 1, captureId,
             base?.viewId?.takeIf { sameCapture }, base?.revision?.takeIf { sameCapture },
-            inherited + segmentIds.distinct().associateWith { mode })
+            inherited + segmentIds.distinct().associateWith { mode }, sourceKind = selection.sourceKind)
         val needed = (inherited.keys + segmentIds).mapNotNull { id -> effective[id]?.takeIf { it.id !in state.segments } }
         val patch = HistoryMemoryPatch(segments = needed,
             captures = if (captureId in state.captures) emptyMap() else mapOf(captureId to selected),

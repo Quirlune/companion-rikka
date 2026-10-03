@@ -1,12 +1,12 @@
 # 提示词引用语言 v1
 
-设计日期：2026-10-03。关联架构基线：revision 26；通用资源选择的编译契约保留 revision 24。
+设计日期：2026-10-03。关联架构基线：revision 30；通用资源选择的编译契约保留 revision 24。
 
 ## 状态与交付边界
 
 本轮交付语言规范及独立编译核心 `PromptReferenceLanguage`。它把引用编译成明确的选择计划，并提供字段位置和中文诊断；它不读取资源、不生成提示词、不执行模型或动作。
 
-**revision 26 仅接入 History 的新语法与范围菜单；其他新式资源／标签查询仍未绑定运行时。** revision 25 的原生标签目录、多选下拉和“名称 / slug”编辑框是独立于旧地址的元数据，暂不支持按新式标签表达式发送提示词。LibraryFormat 为 4，可读 1–4；新断点执行语义为 2，旧断点默认 1 并保留其恢复语义。
+**revision 30 已绑定 History，以及静态角色／提示词包的英文标识和标签筛选。** 静态查询只读取已加载且激活的词条，支持 `name/tag/any/not`、单条 XML 与 `at:latest`。动态 `main/group` 输出新地址、目录 `folder/under` 和静态历史版本尚未绑定，使用时明确报告；下文包含这些未来编译契约，不表示均可运行。LibraryFormat 为 7，可读 1–7；新断点执行语义为 5，旧断点 1–4 保留其恢复语义。
 
 已接入的 History 用法：
 
@@ -16,11 +16,13 @@
 {{type:builtin.in:history.name:messages.from:start-10.through:start-20}}
 {{type:builtin.in:history.name:context.from:percent-25.through:percent-75}}
 {{type:builtin.in:history.name:context.view:recalled.revision:2}}
+{{type:builtin.in:history.name:messages.source:model.from:end-3.through:end-1}}
+{{type:builtin.in:history.name:context.source:display}}
 ```
 
-`messages` 从保留的原始 BODY 楼层取值；`context` 使用历史包装与有效摘要。每条用户或助手 BODY 消息算一楼，取范围发生在摘要替换和 API 角色合并之前。端点为 `start-N`、`end-N`（正整数）或 `percent-N`（0–100 整数），两端均包含；选择数量不足时只返回实际存在的楼层。字段顺序仍然无关。指定 `view` 后读取副本自己的来源捕获和压缩选择；`revision` 为副本的正整数版本，省略时读可用最新版。
+`messages` 读取未经摘要替换的 BODY 楼层；`context` 使用历史包装与同来源的有效摘要。`source:display`（默认）使用最终显示正文的语义文本，`source:model` 使用助手初始模型原文；用户楼层仍使用对应用户文本。旧楼层没有原始模型档案时报告缺失，不以显示正文伪造。每条用户或助手 BODY 消息算一楼，取范围发生在摘要替换和 API 角色合并之前。端点为 `start-N`、`end-N`（正整数）或 `percent-N`（0–100 整数），两端均包含；选择数量不足时只返回实际存在的楼层。字段顺序仍然无关。指定 `view` 后读取副本自己的来源捕获和压缩选择；`revision` 为副本的正整数版本，省略时读可用最新版。
 
-整块只放这一条 History 引用时按结构化消息插入，保留角色和楼层边界；嵌入普通文字时展开为文本。原有 `{{history}}`、`{{history.text}}` 使用主调用的已处理历史，`{{history.raw}}` 使用原文。History 副本只保存消息修订引用与压缩／展开差异，不能把它当作普通文本宏的更新链；副本的 `revision` 和文本宏的 `at:version-N` 是不同概念。
+整块只放这一条 History 引用时按结构化消息插入，保留角色和楼层边界；嵌入普通文字时展开为文本。原有 `{{history}}`、`{{history.text}}` 使用主调用的已处理显示历史，`{{history.raw}}` 仍是未经摘要包装的显示文本，不改旧语义。新增 `{{history.display}}`、`{{history.model}}` 为两种来源的明确原楼层投影；`history.display.summary`、`history.model.summary` 是对应来源的有效记忆 ID 目录。History 副本只保存消息修订引用、来源种类与压缩／展开差异，不能把它当作普通文本宏的更新链；副本的 `revision` 和文本宏的 `at:version-N` 是不同概念。
 
 设置中创建标签，词条保存稳定标签 ID；改标签名称或 slug 不批量重写分配。角色、提示词包、主调用、调用组、调用、节点输出、词条、提示词块和用户身份均有 slug。新的显示名称不能为空，可用中文；英文 slug 与编译器共用 `[a-z][a-z0-9_-]*`，同级查重。现有命名空间、词条键和结果键保持原样，界面仅展示引用地址。基本角色字段保留原键，允许编辑新的显示名称与 slug。
 
@@ -34,7 +36,7 @@
 
 | 层 | 负责 | 现有基础与本轮边界 |
 | --- | --- | --- |
-| 引用与选择 | 从指定来源选单个目标或一组目标 | 本轮新增独立编译器；尚未绑定真实资源 |
+| 引用与选择 | 从指定来源选单个目标或一组目标 | 独立编译器；History 与静态角色／包已绑定 |
 | 条件逻辑 | 比较、与／或／非、存在性及显式数值转换 | 保留 `ConditionExpressions`，后续接入同一目标读取器 |
 | 文本变换 | 正则、替换、数值处理及格式整理 | 保留 `TextProcessing` 的有序纯处理，发生在使用内容的位置 |
 
@@ -75,6 +77,7 @@
 | `at` | 内容版本 | 仅单取；默认 `latest`；详见版本规则 |
 | `xml` | 单条文本内的元素路径 | 仅单取；`builtin` 不允许；不是 XPath |
 | `from` / `through` | History 范围的起点／包含的终点 | 仅 `type:builtin.in:history.name:messages/context`；端点规则见上文 |
+| `source` | History 文本来源 | 仅 History；`display`（默认）或 `model`，与摘要／副本来源一致 |
 | `view` | 已保存 History 副本的英文标识 | 仅上述 History 来源；不复制原文 |
 | `revision` | History 副本的固定版本 | 须与 `view` 同用；正整数，省略为当前可用最新版 |
 
