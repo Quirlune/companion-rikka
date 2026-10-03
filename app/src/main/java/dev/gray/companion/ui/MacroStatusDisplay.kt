@@ -48,7 +48,7 @@ internal fun MacroStatusPanel(tile: MacroTile, xml: String, error: String? = nul
                         val display = if (field.kind == MacroTileKind.NUMBER && value?.trim()?.toDoubleOrNull()?.isFinite() != true) "—" else value.orEmpty().ifBlank { "—" }
                         Box(Modifier.weight(1.5f)) { SelectionContainer { Text(display, style = MaterialTheme.typography.bodyMedium, color = foreground, fontSize = tile.style.fontSize.sp) } }
                     }
-                    MacroTileKind.STATUS -> Unit // Rejected by core validation; old data remains readable.
+                    MacroTileKind.STATUS, MacroTileKind.HTML -> Unit // Rejected by core validation; old data remains readable.
                 }
             } }
         }
@@ -71,8 +71,11 @@ internal fun MacroSidebarPanel(library: Library, session: Session, onDismiss: ()
                     Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         if (items.isEmpty()) Text("当前没有可显示的宏值。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         items.forEach { item -> key(item.tile.id) {
-                            if (item.tile.kind == MacroTileKind.STATUS) MacroStatusPanel(item.tile, item.value, item.error, item.waiting)
-                            else CurrentTile(item)
+                            when (item.tile.kind) {
+                                MacroTileKind.STATUS -> MacroStatusPanel(item.tile, item.value, item.error, item.waiting)
+                                MacroTileKind.HTML -> HtmlMacroDisplay(item)
+                                else -> CurrentTile(item)
+                            }
                         } }
                     }
                 }

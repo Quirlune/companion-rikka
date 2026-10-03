@@ -97,7 +97,7 @@ class AppController internal constructor(
         viewModelScope.launch {
             try {
                 val loaded = repository.load()
-                var initial = ModelCatalog.normalize(if (loaded == Library()) LibraryDefaults.create() else loaded).withStandardCharacterFields()
+                var initial = LibraryFormat.upgrade(ModelCatalog.normalize(if (loaded == Library()) LibraryDefaults.create() else loaded).withStandardCharacterFields())
                 val issues = LibraryValidator.validate(initial)
                 if (issues.any { it.error }) {
                     _library.value = initial
@@ -108,7 +108,8 @@ class AppController internal constructor(
                 if (loaded != Library() && applicationContext.readBooleanPreference("create_new_conversation_on_start", true)) {
                     val current = initial.sessions.firstOrNull { it.id == initial.selectedSessionId }
                     if (current != null && current.pendingRun == null && (current.messages.isNotEmpty() || current.state.isNotEmpty() ||
-                        current.results.isNotEmpty() || current.macroHistory.isNotEmpty() || current.promptInjections.isNotEmpty())) {
+                        current.results.isNotEmpty() || current.macroHistory.isNotEmpty() || current.promptInjections.isNotEmpty() ||
+                        current.historyMemory != HistoryMemoryState() || current.currentOnlyMacros.isNotEmpty())) {
                         initial = initial.startNewConversation()
                     }
                 }
@@ -162,7 +163,7 @@ class AppController internal constructor(
                 _state.value = _state.value.copy(issues = rawIssues)
                 return@withLock rawIssues
             }
-            val next = edited.withStandardCharacterFields().let { normalized ->
+            val next = LibraryFormat.upgrade(edited.withStandardCharacterFields()).let { normalized ->
                 val oldSessions = before.sessions.associateBy { it.id }
                 normalized.copy(sessions = normalized.sessions.map { session ->
                     val previous = oldSessions[session.id]
@@ -408,7 +409,7 @@ class AppController internal constructor(
         return updateLibrary { it.selectCharacter(id) }
     }
     suspend fun resetSessionState(id: String): List<Issue> = updateLibrary { old ->
-        old.copy(sessions = old.sessions.map { if (it.id == id) it.copy(state = emptyMap(), results = emptyMap(), resultOrigins = emptyMap(), macroHistory = emptyMap(), promptInjections = emptyList(), historyDigests = emptyMap(), pendingRun = null, unavailableResultKeys = emptySet()) else it })
+        old.copy(sessions = old.sessions.map { if (it.id == id) it.copy(state = emptyMap(), results = emptyMap(), resultOrigins = emptyMap(), macroHistory = emptyMap(), currentOnlyMacros = emptyMap(), promptInjections = emptyList(), historyDigests = emptyMap(), historyMemory = HistoryMemoryState(), pendingRun = null, unavailableResultKeys = emptySet()) else it })
     }
 
     suspend fun preview(input: String = ""): PromptPreview {
@@ -689,11 +690,13 @@ class AppController internal constructor(
         catch (_: IllegalArgumentException) { return listOf(Issue("import.schemaVersion", "不支持的资源版本")) }
         // Validate the merged graph: imports may refer to an existing model or persona.
         val saved = updateLibrary { old ->
+            val existingTags = old.promptTags.toSet()
             old.copy(characters = old.characters + imported.characters, mainCalls = old.mainCalls + imported.mainCalls,
                 packages = old.packages + imported.packages, groups = old.groups + imported.groups,
                 profiles = old.profiles + imported.profiles, sessions = old.sessions + imported.sessions, connections = old.connections + imported.connections,
                 chatFolders = old.chatFolders + imported.chatFolders, savedChats = old.savedChats + imported.savedChats,
                 personas = old.personas + imported.personas,
+                promptTags = old.promptTags + imported.promptTags.filterNot { it in existingTags },
                 selectedSessionId = if (selectImportedSession) imported.selectedSessionId ?: old.selectedSessionId else old.selectedSessionId)
         }
         return if (saved.any { it.error }) saved else saved + decoded.warnings.map { Issue("import", it, error = false) }

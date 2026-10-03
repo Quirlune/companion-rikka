@@ -14,7 +14,7 @@ private val floorRoleChoices = listOf<Pair<Role?, String>>(null to "跟随通用
 private fun roleTitle(role: Role) = when (role) { Role.SYSTEM -> "系统"; Role.USER -> "用户"; Role.ASSISTANT -> "助手" }
 
 @Composable
-private fun NumberLine(label: String, value: Int, minimum: Int = 0, onChange: (Int) -> Unit) {
+internal fun NumberLine(label: String, value: Int, minimum: Int = 0, onChange: (Int) -> Unit) {
     var draft by remember(label) { mutableStateOf(value.toString()) }
     LaunchedEffect(value) { if (draft.toIntOrNull() != value) draft = value.toString() }
     OutlinedTextField(draft, { text ->
@@ -40,14 +40,13 @@ private fun HistoryPointForm(label: String, point: HistoryPoint, onChange: (Hist
 
 @Composable
 internal fun HistoryConfigEditor(
-    history: HistoryConfig, library: Library?, actions: List<ActionDescriptor>, profiles: List<ModelProfile>,
-    references: List<PromptReferenceChoice>, usedOutputKeys: Set<String>, onChange: (HistoryConfig) -> Unit
+    history: HistoryConfig, library: Library?, references: List<PromptReferenceChoice>, onChange: (HistoryConfig) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
     HorizontalDivider()
-    TextButton(onClick = { open = !open }) { Text(if (open) "收起历史配置" else "历史配置 · 范围、包装与处理") }
+    TextButton(onClick = { open = !open }) { Text(if (open) "收起历史配置" else "历史配置 · 范围、角色与包装") }
     if (!open) return
-    Text("历史仅改变发给模型的上下文，原聊天记录始终保留。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Text("这里设置主调用的默认历史投影；提示词中的每条结构化历史引用也可独立选择范围。原聊天记录始终保留。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     HistoryPointForm("范围起点", history.range.from) { onChange(history.copy(range = history.range.copy(from = it))) }
     HistoryPointForm("范围终点（包含）", history.range.through) { onChange(history.copy(range = history.range.copy(through = it))) }
     ChoiceLine("整个历史的 API 角色", history.apiRole, globalRoleChoices) { onChange(history.copy(apiRole = it)) }
@@ -72,8 +71,17 @@ internal fun HistoryConfigEditor(
     }
 
     Text("指定消息覆盖", style = MaterialTheme.typography.titleMedium)
-    val messages = library?.sessions?.firstOrNull { it.id == library.selectedSessionId }?.messages.orEmpty().filter { it.outputSlot == OutputSlot.BODY }
-    val choices = messages.map { message -> message.id to "${roleTitle(message.role)} · ${message.text.replace('\n', ' ').take(32)} · ${message.id.take(8)}" }
+    val session = library?.sessions?.firstOrNull { it.id == library.selectedSessionId }
+    val messages = session?.messages.orEmpty().filter { it.outputSlot == OutputSlot.BODY && !it.deleted }
+    val currentById = messages.associateBy { it.id }
+    val memoryByFloor = session?.historyMemory?.segments.orEmpty().values.flatMap { segment -> segment.sources.map { source ->
+        val current = currentById[source.messageId]?.let { HistoryMemory.source(it) == source } == true
+        source.messageId to (segment.title.ifBlank { segment.id.take(12) } + if (current) "" else "（旧版本）")
+    } }.groupBy({ it.first }, { it.second })
+    val choices = messages.map { message ->
+        val marker = memoryByFloor[message.id].orEmpty().distinct().takeIf { it.isNotEmpty() }?.joinToString("、", prefix = " · 记忆：") ?: ""
+        message.id to "${roleTitle(message.role)} · ${message.text.replace('\n', ' ').take(32)}$marker · ${message.id.take(8)}"
+    }
     var selectedMessage by remember(choices) { mutableStateOf(choices.firstOrNull()?.first.orEmpty()) }
     ChoiceLine("聊天消息", selectedMessage, choices) { selectedMessage = it }
     OutlinedButton(onClick = { onChange(history.copy(floors = history.floors + HistoryFloorRule(selectedMessage))) }, enabled = selectedMessage.isNotBlank() && history.floors.none { it.messageId == selectedMessage }) { Text("添加消息规则") }
@@ -106,22 +114,41 @@ internal fun HistoryConfigEditor(
     } }
     OutlinedButton(onClick = { onChange(history.copy(insertions = history.insertions + HistoryInsertion())) }) { Text("添加历史插入项") }
 
-    Text("历史上下文处理", style = MaterialTheme.typography.titleMedium)
-    Text("积累足够新楼层时运行独立调用，结果作为摘要参与之后的历史投影。默认关闭。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    Text("处理结果用于上下文；需要查看时可把结果宏绑定到展示磁贴。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    val processor = history.processor
-    NumberLine("触发所需新增楼层", processor.minimumNewFloors, 1) { onChange(history.copy(processor = processor.copy(minimumNewFloors = it))) }
-    NumberLine("保留最近楼层", processor.keepRecentFloors) { onChange(history.copy(processor = processor.copy(keepRecentFloors = it))) }
-    ChoiceLine("摘要来自节点", processor.outputKey, processor.workflow.nodes.map { it.outputKey to "${it.title} · ${it.outputKey}" }) { onChange(history.copy(processor = processor.copy(outputKey = it))) }
-    TextFieldLine("摘要输出键", processor.outputKey, { onChange(history.copy(processor = processor.copy(outputKey = it))) })
-    val processorReferences = references + listOf(
-        PromptReferenceChoice("待处理历史", "{{history.pending}}", "历史处理"),
-        PromptReferenceChoice("待处理楼层数量", "{{history.pending.count}}", "历史处理"),
-        PromptReferenceChoice("原始历史", "{{history.raw}}", "历史处理"),
-        PromptReferenceChoice("已有摘要", "{{history.summary}}", "历史处理"),
-        PromptReferenceChoice("楼层数量", "{{history.count}}", "历史处理")
-    )
-    WorkflowForm(processor.workflow, 0, 1, actions, profiles, usedOutputKeys, processorReferences,
-        { changed -> onChange(history.copy(processor = processor.copy(workflow = changed.copy(trigger = RuntimeEvents.HISTORY_PROCESS)))) },
-        {}, {}, {}, fixedTrigger = true)
+}
+
+@Composable
+internal fun HistoryMemoryInspector(session: Session?) {
+    val state = session?.historyMemory
+    EditorSection("记忆与历史副本", if (session == null) "尚未选择聊天" else "${state?.segments?.size ?: 0} 段记忆 · ${state?.views?.size ?: 0} 个副本") {
+        if (session == null) {
+            Text("选择一段聊天后，可查看摘要与原楼层的对应关系。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            return@EditorSection
+        }
+        val original = session.messages.filter { it.outputSlot == OutputSlot.BODY && !it.deleted }
+        val floorNumbers = original.withIndex().associate { it.value.id to it.index + 1 }
+        val segments = state?.segments.orEmpty().values.toList()
+        if (segments.isEmpty()) Text("尚无来源记忆；历史处理或记忆写入动作成功后会显示来源映射。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        segments.forEach { segment ->
+            OutlinedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(segment.title.ifBlank { "记忆段 ${segment.id.take(8)}" }, style = MaterialTheme.typography.titleSmall)
+                Text(segment.summary, style = MaterialTheme.typography.bodyMedium)
+                Text("来源楼层：" + segment.sources.joinToString("、") { source ->
+                    floorNumbers[source.messageId]?.let { floor ->
+                        "第 ${floor} 层" + if (original.firstOrNull { it.id == source.messageId }?.let { HistoryMemory.source(it) == source } == true) "" else "（旧版本）"
+                    } ?: "已不在当前聊天 · ${source.messageId.take(8)}"
+                }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("记忆标识：${segment.id}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } }
+        }
+        Text("历史副本", style = MaterialTheme.typography.titleSmall)
+        if (state?.views.isNullOrEmpty()) Text("尚无副本；在调用中使用“复制历史视图”动作创建。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        state?.views.orEmpty().forEach { (id, revisions) ->
+            revisions.lastOrNull()?.let { latest ->
+                val captured = state?.captures?.get(latest.captureId).orEmpty()
+                Text("${latest.name} · $id · 第 ${latest.revision} 版 · ${captured.size} 层", style = MaterialTheme.typography.bodyMedium)
+                Text("{{type:builtin.in:history.name:context.view:$id}}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+        Text("楼层上的记忆标记由来源映射生成；主调用的历史配置可管理该楼层的角色与包装。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
 }

@@ -28,6 +28,18 @@ private sealed interface CallEditorRoute : NavKey {
 
 private data class PendingMainSwitch(val targetId: String?)
 
+/** Apply new-editor defaults only when a main call is created, never to a loaded resource. */
+internal fun newEditorMainCall(id: String): MainCall {
+    val main = MainCall(id = id, name = "新主调用")
+    val processor = main.history.processor
+    return main.copy(
+        workflows = main.workflows.map { call -> call.copy(nodes = call.nodes.map { it.copy(recordTrajectory = false) }) },
+        primaryWorkflowId = main.workflows.firstOrNull()?.id,
+        history = main.history.copy(processor = processor.copy(workflow = processor.workflow.copy(
+            nodes = processor.workflow.nodes.map { it.copy(recordTrajectory = false) }))),
+    )
+}
+
 @Composable
 internal fun MainCallEditor(
     initial: MainCall, onSave: (MainCall) -> Unit, onBack: () -> Unit, saving: Boolean = false,
@@ -35,7 +47,13 @@ internal fun MainCallEditor(
     profiles: List<ModelProfile> = emptyList(), library: Library? = null,
     onSwitchResource: ((MainCall?, String?) -> Unit)? = null,
 ) {
-    var item by remember(initial.id) { mutableStateOf(initial) }
+    val baseline = remember(initial.id) { MacroNaming.normalize(initial,
+        library?.mainCalls.orEmpty().filterNot { it.id == initial.id }.map { it.slug }).let { main ->
+        if (main.name.isBlank() || (library != null && library.mainCalls.none { it.id == main.id }))
+            main.copy(name = nextDisplayName(library?.mainCalls.orEmpty().filterNot { it.id == main.id }.map { it.name }, "主调用"))
+        else main
+    } }
+    var item by remember(initial.id) { mutableStateOf(baseline) }
     val stack = remember(initial.id) { mutableStateListOf<NavKey>(CallEditorRoute.Home) }
     val backs = remember(initial.id) { mutableStateMapOf<NavKey, () -> Unit>() }
     var promptRequest by remember(initial.id) { mutableStateOf<PromptEditRequest?>(null) }
@@ -49,21 +67,30 @@ internal fun MainCallEditor(
     fun updateWorkflow(changed: Workflow) { item = item.copy(workflows = item.workflows.map { if (it.id == changed.id) changed else it }) }
     fun mergeWorkflow(changed: Workflow) = if (item.workflows.any { it.id == changed.id }) item.workflows.map { if (it.id == changed.id) changed else it } else item.workflows + changed
     fun referenceChoices(draft: MainCall = item) = promptReferenceChoices(draft.workflows, library, mainCall = draft)
+    fun completionSources(): List<Workflow> {
+        val selected = library?.sessions?.firstOrNull { it.id == library.selectedSessionId }
+        val loadedGroups = if (selected != null) library?.loadedCallGroups(selected, item).orEmpty()
+            else library?.groups.orEmpty().filter { it.id in item.boundGroupIds }
+        return (item.workflows + loadedGroups.flatMap { it.workflows }).distinctBy { it.id }
+    }
     fun requestSwitch(targetId: String?) {
         if (saving || targetId == item.id) return
-        if (item != initial) pendingSwitch = PendingMainSwitch(targetId)
+        if (item != baseline) pendingSwitch = PendingMainSwitch(targetId)
         else onSwitchResource?.invoke(null, targetId)
     }
     fun addCall() {
         val key = nextCallOutputKey(outputKeysForNewNodes(library, item.workflows + item.history.processor.workflow), "call")
-        val workflow = Workflow(title = "调用 ${item.workflows.size + 1}", nodes = listOf(WorkflowNode(outputKey = key)))
+        val siblings = item.workflows + item.history.processor.workflow
+        val workflow = Workflow(title = nextDisplayName(siblings.map { it.title }, "调用"),
+            slug = nextEditorSlug(siblings.map { it.slug }, "call"),
+            nodes = listOf(WorkflowNode(outputKey = key, slug = key, recordTrajectory = false)))
         openDetails(workflow)
     }
     // Legacy resources without an explicit primary keep their original runtime/output contract.
     val default = item.workflows.firstOrNull { it.id == item.primaryWorkflowId } ?: item.workflows.firstOrNull()
     RikkaNavDisplay(stack, { backs[stack.last()]?.invoke() ?: pop() }, entryProvider {
         entry<CallEditorRoute.Home> { route ->
-            CallEditorPage("主调用", item != initial, onBack, { onSave(item) }, saving, { backs[route] = it }) {
+            CallEditorPage("主调用", item != baseline, onBack, { onSave(item.copy(name = item.name.trim())) }, saving, { backs[route] = it }) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     if (onSwitchResource != null) {
                         val resources = (library?.mainCalls.orEmpty() + item).distinctBy { it.id }.map { it.id to (if (it.id == item.id) item.name else it.name).ifBlank { "未命名主调用" } }
@@ -88,15 +115,25 @@ internal fun MainCallEditor(
                             updateWorkflow(current.copy(nodes = current.nodes.map { if (it.id == modelNode.id) it.copy(blocks = blocks) else it }))
                         })
                     }
+                    if (modelNode != null) NodeTrajectoryControl(modelNode) { changed ->
+                        val current = item.workflows.firstOrNull { it.id == default.id } ?: return@NodeTrajectoryControl
+                        updateWorkflow(current.copy(nodes = current.nodes.map { if (it.id == modelNode.id) changed else it }))
+                    }
+                    if (modelNode != null) RegexOutputCopyEditor(modelNode, outputKeysForNewNodes(library, item.workflows + item.history.processor.workflow)) { copy ->
+                        val current = item.workflows.firstOrNull { it.id == default.id } ?: return@RegexOutputCopyEditor
+                        updateWorkflow(current.copy(nodes = current.nodes.map { if (it.id == modelNode.id) it.copy(regexOutputCopy = copy) else it }))
+                    }
                     EditorDestinationRow("默认调用设置", if (default.nodes.size > 1) "${default.nodes.size} 个节点" else null) { openDetails(default) }
                 } else OutlinedButton(onClick = {
                     val key = nextCallOutputKey(outputKeysForNewNodes(library, listOf(item.history.processor.workflow)), "reply")
-                    val workflow = Workflow(nodes = listOf(WorkflowNode(outputKey = key, visible = true)))
+                    val workflow = Workflow(title = nextDisplayName((item.workflows + item.history.processor.workflow).map { it.title }, "调用"),
+                        slug = nextEditorSlug((item.workflows + item.history.processor.workflow).map { it.slug }, "call"),
+                        nodes = listOf(WorkflowNode(outputKey = key, slug = key, visible = true, recordTrajectory = false)))
                     item = item.copy(workflows = item.workflows + workflow, primaryWorkflowId = workflow.id)
                 }) { Text("添加默认调用") }
                 EditorDestinationRow("其他调用", "${item.workflows.count { it.id != default?.id }} 项") { open(CallEditorRoute.Calls) }
                 HorizontalDivider()
-                EditorDestinationRow("历史配置", "范围、包装与上下文处理") { open(CallEditorRoute.History) }
+                EditorDestinationRow("历史配置", "范围、角色、包装与插入项") { open(CallEditorRoute.History) }
                 EditorDestinationRow("关联资源", "${item.boundPackageIds.size} 个提示词包 · ${item.boundGroupIds.size} 个调用组") { open(CallEditorRoute.Bindings) }
                 HorizontalDivider()
                 EditorDestinationRow("资源信息", item.description.lineSequence().firstOrNull()?.take(48)?.takeIf { it.isNotBlank() }) { open(CallEditorRoute.Info) }
@@ -113,17 +150,18 @@ internal fun MainCallEditor(
                     { changed -> referenceChoices(item.copy(workflows = mergeWorkflow(changed))) },
                     { item = item.copy(workflows = mergeWorkflow(it)); pop() }, ::pop, ::requestPrompt,
                     onDelete = if (call.id == default?.id) null else ({ item = item.copy(workflows = item.workflows.filterNot { it.id == call.id }); pop() }),
-                    onRegisterBack = { backs[route] = it })
+                    onRegisterBack = { backs[route] = it }, siblings = item.workflows + item.history.processor.workflow,
+                    tags = library?.promptTags.orEmpty(), triggerTargets = completionSources())
             }
         }
         entry<CallEditorRoute.Prompt> { route -> promptRequest?.let { request ->
-            PromptBlocksEditor(request.blocks, request.references, { request.save(it); pop() }, ::pop, { backs[route] = it })
+            PromptBlocksEditor(request.blocks, request.references, { request.save(it); pop() }, ::pop, { backs[route] = it }, tags = library?.promptTags.orEmpty())
         } }
         entry<CallEditorRoute.History> { route ->
             var history by remember { mutableStateOf(item.history) }
             val baseline = remember { item.history }
             CallEditorPage("历史配置", history != baseline, ::pop, { item = item.copy(history = history); pop() }, onRegisterBack = { backs[route] = it }) {
-                HistoryConfigEditor(history, library, actions, profiles, referenceChoices(item.copy(history = history)), outputKeysForNewNodes(library, item.workflows + history.processor.workflow)) { history = it }
+                HistoryConfigEditor(history, library, referenceChoices(item.copy(history = history))) { history = it }
             }
         }
         entry<CallEditorRoute.Bindings> { route ->
@@ -153,7 +191,10 @@ internal fun MainCallEditor(
             }
         }
     })
-    if (rename) EditorRenameDialog("主调用名称", item.name, { rename = false }) { item = item.copy(name = it); rename = false }
+    if (rename) NamingDialog("主调用名称", item.name, item.slug,
+        library?.mainCalls.orEmpty().filterNot { it.id == item.id }.map { it.name },
+        library?.mainCalls.orEmpty().filterNot { it.id == item.id }.map { it.slug },
+        { rename = false }) { name, slug -> item = item.copy(name = name, slug = slug); rename = false }
     pendingSwitch?.let { pending -> AlertDialog(onDismissRequest = { pendingSwitch = null }, title = { Text("切换主调用？") }, text = { Text("当前主调用有未保存的修改。") },
         confirmButton = { TextButton(onClick = { pendingSwitch = null; onSwitchResource?.invoke(item, pending.targetId) }, enabled = !saving) { Text("保存并切换") } },
         dismissButton = { Row { TextButton(onClick = { pendingSwitch = null }) { Text("取消") }; TextButton(onClick = { pendingSwitch = null; onSwitchResource?.invoke(null, pending.targetId) }, enabled = !saving) { Text("放弃并切换") } } }) }
@@ -165,7 +206,13 @@ internal fun GroupEditor(
     saving: Boolean = false, actions: List<ActionDescriptor> = ActionRegistry.defaults().descriptors(),
     profiles: List<ModelProfile> = emptyList(), library: Library? = null,
 ) {
-    var item by remember(initial.id) { mutableStateOf(initial) }
+    val baseline = remember(initial.id) { MacroNaming.normalize(initial,
+        library?.groups.orEmpty().filterNot { it.id == initial.id }.map { it.slug }).let { group ->
+        if (group.name.isBlank() || (library != null && library.groups.none { it.id == group.id }))
+            group.copy(name = nextDisplayName(library?.groups.orEmpty().filterNot { it.id == group.id }.map { it.name }, "调用组"))
+        else group
+    } }
+    var item by remember(initial.id) { mutableStateOf(baseline) }
     val stack = remember(initial.id) { mutableStateListOf<NavKey>(CallEditorRoute.Home) }
     val backs = remember(initial.id) { mutableStateMapOf<NavKey, () -> Unit>() }
     var promptRequest by remember(initial.id) { mutableStateOf<PromptEditRequest?>(null) }
@@ -178,14 +225,23 @@ internal fun GroupEditor(
     fun updateWorkflow(changed: Workflow) { item = item.copy(workflows = item.workflows.map { if (it.id == changed.id) changed else it }) }
     fun mergeWorkflow(changed: Workflow) = if (item.workflows.any { it.id == changed.id }) item.workflows.map { if (it.id == changed.id) changed else it } else item.workflows + changed
     fun referenceChoices(draft: CallGroup = item) = promptReferenceChoices(draft.workflows, library, callGroup = draft)
+    fun completionSources(): List<Workflow> {
+        val selected = library?.sessions?.firstOrNull { it.id == library.selectedSessionId }
+        val main = library?.mainCalls?.firstOrNull { it.id == selected?.mainCallId }
+        val loadedGroups = if (selected != null) library?.loadedCallGroups(selected, main).orEmpty()
+            else library?.groups.orEmpty().filter { it.id in main?.boundGroupIds.orEmpty() }
+        return (item.workflows + main?.workflows.orEmpty() + loadedGroups.flatMap { it.workflows }).distinctBy { it.id }
+    }
     fun addCall() {
         val key = nextCallOutputKey(outputKeysForNewNodes(library, item.workflows), "call")
-        val workflow = Workflow(title = "调用 ${item.workflows.size + 1}", nodes = listOf(WorkflowNode(outputKey = key)))
+        val workflow = Workflow(title = nextDisplayName(item.workflows.map { it.title }, "调用"),
+            slug = nextEditorSlug(item.workflows.map { it.slug }, "call"),
+            nodes = listOf(WorkflowNode(outputKey = key, slug = key, recordTrajectory = false)))
         openDetails(workflow)
     }
     RikkaNavDisplay(stack, { backs[stack.last()]?.invoke() ?: pop() }, entryProvider {
         entry<CallEditorRoute.Home> { route ->
-            CallEditorPage("调用组", item != initial, onBack, { onSave(item) }, saving, { backs[route] = it }) {
+            CallEditorPage("调用组", item != baseline, onBack, { onSave(item.copy(name = item.name.trim())) }, saving, { backs[route] = it }) {
                 EditorTitleRow(item.name, { rename = true })
                 EditorDestinationRow("组内调用", "${item.workflows.size} 项") { open(CallEditorRoute.Calls) }
                 HorizontalDivider()
@@ -199,9 +255,10 @@ internal fun GroupEditor(
             val call = draft.value
             CallDetailsEditor(draft.baseline, call, { callDrafts[route.id] = draft.copy(value = it) }, actions, profiles, outputKeysForNewNodes(library, item.workflows + call),
                 { changed -> referenceChoices(item.copy(workflows = mergeWorkflow(changed))) },
-                { item = item.copy(workflows = mergeWorkflow(it)); pop() }, ::pop, ::requestPrompt, { item = item.copy(workflows = item.workflows.filterNot { it.id == call.id }); pop() }, { backs[route] = it })
+                { item = item.copy(workflows = mergeWorkflow(it)); pop() }, ::pop, ::requestPrompt, { item = item.copy(workflows = item.workflows.filterNot { it.id == call.id }); pop() }, { backs[route] = it },
+                siblings = item.workflows, tags = library?.promptTags.orEmpty(), triggerTargets = completionSources())
         } }
-        entry<CallEditorRoute.Prompt> { route -> promptRequest?.let { request -> PromptBlocksEditor(request.blocks, request.references, { request.save(it); pop() }, ::pop, { backs[route] = it }) } }
+        entry<CallEditorRoute.Prompt> { route -> promptRequest?.let { request -> PromptBlocksEditor(request.blocks, request.references, { request.save(it); pop() }, ::pop, { backs[route] = it }, tags = library?.promptTags.orEmpty()) } }
         entry<CallEditorRoute.Bindings> { route ->
             val baseline = remember { item.boundPackageIds }
             var selected by remember { mutableStateOf(item.boundPackageIds) }
@@ -230,5 +287,8 @@ internal fun GroupEditor(
             }
         }
     })
-    if (rename) EditorRenameDialog("调用组名称", item.name, { rename = false }) { item = item.copy(name = it); rename = false }
+    if (rename) NamingDialog("调用组名称", item.name, item.slug,
+        library?.groups.orEmpty().filterNot { it.id == item.id }.map { it.name },
+        library?.groups.orEmpty().filterNot { it.id == item.id }.map { it.slug },
+        { rename = false }) { name, slug -> item = item.copy(name = name, slug = slug); rename = false }
 }

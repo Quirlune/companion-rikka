@@ -25,6 +25,7 @@ import dev.gray.companion.core.Library
 import dev.gray.companion.core.ModelUsageRecord
 import dev.gray.companion.core.Session
 import dev.gray.companion.core.userName
+import dev.gray.companion.core.effectivePersona
 import dev.gray.companion.ui.ThreeHourlyHeatmap
 import java.time.Instant
 import java.time.ZoneId
@@ -41,7 +42,6 @@ import me.rerere.rikkahub.ui.pages.chat.CompanionConversationEntry
 import me.rerere.rikkahub.ui.pages.chat.CompanionConversationList
 import me.rerere.rikkahub.ui.pages.chat.DrawerAction
 import me.rerere.rikkahub.ui.pages.chat.DrawerActions
-import me.rerere.rikkahub.ui.pages.chat.DrawerNicknameDialog
 import me.rerere.rikkahub.ui.pages.chat.DrawerUserHeader
 import me.rerere.rikkahub.ui.pages.chat.OriginalDrawerFrame
 import kotlin.uuid.Uuid
@@ -68,17 +68,14 @@ fun CompanionDrawer(
     onDeleteSession: (String) -> Unit,
     onPinSession: (String) -> Unit,
     settings: Settings,
-    onUpdateSettings: (Settings) -> Unit,
-    onRenameUser: (String) -> Unit,
     usageError: String? = null,
 ) {
-    var nameEditorOpen by remember { mutableStateOf(false) }
-    var nameDraft by remember { mutableStateOf("") }
     var renameSession by remember { mutableStateOf<Session?>(null) }
     var deleteSession by remember { mutableStateOf<Session?>(null) }
     val listState = rememberLazyListState()
     val selected = library.sessions.firstOrNull { it.id == library.selectedSessionId }
     val userName = selected?.let(library::userName) ?: library.user.name
+    val userAvatar = selected?.let(library::effectivePersona)?.avatar ?: library.user.avatar
     val currentCharacter = library.characters.firstOrNull { it.id == selected?.characterId }
     val characterAssistants = remember(library.characters) {
         library.characters.map { card ->
@@ -121,14 +118,10 @@ fun CompanionDrawer(
     OriginalDrawerFrame {
         DrawerUserHeader(
             name = userName,
-            avatar = settings.displaySetting.userAvatar,
-            onAvatarUpdate = { avatar ->
-                onUpdateSettings(settings.copy(displaySetting = settings.displaySetting.copy(userAvatar = avatar)))
-            },
-            onEditName = {
-                nameDraft = userName
-                nameEditorOpen = true
-            },
+            avatar = userAvatar.toOriginalAvatar(),
+            onAvatarUpdate = {},
+            onEditName = onEditUser,
+            onOpenUserHeader = onEditUser,
         )
         DrawerActions(
             onSearch = onOpenSearch,
@@ -180,14 +173,6 @@ fun CompanionDrawer(
                 ThreeHourlyHeatmap(records = usage, now = usageAsOf, onClick = onUsage)
             }
         }
-    }
-    if (nameEditorOpen) {
-        DrawerNicknameDialog(
-            value = nameDraft,
-            onValueChange = { nameDraft = it },
-            onSave = { onRenameUser(nameDraft); nameEditorOpen = false },
-            onDismiss = { nameEditorOpen = false },
-        )
     }
     renameSession?.let { session ->
         var title by remember(session.id) { mutableStateOf(session.title) }

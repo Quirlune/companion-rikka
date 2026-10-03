@@ -24,6 +24,12 @@ object SafePatterns {
         val matcher = compiled(pattern).matcher(text)
         return if (matcher.find()) matcher.group(captureGroup) else null
     }
+    fun extractAll(pattern: String, text: String, captureGroup: Int = 0): List<String> {
+        require(validate(pattern, captureGroup) == null) { "正则表达式或捕获组无效" }
+        if (pattern.isBlank()) return listOf(text)
+        val matcher = compiled(pattern).matcher(text)
+        return buildList { while (matcher.find()) matcher.group(captureGroup)?.let(::add) }
+    }
     fun replace(pattern: String, text: String, replacement: String): String =
         compiled(pattern).matcher(text).replaceAll(replacement)
 }

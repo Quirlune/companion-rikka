@@ -75,17 +75,31 @@ internal fun promptReferenceChoices(
     add(choice("角色名称", "{{character.name}}", "characters", "角色资料", "聊天角色的显示名称", listOf(characterOwner)))
     val historyOwners = listOfNotNull(mainOwner)
     add(choice("结构化历史", "{{history}}", "history", "聊天历史", "按主调用的历史规则插入消息", historyOwners))
+    add(choice("原始历史", "{{history.raw}}", "history", "聊天历史", "读取原始 BODY 楼层", historyOwners))
     add(choice("历史纯文本", "{{history.text}}", "history", "聊天历史", "将投影后的历史展开为文本", historyOwners))
     add(choice("历史楼层数量", "{{history.count}}", "history", "聊天历史", "投影后的历史消息数量", historyOwners))
-    add(choice("历史摘要", "{{history.summary}}", "history", "聊天历史", "历史处理成功生成的摘要；未生成时为空", historyOwners))
+    add(choice("历史摘要与记忆标识", "{{history.summary}}", "history", "聊天历史", "历史处理成功生成的摘要和可供普通调用选择的记忆段标识；未生成时为空", historyOwners))
+    add(choice("完整原始结构化历史", "{{type:builtin.in:history.name:messages}}", "history", "聊天历史", "原始 BODY 楼层；整块插入时保留角色与消息顺序", historyOwners))
+    add(choice("完整处理后结构化历史", "{{type:builtin.in:history.name:context}}", "history", "聊天历史", "按主调用历史规则与记忆摘要投影；整块插入时保留消息角色", historyOwners))
+    add(choice("最早三层原文", "{{type:builtin.in:history.name:messages.from:start-1.through:start-3}}", "history", "聊天历史", "按最早三条 BODY 楼层选取", historyOwners))
+    add(choice("最近三层原文", "{{type:builtin.in:history.name:messages.from:end-3.through:end-1}}", "history", "聊天历史", "按最近三条 BODY 楼层选取", historyOwners))
+    add(choice("中间区段原文", "{{type:builtin.in:history.name:messages.from:percent-34.through:percent-66}}", "history", "聊天历史", "按历史楼层位置的百分比选取", historyOwners))
+    session?.historyMemory?.views.orEmpty().forEach { (viewId, revisions) ->
+        revisions.lastOrNull()?.let { latest ->
+            add(choice("历史副本 · ${latest.name}", "{{type:builtin.in:history.name:context.view:$viewId}}", "history", "聊天历史",
+                "副本第 ${latest.revision} 版 · 结构化历史，可再指定范围；原聊天楼层保持独立", historyOwners))
+            add(choice("历史副本 · ${latest.name} · 第 ${latest.revision} 版", "{{type:builtin.in:history.name:context.view:$viewId.revision:${latest.revision}}}", "history", "聊天历史",
+                "固定读取第 ${latest.revision} 版", historyOwners))
+        }
+    }
     val entries = card?.let(CharacterFields::normalize)?.entries.orEmpty()
     if (card == null) CharacterFields.definitions.forEach { field ->
         add(choice(field.title, "{{character.${field.key}}}", "characters", "角色资料", "读取所选角色的${field.title}", listOf(characterOwner)))
     }
     entries.forEach { entry ->
-        val title = CharacterFields.definitions.firstOrNull { it.key == entry.key }?.title ?: entry.key
+        val title = entry.title.ifBlank { CharacterFields.definitions.firstOrNull { it.key == entry.key }?.title ?: entry.key }
         add(choice(title, "{{character.${entry.key}}}", "characters", "角色资料",
-            entryReferencePurpose(entry), listOf(characterOwner)))
+            entryReferencePurpose(entry, library?.promptTags.orEmpty()), listOf(characterOwner)))
     }
     val allPackages = (packages + library?.packages.orEmpty()).distinctBy { it.id }
     allPackages.forEach { pack ->
@@ -93,8 +107,8 @@ internal fun promptReferenceChoices(
         val owner = PromptReferenceSource("pack:${pack.id}", "${pack.name.ifBlank { "未命名提示词包" }} · ${pack.namespace}",
             if (loaded) "当前聊天或编辑配置中的绑定来源；词条仍受开关与条件控制" else "未加载；需先绑定或在聊天中加载")
         pack.entries.forEach { entry ->
-            add(choice(entry.key, "{{pack.${pack.namespace}.${entry.key}}}", "packages", "提示词包",
-                (if (loaded) "" else "未加载时引用为空 · ") + entryReferencePurpose(entry), listOf(owner)))
+            add(choice(entry.title.ifBlank { entry.key }, "{{pack.${pack.namespace}.${entry.key}}}", "packages", "提示词包",
+                (if (loaded) "" else "未加载时引用为空 · ") + entryReferencePurpose(entry, library?.promptTags.orEmpty()), listOf(owner)))
         }
     }
     (entries + packages.flatMap { it.entries }).map { it.category }.filter { it.isNotBlank() }.distinct().forEach { category ->
@@ -127,7 +141,7 @@ internal fun promptReferenceChoices(
     callOwners.values.forEach { (owner, call) ->
         val callTitle = call.title.ifBlank { "未命名调用" }
         val callOwner = PromptReferenceSource("call:${owner.id}:${call.id}", callTitle,
-            "${owner.detail} · ${callPhaseLabel(call.trigger)} · ${callScheduleLabel(call)}", menuTitle = "${owner.title} · $callTitle")
+            "${owner.detail} · ${call.afterWorkflowId?.let { "指定调用完成后（${it.take(8)}）" } ?: callPhaseLabel(call.trigger)} · ${callScheduleLabel(call)}", menuTitle = "${owner.title} · $callTitle")
         call.nodes.forEach { node ->
             val nodeTitle = node.title.ifBlank { "未命名节点" }
             val owners = listOf(owner.copy(inMenu = false), callOwner,
@@ -136,6 +150,16 @@ internal fun promptReferenceChoices(
             add(choice("$nodeTitle · 本轮结果", "{{result.${node.outputKey}}}", "calls", "调用结果",
                 "${nodeActionPurpose(node)} · 本轮该节点成功完成后可用$inactive", owners, node.id,
                 "调用自动发布结果宏，无需放入提示词包"))
+            node.regexOutputCopy.takeIf { it.enabled && it.outputKey.isNotBlank() }?.let { copy ->
+                add(choice("$nodeTitle · 正则副本", "{{result.${copy.outputKey}}}", "calls", "调用结果",
+                    "由此节点的结果处理成的独立副本$inactive", owners, node.id,
+                    "原输出 result.${node.outputKey} 仍可单独引用"))
+                add(choice("$nodeTitle · 正则副本最新版", "{{macro.${copy.outputKey}}}", "calls", "调用结果",
+                    "副本成功发布后可读取最新保存版本$inactive", owners, node.id))
+                val publishedCopy = currentVersions["result.${copy.outputKey}"]
+                if (publishedCopy?.origin?.let { it.resourceId == owner.id.substringAfter(':', "") && it.workflowId == call.id && it.nodeId == node.id } == true)
+                    emittedDynamicAddresses.add("result.${copy.outputKey}")
+            }
             val address = "result.${node.outputKey}"
             val current = currentVersions[address]
             val currentOwner = owner.id.substringAfter(':', "")
@@ -180,8 +204,10 @@ internal fun promptReferenceChoices(
     }
 }
 
-private fun entryReferencePurpose(entry: PromptEntry): String = buildList {
+private fun entryReferencePurpose(entry: PromptEntry, catalog: List<PromptTag>): String = buildList {
     add("读取词条文本")
+    if (entry.slug.isNotBlank()) add("英文：${entry.slug}")
+    if (entry.tagIds.isNotEmpty()) add("标签：${entry.tagIds.map { id -> catalog.firstOrNull { it.id == id }?.let { "${it.name} / ${it.slug}" } ?: "未找到：$id" }.joinToString("、")}")
     if (entry.category.isNotBlank()) add("分类：${entry.category}")
     if (!entry.enabled) add("词条已停用")
     if (entry.condition != null) add("满足识别条件时提供")
@@ -195,6 +221,9 @@ private fun nodeActionPurpose(node: WorkflowNode): String = when (node.actionId)
     "event.emit" -> "事件触发动作的结果"
     "macro.write" -> "宏写入动作的结果"
     "macro.process" -> "宏处理动作的结果"
+    "text.extract" -> "正则提取的独立文本副本"
+    "history.memory.write" -> "来源可追溯的历史记忆"
+    "history.view.copy" -> "结构化历史副本版本"
     "prompt.inject", "prompt.remove" -> "提示词管理动作的结果"
     else -> "${node.actionId} 动作的输出"
 }
@@ -239,10 +268,13 @@ internal fun PromptReferenceSheet(
                     modifier = Modifier.fillMaxWidth(), singleLine = true, shape = MaterialTheme.shapes.large)
             }
             item { Text("目录包含当前聊天、编辑配置与可绑定的提示词包；未加载的资料会标明，本轮结果需成功完成后才能引用。", style = MaterialTheme.typography.bodySmall) }
+            if (choices.any { it.macro.startsWith("{{type:builtin.in:history.name:messages") || it.macro.startsWith("{{type:builtin.in:history.name:context") }) item {
+                HistoryReferenceComposer(choices, { onInsert(it); onDismiss() })
+            }
             if (versioned) {
                 item {
                     ChoiceLine("版本", versionMode, listOf(
-                        "latest" to "最新", "turn" to "前 N 轮", "update" to "前 N 次更新", "version" to "指定版本号"
+                        "latest" to "最新", "turn" to "前 N 轮", "update" to "前 N 个记录点", "version" to "指定版本号"
                     )) { versionMode = it }
                 }
                 if (versionMode != "latest") item {
@@ -252,7 +284,8 @@ internal fun PromptReferenceSheet(
                         modifier = Modifier.fillMaxWidth(), singleLine = true, shape = MaterialTheme.shapes.large,
                     )
                 }
-                item { Text("找不到所选版本时，引用结果为空。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                item { Text("记录点只计算勾选了轨迹的更新；关闭轨迹期间的旧轮次可能无法按历史引用。找不到所选版本时，引用结果为空。",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
             if (sections.isEmpty()) item { Text("没有匹配的引用。") }
             sections.forEach { (section, references) ->
@@ -285,6 +318,59 @@ internal fun PromptReferenceSheet(
             }
             item { TextButton(onClick = onDismiss) { Text("关闭") } }
         }
+    }
+}
+
+@Composable
+private fun HistoryReferenceComposer(choices: List<PromptReferenceChoice>, onInsert: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    var processed by remember { mutableStateOf(false) }
+    var range by remember { mutableStateOf(true) }
+    var fromAnchor by remember { mutableStateOf("end") }
+    var fromNumber by remember { mutableStateOf("3") }
+    var throughAnchor by remember { mutableStateOf("end") }
+    var throughNumber by remember { mutableStateOf("1") }
+    var viewId by remember { mutableStateOf<String?>(null) }
+    var fixedRevision by remember { mutableStateOf(false) }
+    var revision by remember { mutableStateOf("1") }
+    val viewPattern = Regex("\\.view:([a-z][a-z0-9_-]*)")
+    val views = choices.mapNotNull { choice -> viewPattern.find(choice.macro)?.groupValues?.getOrNull(1)?.let { it to choice.title.substringBefore(" · 第") } }.distinctBy { it.first }
+    TextButton(onClick = { open = !open }) { Text(if (open) "收起历史范围选择" else "自选历史范围与副本") }
+    if (!open) return
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("每条引用独立选择楼层；整块插入可保留消息角色。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ChoiceLine("读取内容", processed, listOf(false to "原始楼层", true to "历史规则与摘要处理后")) { processed = it }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            SuggestionChip(onClick = { range = true; fromAnchor = "start"; fromNumber = "1"; throughAnchor = "start"; throughNumber = "3" }, label = { Text("最早三层") })
+            SuggestionChip(onClick = { range = true; fromAnchor = "end"; fromNumber = "3"; throughAnchor = "end"; throughNumber = "1" }, label = { Text("最近三层") })
+            SuggestionChip(onClick = { range = true; fromAnchor = "percent"; fromNumber = "34"; throughAnchor = "percent"; throughNumber = "66" }, label = { Text("中间区段") })
+        }
+        ToggleLine("指定范围", range) { range = it }
+        if (range) {
+            val anchors = listOf("start" to "从开头", "end" to "从末尾", "percent" to "百分比")
+            ChoiceLine("起点", fromAnchor, anchors) { fromAnchor = it }
+            OutlinedTextField(fromNumber, { fromNumber = it.filter(Char::isDigit) }, label = { Text(if (fromAnchor == "percent") "起点百分比（0–100）" else "起点楼层（从 1 开始）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            ChoiceLine("终点（包含）", throughAnchor, anchors) { throughAnchor = it }
+            OutlinedTextField(throughNumber, { throughNumber = it.filter(Char::isDigit) }, label = { Text(if (throughAnchor == "percent") "终点百分比（0–100）" else "终点楼层（从 1 开始）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        }
+        if (views.isNotEmpty()) {
+            ChoiceLine("历史副本", viewId, listOf<Pair<String?, String>>(null to "当前历史") + views.map { (id, title) -> (id as String?) to title }) { viewId = it; fixedRevision = false }
+            if (viewId != null) {
+                ToggleLine("固定副本版本", fixedRevision) { fixedRevision = it }
+                if (fixedRevision) OutlinedTextField(revision, { revision = it.filter(Char::isDigit) }, label = { Text("版本号") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            }
+        }
+        fun valid(anchor: String, number: String): Boolean = number.toIntOrNull()?.let { if (anchor == "percent") it in 0..100 else it > 0 } == true
+        val okay = (!range || (valid(fromAnchor, fromNumber) && valid(throughAnchor, throughNumber))) && (!fixedRevision || viewId == null || (revision.toIntOrNull() ?: 0) > 0)
+        val expression = buildString {
+            append("{{type:builtin.in:history.name:${if (processed) "context" else "messages"}")
+            if (range) append(".from:$fromAnchor-$fromNumber.through:$throughAnchor-$throughNumber")
+            viewId?.let { append(".view:$it") }
+            if (viewId != null && fixedRevision) append(".revision:$revision")
+            append("}}")
+        }
+        Text(expression, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+        OutlinedButton(onClick = { onInsert(expression) }, enabled = okay) { Text("插入历史引用") }
     }
 }
 private fun withSelectedVersion(macro: String, mode: String, number: Int?): String {
@@ -326,11 +412,16 @@ internal fun CallScheduleOverview(workflows: List<Workflow>, primaryId: String?,
             val phases = listOf(RuntimeEvents.TURN_PREPARE to "① 发送前准备", RuntimeEvents.USER_MESSAGE to "② 用户消息后的调用", RuntimeEvents.REPLY_COMPLETED to "③ 正文完成后")
             phases.forEach { (trigger, title) ->
                 Text(title, style = MaterialTheme.typography.titleSmall)
-                val calls = workflows.filter { it.trigger == trigger }
+                val calls = workflows.filter { it.afterWorkflowId == null && it.trigger == trigger }
                 if (calls.isEmpty()) Text("暂无调用", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 calls.forEach { call -> ScheduleCallRow(call, primaryId, selectedId, onSelect) }
             }
-            val custom = workflows.filter { call -> phases.none { it.first == call.trigger } }
+            val completed = workflows.filter { it.afterWorkflowId != null }
+            if (completed.isNotEmpty()) {
+                Text("指定调用完成后的调用", style = MaterialTheme.typography.titleSmall)
+                completed.forEach { call -> ScheduleCallRow(call, primaryId, selectedId, onSelect) }
+            }
+            val custom = workflows.filter { call -> call.afterWorkflowId == null && phases.none { it.first == call.trigger } }
             if (custom.isNotEmpty()) {
                 Text("自定义事件触发", style = MaterialTheme.typography.titleSmall)
                 custom.forEach { call -> ScheduleCallRow(call, primaryId, selectedId, onSelect) }

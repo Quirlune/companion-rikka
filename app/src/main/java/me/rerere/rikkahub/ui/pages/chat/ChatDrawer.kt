@@ -628,17 +628,21 @@ fun DrawerUserHeader(
     avatar: Avatar,
     onAvatarUpdate: (Avatar) -> Unit,
     onEditName: () -> Unit,
+    onOpenUserHeader: (() -> Unit)? = null,
 ) {
     val displayName = name.ifBlank { stringResource(R.string.user_default_name) }
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+        modifier = Modifier.fillMaxWidth()
+            .then(if (onOpenUserHeader != null) Modifier.clickable(onClick = onOpenUserHeader) else Modifier)
+            .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         UIAvatar(
             name = displayName,
             value = avatar,
-            onUpdate = onAvatarUpdate,
+            onUpdate = if (onOpenUserHeader == null) onAvatarUpdate else null,
+            onClick = onOpenUserHeader,
             modifier = Modifier.size(50.dp),
         )
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -648,9 +652,9 @@ fun DrawerUserHeader(
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.clickable(onClick = onEditName),
+                    modifier = if (onOpenUserHeader == null) Modifier.clickable(onClick = onEditName) else Modifier,
                 )
-                Icon(
+                if (onOpenUserHeader == null) Icon(
                     imageVector = HugeIcons.PencilEdit01,
                     contentDescription = "Edit",
                     modifier = Modifier.onClick(onClick = onEditName).size(LocalTextStyle.current.fontSize.toDp()),

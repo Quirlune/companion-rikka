@@ -71,6 +71,7 @@ internal class AcceptedTurnPublisher(
                     messages = session.messages + journal.replies, state = journal.state, results = journal.results,
                     resultOrigins = journal.resultOrigins, macroHistory = journal.macroHistory,
                     promptInjections = journal.promptInjections, historyDigests = journal.historyDigests,
+                    historyMemory = journal.historyMemory, currentOnlyMacros = journal.currentOnlyMacros,
                     unavailableResultKeys = journal.unavailableKeys))
             }
             val acceptedNodes = journal?.accepted.orEmpty().map { it.reply?.let { reply -> reply.workflowId to reply.nodeId } }.toSet()

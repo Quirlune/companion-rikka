@@ -109,7 +109,7 @@ object MessageOperations {
 
     fun captureRuntime(session: Session): RuntimeSnapshot = RuntimeSnapshot(
         session.state, session.results, session.resultOrigins, session.promptInjections, session.historyDigests,
-        session.unavailableResultKeys
+        session.unavailableResultKeys, session.historyMemory, session.currentOnlyMacros
     )
 
     fun captureCheckpoint(session: Session): TurnCheckpoint = TurnCheckpoint(
@@ -458,7 +458,7 @@ object MessageOperations {
         if (checkpoint.macroLengths.any { (address, count) -> result.macroHistory[address].orEmpty().size < count }) return null
         return TurnVariant(replies = result.replies, after = RuntimeSnapshot(
             result.state, result.results, result.resultOrigins, result.promptInjections, result.historyDigests,
-            result.unavailableResultKeys
+            result.unavailableResultKeys, result.historyMemory, result.currentOnlyMacros
         ), macroAppends = suffix)
     }
 
@@ -473,13 +473,15 @@ object MessageOperations {
     private fun materialize(session: Session, result: RunResult): Session = session.copy(
         state = result.state, results = result.results, resultOrigins = result.resultOrigins,
         macroHistory = result.macroHistory, promptInjections = result.promptInjections,
-        historyDigests = result.historyDigests, unavailableResultKeys = result.unavailableResultKeys
+        historyDigests = result.historyDigests, unavailableResultKeys = result.unavailableResultKeys,
+        historyMemory = result.historyMemory, currentOnlyMacros = result.currentOnlyMacros
     )
 
     private fun restore(session: Session, runtime: RuntimeSnapshot): Session = session.copy(
         state = runtime.state, results = runtime.results, resultOrigins = runtime.resultOrigins,
         promptInjections = runtime.promptInjections, historyDigests = runtime.historyDigests,
-        unavailableResultKeys = runtime.unavailableResultKeys
+        unavailableResultKeys = runtime.unavailableResultKeys, historyMemory = runtime.historyMemory,
+        currentOnlyMacros = runtime.currentOnlyMacros
     )
 
     private fun unavailable(path: String, message: String) = MessageOperationResult(issues = listOf(Issue(path, message)))

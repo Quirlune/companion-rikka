@@ -33,8 +33,13 @@ internal fun PromptBlocksEditor(
     onSave: (List<PromptBlock>) -> Unit, onBack: () -> Unit,
     onRegisterBack: ((() -> Unit) -> Unit)? = null,
     title: String = "提示词", saving: Boolean = false,
+    tags: List<PromptTag> = emptyList(),
 ) {
-    var blocks by remember { mutableStateOf(initial) }
+    val baseline = remember(initial) {
+        val used = initial.map { it.slug }.filter { it.isNotEmpty() }.toMutableSet()
+        initial.map { block -> MacroNaming.normalize(block, used).also { used += it.slug } }
+    }
+    var blocks by remember(initial) { mutableStateOf(baseline) }
     val undo = remember { mutableStateListOf<List<PromptBlock>>() }
     var undoGroup by remember { mutableStateOf<String?>(null) }
     var confirmBack by remember { mutableStateOf(false) }
@@ -54,7 +59,7 @@ internal fun PromptBlocksEditor(
             blocks = value
         }
     }
-    fun requestBack() { focus.clearFocus(); if (blocks != initial) confirmBack = true else onBack() }
+    fun requestBack() { focus.clearFocus(); if (blocks != baseline) confirmBack = true else onBack() }
     SideEffect { onRegisterBack?.invoke(::requestBack) }
     BackHandler { requestBack() }
     val reorderable = rememberReorderableLazyListState(listState) { from, to ->
@@ -67,7 +72,7 @@ internal fun PromptBlocksEditor(
             LargeFlexibleTopAppBar(
                 title = { Text(title) }, navigationIcon = { CompanionBackButton(::requestBack) },
                 actions = {
-                    if (blocks != initial) Text("未保存", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (blocks != baseline) Text("未保存", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     IconButton(onClick = { focus.clearFocus(); onSave(blocks) }, enabled = !saving) { Icon(HugeIcons.FloppyDisk, "保存提示词") }
                 }, scrollBehavior = scrollBehavior, colors = CustomColors.topBarColors,
             )
@@ -77,12 +82,13 @@ internal fun PromptBlocksEditor(
         Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(onClick = {
-                    val block = PromptBlock()
+                    val block = PromptBlock(title = nextDisplayName(blocks.map { it.title }, "提示词"),
+                        slug = nextEditorSlug(blocks.map { it.slug }, "prompt"))
                     edit(blocks + block); expanded[block.id] = true
                 }) { Icon(HugeIcons.Add01, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("添加") }
                 TextButton(onClick = { if (undo.isNotEmpty()) { blocks = undo.removeAt(undo.lastIndex); undoGroup = null } }, enabled = undo.isNotEmpty()) { Text("撤销") }
                 Spacer(Modifier.weight(1f))
-                TextButton(onClick = { if (blocks != initial) confirmBack = true else onBack() }) { Text("放弃") }
+                TextButton(onClick = { if (blocks != baseline) confirmBack = true else onBack() }) { Text("放弃") }
             }
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (blocks.isEmpty()) item { Text("添加提示词，或保持空白。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -103,6 +109,7 @@ internal fun PromptBlocksEditor(
                                 }
                                 if (expanded[block.id] == true) Column(Modifier.padding(horizontal = 12.dp).padding(bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     fun update(value: PromptBlock, group: String? = null) = edit(blocks.map { if (it.id == block.id) value else it }, group)
+                                    PromptTagSelector(tags, block.tagIds) { update(block.copy(tagIds = it)) }
                                     PromptTemplateField("内容", block.template, references, { update(block.copy(template = it), "template:${block.id}") }, minLines = 3)
                                     TextProcessingEditor("内容处理", block.processing, references) { update(block.copy(processing = it)) }
                                     EditorSection("插入位置与触发", promptPositionLabel(block)) {
@@ -126,7 +133,11 @@ internal fun PromptBlocksEditor(
         }
     }
     renameId?.let { id -> blocks.firstOrNull { it.id == id }?.let { block ->
-        EditorRenameDialog("提示词名称", block.title, { renameId = null }) { title -> edit(blocks.map { if (it.id == id) it.copy(title = title) else it }); renameId = null }
+        NamingDialog("提示词名称", block.title, block.slug,
+            blocks.filterNot { it.id == id }.map { it.title }, blocks.filterNot { it.id == id }.map { it.slug },
+            { renameId = null }) { name, slug ->
+            edit(blocks.map { if (it.id == id) it.copy(title = name, slug = slug) else it }); renameId = null
+        }
     } }
     deleteId?.let { id -> AlertDialog(
         onDismissRequest = { deleteId = null }, title = { Text("删除提示词？") }, text = { Text("删除后可以在此页撤销。") },

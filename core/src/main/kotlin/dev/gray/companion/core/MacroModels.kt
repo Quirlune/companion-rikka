@@ -14,9 +14,20 @@ import kotlinx.serialization.Serializable
     val groups: List<Recognition> = emptyList(), val negate: Boolean = false
 )
 // Activation changes are also versions of the value's shape.
+/** null firstTurn means an omitted interval whose start cannot be established. */
+@Serializable data class MacroGap(val firstTurn: Int? = null)
+
+/** Current-only metadata. Results and state keep their text in the existing runtime maps. */
+@Serializable data class MacroHead(
+    val version: Int, val origin: ResultOrigin, val enabled: Boolean = true,
+    val turn: Int? = null, val turnId: String? = null, val valueOrigin: ResultOrigin? = null,
+    val gap: MacroGap = MacroGap(), val text: String? = null
+)
+
 @Serializable data class MacroVersion(
     val version: Int, val text: String, val origin: ResultOrigin, val enabled: Boolean = true,
-    val turn: Int? = null, val turnId: String? = null, val valueOrigin: ResultOrigin? = null
+    val turn: Int? = null, val turnId: String? = null, val valueOrigin: ResultOrigin? = null,
+    val precedingGap: MacroGap? = null
 )
 @Serializable enum class InjectionScope { TURN, SESSION }
 @Serializable data class PromptInjection(
@@ -24,8 +35,13 @@ import kotlinx.serialization.Serializable
     val targetWorkflowId: String? = null, val targetNodeId: String? = null,
     val scope: InjectionScope = InjectionScope.TURN, val turnId: String? = null
 )
-@Serializable enum class MacroTileKind { TEXT, NUMBER, PROGRESS, STATUS }
+@Serializable enum class MacroTileKind { TEXT, NUMBER, PROGRESS, STATUS, HTML }
 @Serializable enum class MacroTilePlacement { CHAT, SIDEBAR }
+@Serializable enum class MacroHtmlValueKind { TEXT, NUMBER }
+@Serializable data class MacroHtmlBinding(
+    val name: String = "", val pattern: String = "", val captureGroup: Int = 0,
+    val kind: MacroHtmlValueKind = MacroHtmlValueKind.TEXT
+)
 @Serializable data class MacroStatusField(
     val key: String = "", val title: String = "", val kind: MacroTileKind = MacroTileKind.TEXT,
     val minimum: Double = 0.0, val maximum: Double = 100.0
@@ -41,5 +57,7 @@ import kotlinx.serialization.Serializable
     val captureGroup: Int = 0, val enabled: Boolean = true, val hideWhenEmpty: Boolean = true,
     val style: MacroTileStyle = MacroTileStyle(),
     val placement: MacroTilePlacement = MacroTilePlacement.CHAT,
-    val fields: List<MacroStatusField> = emptyList()
+    val fields: List<MacroStatusField> = emptyList(),
+    val htmlTemplate: String = "", val htmlCss: String = "",
+    val htmlBindings: List<MacroHtmlBinding> = emptyList()
 )

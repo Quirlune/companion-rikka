@@ -42,7 +42,10 @@ data class ActionContext(
     val onDelta: suspend (String) -> Unit,
     val dependencyOutputs: Map<String, ActionOutcome> = emptyMap(),
     val session: Session? = null,
-    val library: Library? = null
+    val library: Library? = null,
+    val workflowId: String = "",
+    val executionVersion: Int = 3,
+    val macroTarget: MacroTargetSnapshot? = null
 )
 
 @Serializable data class PromptInjectionPatch(
@@ -56,7 +59,8 @@ data class ActionContext(
     val emittedEvents: List<String> = emptyList(),
     val macroWrites: Map<String, String> = emptyMap(),
     val activationWrites: Map<String, Boolean> = emptyMap(),
-    val injectionWrites: List<PromptInjectionPatch> = emptyList()
+    val injectionWrites: List<PromptInjectionPatch> = emptyList(),
+    val historyWrites: HistoryMemoryPatch = HistoryMemoryPatch()
 )
 fun interface ActionHandler { suspend fun execute(context: ActionContext): ActionOutcome }
 data class RegisteredAction(val descriptor: ActionDescriptor, val handler: ActionHandler)
@@ -114,7 +118,7 @@ class ActionRegistry {
                 ActionFieldDescriptor("event", "事件名称", required = true)
             ))) { context ->
                 val event = context.arguments.getValue("event").trim()
-                require(!RuntimeEvents.isReserved(event)) { "此事件由运行时派发" }
+                require(!(if (context.executionVersion == 1) event in RuntimeEvents.reserved else RuntimeEvents.isReserved(event))) { "此事件由运行时派发" }
                 ActionOutcome(context.input, emittedEvents = listOf(event))
             }
             .register(ActionDescriptor("macro.write", "更新宏", "发布宏的新版本", listOf(
@@ -142,7 +146,12 @@ class ActionRegistry {
                 val session = requireNotNull(context.session)
                 val library = requireNotNull(context.library)
                 val current = MacroReferences.currentVersion(library, session, address)
+                val capturedTarget = context.macroTarget?.takeIf { context.executionVersion >= 3 }
+                require(capturedTarget == null || capturedTarget.address == address) { "捕获的宏目标与当前配置不一致" }
                 val existing = when {
+                    capturedTarget != null -> capturedTarget.text
+                    address in session.currentOnlyMacros && current == null &&
+                        (address.startsWith("result.") || address.startsWith("state.")) -> null
                     address.startsWith("state.") -> context.state[address.substring(6)]
                     current != null -> current.text
                     else -> MacroReferences.baseValue(library, session, address)
@@ -154,7 +163,7 @@ class ActionRegistry {
                 val base = when (config.mode) {
                     MacroProcessMode.SET -> context.input
                     MacroProcessMode.UPDATE -> existing ?: MacroResolver(library, session, context.input).render(config.initial)
-                    MacroProcessMode.COPY -> readCopySource(library, session, config.source)
+                    MacroProcessMode.COPY -> readCopySource(library, session, config.source, capturedTarget)
                         ?: error("源宏或指定版本不存在")
                     else -> error("处理模式无效")
                 }
@@ -163,13 +172,50 @@ class ActionRegistry {
                 if (address.startsWith("state.")) ActionOutcome(value, stateWrites = mapOf(address.substring(6) to value))
                 else ActionOutcome(value, macroWrites = mapOf(address to value))
             }
-            .register(ActionDescriptor("text.extract", "提取文本", "按安全正则提取输入", listOf(
+            .register(ActionDescriptor("text.extract", "正则副本", "提取或替换输入，将处理结果保存为独立输出宏", listOf(
                 ActionFieldDescriptor("pattern", "表达式", required = true),
+                ActionFieldDescriptor("captureGroup", "捕获组", ActionFieldType.NUMBER, defaultValue = "0", integer = true),
+                ActionFieldDescriptor("mode", "模式", defaultValue = "EXTRACT", choices = listOf(
+                    ActionChoice("EXTRACT", "提取"), ActionChoice("REPLACE", "替换"))),
+                ActionFieldDescriptor("replacement", "替换内容")
+            ))) { context ->
+                if (context.executionVersion == 1) return@register ActionOutcome(SafePatterns.extract(
+                    context.arguments.getValue("pattern"), context.input, context.arguments.getValue("captureGroup").toInt()).orEmpty())
+                ActionOutcome(RegexOutputCopies.transform(RegexOutputCopy(pattern = context.arguments.getValue("pattern"),
+                    captureGroup = context.arguments.getValue("captureGroup").toInt(),
+                    mode = RegexTransformMode.valueOf(context.arguments.getValue("mode")),
+                    replacement = context.arguments["replacement"].orEmpty()), context.input))
+            }
+            .register(ActionDescriptor("history.memory.write", "记录分段记忆", "保存摘要与真实原文楼层的映射", listOf(
+                ActionFieldDescriptor("source", "History 来源", required = true, defaultValue = "{{history}}"),
+                ActionFieldDescriptor("title", "记忆标题", defaultValue = "记忆")
+            ))) { context ->
+                val session = requireNotNull(context.session)
+                val selection = HistoryViews.selection(context.arguments.getValue("source")) ?: error("History 来源引用无效")
+                val main = requireNotNull(context.library).mainCalls.first { it.id == session.mainCallId }
+                val segment = HistoryMemory.segment(context.arguments["title"].orEmpty(), context.input,
+                    HistoryViews.originalMessages(session, selection, main), context.workflowId)
+                ActionOutcome(segment.id, historyWrites = HistoryMemoryPatch(segments = listOf(segment)))
+            }
+            .register(ActionDescriptor("history.view.copy", "History 压缩或展开副本", "通过记忆 ID 创建独立历史视图，不复制原文", listOf(
+                ActionFieldDescriptor("source", "History 来源", required = true, defaultValue = "{{history}}"),
+                ActionFieldDescriptor("targetId", "副本英文标识", required = true),
+                ActionFieldDescriptor("name", "副本名称"),
+                ActionFieldDescriptor("mode", "模式", defaultValue = "COMPRESS", choices = listOf(
+                    ActionChoice("COMPRESS", "压缩"), ActionChoice("EXPAND", "展开"))),
+                ActionFieldDescriptor("ids", "记忆 ID", ActionFieldType.TEMPLATE),
+                ActionFieldDescriptor("pattern", "ID 提取正则"),
                 ActionFieldDescriptor("captureGroup", "捕获组", ActionFieldType.NUMBER, defaultValue = "0", integer = true)
-            ), presentation = ActionPresentation.COMPATIBILITY)) { context ->
-                val pattern = context.arguments.getValue("pattern")
-                val captureGroup = context.arguments.getValue("captureGroup").toInt()
-                ActionOutcome(SafePatterns.extract(pattern, context.input, captureGroup).orEmpty())
+            ))) { context ->
+                val selection = HistoryViews.selection(context.arguments.getValue("source")) ?: error("History 来源引用无效")
+                val ids = HistoryActions.selectedIds(context.arguments["ids"].orEmpty(),
+                    context.arguments["pattern"].orEmpty(), context.arguments.getValue("captureGroup").toInt())
+                val target = context.arguments.getValue("targetId").trim()
+                val session = requireNotNull(context.session)
+                val main = requireNotNull(context.library).mainCalls.first { it.id == session.mainCallId }
+                val patch = HistoryViews.copy(session, selection, target,
+                    context.arguments["name"].orEmpty(), HistorySegmentMode.valueOf(context.arguments.getValue("mode")), ids, main)
+                ActionOutcome(target, historyWrites = patch)
             }
             .register(ActionDescriptor("prompt.inject", "注入提示词", "向主调用目标模型节点注入提示块", listOf(
                 ActionFieldDescriptor("id", "注入标识", required = true),
@@ -223,14 +269,17 @@ internal fun ActionDescriptor.executionIssue(): String? {
 }
 
 internal fun ActionOutcome.hasEffects(): Boolean = stateWrites.isNotEmpty() || emittedEvents.isNotEmpty() ||
-    macroWrites.isNotEmpty() || activationWrites.isNotEmpty() || injectionWrites.isNotEmpty()
+    macroWrites.isNotEmpty() || activationWrites.isNotEmpty() || injectionWrites.isNotEmpty() || !historyWrites.isEmpty()
 
-private fun readCopySource(library: Library, session: Session, source: String): String? {
+private fun readCopySource(library: Library, session: Session, source: String, target: MacroTargetSnapshot? = null): String? {
     val raw = source.trim().removeSurrounding("{{", "}}").trim()
     val address = canonicalWriteAddress(raw.substringBefore('@')) ?: error("源宏地址无效")
     val selector = raw.substringAfter('@', "latest")
     require(validVersionSelector(selector)) { "源宏版本选择无效" }
+    if (selector == "latest" && target?.address == address) return target.text.takeIf { target.enabled }
     val version = MacroReferences.selectVersion(library, session, address, selector)
+    if (selector == "latest" && version == null && address in session.currentOnlyMacros &&
+        (address.startsWith("result.") || address.startsWith("state."))) return null
     if (address.startsWith("state.") && selector == "latest")
         return session.state[address.substring(6)]?.takeIf { version?.enabled != false }
     if (version != null) return version.text.takeIf { version.enabled }

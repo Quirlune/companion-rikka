@@ -38,7 +38,10 @@ import kotlinx.serialization.Serializable
     val resultOrigins: Map<String, ResultOrigin> = emptyMap(),
     val macroAppends: Map<String, List<MacroVersion>> = emptyMap(),
     val injectionRemovals: List<InjectionIdentity> = emptyList(),
-    val injectionAdds: List<PromptInjection> = emptyList()
+    val injectionAdds: List<PromptInjection> = emptyList(),
+    val historyWrites: HistoryMemoryPatch = HistoryMemoryPatch(),
+    val headWrites: Map<String, MacroHead> = emptyMap(),
+    val headRemovals: Set<String> = emptySet()
 )
 
 /** Preparation is captured before a wave starts, so a retry uses that wave's old world. */
@@ -54,8 +57,12 @@ import kotlinx.serialization.Serializable
     val environmentId: String,
     val renderedInput: String,
     val arguments: Map<String, String>,
-    val profile: ModelProfile? = null
+    val profile: ModelProfile? = null,
+    val macroTarget: MacroTargetSnapshot? = null
 )
+
+/** Captured absence is distinct from a legacy preparation without a target snapshot. */
+@Serializable data class MacroTargetSnapshot(val address: String, val text: String?, val enabled: Boolean = true)
 
 /** The saved library contains only resources loaded by the captured call; it has no credentials. */
 @Serializable data class RunRecovery(
@@ -86,7 +93,10 @@ import kotlinx.serialization.Serializable
     val regenerating: Boolean = false,
     val regenerationBase: Session? = null,
     val formatVersion: Int = 1,
-    val executionVersion: Int = 1
+    val executionVersion: Int = 1,
+    val historyMemory: HistoryMemoryState = HistoryMemoryState(),
+    val completedWorkflowIds: Set<String> = emptySet(),
+    val currentOnlyMacros: Map<String, MacroHead> = emptyMap()
 ) {
     val acceptedCount: Int get() = accepted.size
 }

@@ -8,14 +8,16 @@ object ResultReferences {
         fun addWorkflows(resourceId: String, workflows: List<Workflow>) {
             workflows.filter { it.enabled }.forEach { workflow ->
                 workflow.nodes.filter { it.enabled }.forEach { node ->
-                    add(ResultDeclaration(node.outputKey, ResultOrigin(resourceId, workflow.id, node.id, node.resultCategory)))
+                    val keys = linkedSetOf(node.outputKey)
+                    if (node.regexOutputCopy.enabled) keys += node.regexOutputCopy.outputKey
                     if (node.actionId in setOf("macro.write", "macro.activate", "macro.process")) {
                         val target = if (node.actionId == "macro.process") canonicalWriteAddress(
                             node.macroProcess.key.ifBlank { node.arguments["key"].orEmpty() })
                         else MacroReferences.canonicalAddress(node.arguments["key"].orEmpty())
-                        if (target?.startsWith("result.") == true && target != "result.${node.outputKey}")
-                            add(ResultDeclaration(target.substring(7), ResultOrigin(resourceId, workflow.id, node.id, node.resultCategory)))
+                        if (target?.startsWith("result.") == true) keys += target.substring(7)
                     }
+                    val origin = ResultOrigin(resourceId, workflow.id, node.id, node.resultCategory)
+                    keys.forEach { add(ResultDeclaration(it, origin)) }
                 }
             }
         }

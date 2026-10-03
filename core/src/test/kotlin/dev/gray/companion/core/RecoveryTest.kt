@@ -52,7 +52,7 @@ class RecoveryTest {
             override suspend fun generate(profile: ModelProfile, messages: List<ChatMessage>,
                 onDelta: suspend (String) -> Unit): String { calls++; error("Unknown journals must not execute") }
         }
-        for (unknown in listOf(journal.copy(formatVersion = 2), journal.copy(executionVersion = 2))) {
+        for (unknown in listOf(journal.copy(formatVersion = 2), journal.copy(executionVersion = 4))) {
             val current = before.copy(pendingRun = unknown)
             val result = WorkflowEngine().resume(base, current, gateway, unknown,
                 RecoveryDecision(RecoveryDecisionKind.RETRY, "flow/failed"))
@@ -104,10 +104,21 @@ class RecoveryTest {
         val json = Json { encodeDefaults = true }
         val restored = json.decodeFromString(Session.serializer(), json.encodeToString(Session.serializer(), saved))
         assertNotNull(restored.pendingRun)
-        val changed = bad.copy(blocks = listOf(PromptBlock(
-            template = "revised {{character.name}} {{result.good}} {{history.text}}")))
-        val edited = base.copy(mainCalls = listOf(base.mainCalls.single().copy(
-            workflows = listOf(flow.copy(nodes = listOf(good, changed))))), sessions = listOf(restored))
+        val tag = PromptTag(id = "new-tag", name = "新标签", slug = "new_tag")
+        val changed = bad.copy(slug = "renamed_bad", tagIds = listOf(tag.id), blocks = listOf(PromptBlock(
+            template = "revised {{character.name}} {{result.good}} {{history.text}}", slug = "repaired", tagIds = listOf(tag.id))))
+        val renamedGood = good.copy(slug = "renamed_good", tagIds = listOf(tag.id),
+            blocks = good.blocks.map { it.copy(slug = "good_prompt", tagIds = listOf(tag.id)) })
+        val edited = base.copy(promptTags = listOf(tag), characters = base.characters.map { card ->
+            card.copy(slug = "new_character_alias", entries = card.entries.map { entry ->
+                entry.copy(title = "显示 ${entry.key}", slug = "new_${entry.key}", tagIds = listOf(tag.id))
+            })
+        }, mainCalls = listOf(base.mainCalls.single().copy(slug = "renamed_main",
+            workflows = listOf(flow.copy(slug = "renamed_call", nodes = listOf(renamedGood, changed))))), sessions = listOf(restored))
+        val changedRuntimeName = edited.copy(characters = edited.characters.map { it.copy(name = "Changed") })
+        val conflict = engine.resume(changedRuntimeName, restored, gateway, restored.pendingRun!!,
+            RecoveryDecision(RecoveryDecisionKind.RETRY, "flow/bad"))
+        assertEquals(RecoveryFailureKind.CONFLICT, conflict.recovery!!.failures.first().kind)
         var resuming = restored
         val final = engine.resume(edited, restored, gateway, restored.pendingRun!!,
             RecoveryDecision(RecoveryDecisionKind.RETRY, "flow/bad")) { update ->

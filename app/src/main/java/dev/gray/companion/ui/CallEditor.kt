@@ -46,16 +46,6 @@ internal fun CallEditorPage(
 }
 
 @Composable
-internal fun EditorRenameDialog(label: String, initial: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
-    var title by remember { mutableStateOf(initial) }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(label) },
-        text = { OutlinedTextField(title, { title = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("名称") }) },
-        confirmButton = { TextButton(onClick = { onSave(title) }) { Text("保存") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
-}
-
-@Composable
 internal fun EditorTitleRow(title: String, onRename: () -> Unit, trailing: @Composable () -> Unit = {}) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(title.ifBlank { "未命名" }, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
@@ -91,6 +81,7 @@ internal fun CallListEditor(
 }
 
 internal fun workflowScheduleLabel(workflow: Workflow): String {
+    workflow.afterWorkflowId?.let { return "指定调用完成后 · ${it.take(8)} · ${if (workflow.queued) "排队 ${workflow.priority} 级" else "并行"}" }
     val phase = when (workflow.trigger) { RuntimeEvents.USER_MESSAGE -> "用户消息后"; RuntimeEvents.REPLY_COMPLETED -> "正文完成后"; RuntimeEvents.TURN_PREPARE -> "发送前准备"; RuntimeEvents.HISTORY_PROCESS -> "历史处理"; else -> workflow.trigger }
     return "$phase · ${if (workflow.queued) "排队 ${workflow.priority} 级" else "并行"}"
 }
@@ -104,19 +95,23 @@ internal fun CallDetailsEditor(
     onPrompt: (PromptEditRequest) -> Unit,
     onDelete: (() -> Unit)? = null,
     onRegisterBack: ((() -> Unit) -> Unit)? = null,
+    siblings: List<Workflow> = emptyList(), tags: List<PromptTag> = emptyList(),
+    triggerTargets: List<Workflow> = siblings,
 ) {
     var rename by remember { mutableStateOf(false) }
     var delete by remember { mutableStateOf(false) }
     val references = referenceChoices(workflow)
     CallEditorPage("调用", workflow != initial, onBack, { onSave(workflow) }, onRegisterBack = onRegisterBack) {
         EditorTitleRow(workflow.title, { rename = true }) { Switch(workflow.enabled, { onDraftChange(workflow.copy(enabled = it)) }) }
-        WorkflowEditorContent(workflow, actions, profiles, usedOutputKeys, references, onDraftChange, onPrompt)
+        WorkflowEditorContent(workflow, actions, profiles, usedOutputKeys, references, onDraftChange, onPrompt, tags = tags, triggerTargets = triggerTargets)
         if (onDelete != null) {
             HorizontalDivider()
             TextButton(onClick = { delete = true }) { Text("删除调用", color = MaterialTheme.colorScheme.error) }
         }
     }
-    if (rename) EditorRenameDialog("调用名称", workflow.title, { rename = false }) { onDraftChange(workflow.copy(title = it)); rename = false }
+    if (rename) NamingDialog("调用名称", workflow.title, workflow.slug,
+        siblings.filterNot { it.id == workflow.id }.map { it.title }, siblings.filterNot { it.id == workflow.id }.map { it.slug },
+        { rename = false }) { title, slug -> onDraftChange(workflow.copy(title = title, slug = slug)); rename = false }
     if (delete) AlertDialog(onDismissRequest = { delete = false }, title = { Text("删除调用？") }, text = { Text("该调用及节点将从资源草稿移除。") },
         confirmButton = { TextButton(onClick = { delete = false; onDelete?.invoke() }) { Text("删除") } },
         dismissButton = { TextButton(onClick = { delete = false }) { Text("取消") } })
@@ -127,11 +122,11 @@ internal fun WorkflowEditorContent(
     workflow: Workflow, actions: List<ActionDescriptor>, profiles: List<ModelProfile>,
     usedOutputKeys: Set<String>, references: List<PromptReferenceChoice>,
     onChange: (Workflow) -> Unit, onPrompt: (PromptEditRequest) -> Unit,
-    fixedTrigger: Boolean = false,
+    fixedTrigger: Boolean = false, tags: List<PromptTag> = emptyList(), triggerTargets: List<Workflow> = emptyList(),
 ) {
     Text("触发", style = MaterialTheme.typography.titleSmall)
     if (fixedTrigger) Text("历史处理", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    else WorkflowScheduleEditor(workflow, onChange)
+    else WorkflowScheduleEditor(workflow, triggerTargets, onChange)
     TriggerEditor(workflow.recognition, workflow.condition, references) { recognition, condition -> onChange(workflow.copy(recognition = recognition, condition = condition)) }
     HorizontalDivider()
     Text("行为", style = MaterialTheme.typography.titleSmall)
@@ -140,9 +135,9 @@ internal fun WorkflowEditorContent(
     }
     workflow.nodes.forEachIndexed { index, node -> key(node.id) {
         val change: (WorkflowNode) -> Unit = { changed -> onChange(workflow.copy(nodes = workflow.nodes.map { if (it.id == node.id) changed else it })) }
-        if (workflow.nodes.size == 1) CallNodeActions(node, workflow.nodes, actions, profiles, references, change, onPrompt, !fixedTrigger)
+        if (workflow.nodes.size == 1) CallNodeActions(node, workflow.nodes, actions, profiles, references, change, onPrompt, !fixedTrigger, tags, usedOutputKeys)
         else EditorSection(node.title.ifBlank { "节点 ${index + 1}" }, actions.firstOrNull { it.id == node.actionId }?.title ?: node.actionId, initiallyExpanded = index == 0) {
-            CallNodeActions(node, workflow.nodes, actions, profiles, references, change, onPrompt, !fixedTrigger)
+            CallNodeActions(node, workflow.nodes, actions, profiles, references, change, onPrompt, !fixedTrigger, tags, usedOutputKeys)
             MoveButtons(index, workflow.nodes.size,
                 { onChange(workflow.copy(nodes = workflow.nodes.moved(index, index - 1))) },
                 { onChange(workflow.copy(nodes = workflow.nodes.moved(index, index + 1))) },
@@ -154,7 +149,9 @@ internal fun WorkflowEditorContent(
         OutlinedButton(onClick = {
             val used = usedOutputKeys + workflow.nodes.map { it.outputKey }
             val outputKey = nextCallOutputKey(used, "step")
-            onChange(workflow.copy(nodes = workflow.nodes + WorkflowNode(title = "节点 ${workflow.nodes.size + 1}", outputKey = outputKey)))
+            val node = WorkflowNode(title = nextDisplayName(workflow.nodes.map { it.title }, "节点"), outputKey = outputKey,
+                slug = nextEditorSlug(workflow.nodes.map { it.slug }, "output"), recordTrajectory = false)
+            onChange(workflow.copy(nodes = workflow.nodes + node))
         }) { Text("添加节点") }
         if (workflow.nodes.size == 1) TextButton(onClick = { onChange(workflow.copy(nodes = emptyList())) }) { Text("移除当前节点") }
     }
@@ -168,21 +165,33 @@ internal fun CallModelChoice(selected: String?, profiles: List<ModelProfile>, on
 }
 
 @Composable
-private fun WorkflowScheduleEditor(workflow: Workflow, onChange: (Workflow) -> Unit) {
-    val choices = listOf(
-        (RuntimeEvents.USER_MESSAGE to false) to "用户消息后 · 并行", (RuntimeEvents.USER_MESSAGE to true) to "用户消息后 · 排队",
-        (RuntimeEvents.REPLY_COMPLETED to false) to "正文完成后 · 并行", (RuntimeEvents.REPLY_COMPLETED to true) to "正文完成后 · 排队",
-    )
-    val selected = workflow.trigger to workflow.queued
-    ChoiceLine("时机", selected, choices + if (choices.none { it.first == selected }) listOf(selected to workflowScheduleLabel(workflow)) else emptyList()) { (trigger, queued) ->
-        onChange(workflow.copy(trigger = trigger, queued = queued))
+private fun WorkflowScheduleEditor(workflow: Workflow, triggerTargets: List<Workflow>, onChange: (Workflow) -> Unit) {
+    val targets = triggerTargets.filter { it.id != workflow.id && it.trigger != RuntimeEvents.HISTORY_PROCESS }.distinctBy { it.id }
+    val completionOptions = listOf<Pair<String?, String>>(null to "不跟随其他调用") + targets.map { it.id to it.title.ifBlank { "未命名调用" } }
+    val selectedTarget = workflow.afterWorkflowId
+    ChoiceLine("指定调用完成后", selectedTarget,
+        completionOptions + if (selectedTarget != null && targets.none { it.id == selectedTarget }) listOf(selectedTarget to "未找到调用：$selectedTarget") else emptyList()) { target ->
+        onChange(workflow.copy(afterWorkflowId = target))
+    }
+    if (selectedTarget != null) {
+        Text("所选调用成功完成后触发；按稳定调用标识关联，重命名不影响触发。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ToggleLine("排队执行", workflow.queued) { onChange(workflow.copy(queued = it)) }
+    } else {
+        val choices = listOf(
+            (RuntimeEvents.USER_MESSAGE to false) to "用户消息后 · 并行", (RuntimeEvents.USER_MESSAGE to true) to "用户消息后 · 排队",
+            (RuntimeEvents.REPLY_COMPLETED to false) to "正文完成后 · 并行", (RuntimeEvents.REPLY_COMPLETED to true) to "正文完成后 · 排队",
+        )
+        val selected = workflow.trigger to workflow.queued
+        ChoiceLine("时机", selected, choices + if (choices.none { it.first == selected }) listOf(selected to workflowScheduleLabel(workflow)) else emptyList()) { (trigger, queued) ->
+            onChange(workflow.copy(trigger = trigger, queued = queued))
+        }
     }
     if (workflow.queued) {
         var priority by remember(workflow.id, workflow.priority) { mutableStateOf(workflow.priority.toString()) }
         OutlinedTextField(priority, { value -> priority = value; value.toIntOrNull()?.let { onChange(workflow.copy(priority = it)) } }, label = { Text("排队级别") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         Text("数字越小越先完成；同级独立节点并行。可填负数，普通并行与默认调用为 0 级。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    EditorSection("其他触发事件", if (workflow.trigger !in listOf(RuntimeEvents.USER_MESSAGE, RuntimeEvents.REPLY_COMPLETED)) workflow.trigger else "发送前准备或自定义事件") {
+    if (selectedTarget == null) EditorSection("其他触发事件", if (workflow.trigger !in listOf(RuntimeEvents.USER_MESSAGE, RuntimeEvents.REPLY_COMPLETED)) workflow.trigger else "发送前准备或自定义事件") {
         TextFieldLine("事件名称", workflow.trigger, { onChange(workflow.copy(trigger = it)) })
         TextButton(onClick = { onChange(workflow.copy(trigger = RuntimeEvents.TURN_PREPARE)) }) { Text("使用发送前准备（turn.prepare）") }
     }
@@ -191,15 +200,17 @@ private fun WorkflowScheduleEditor(workflow: Workflow, onChange: (Workflow) -> U
 @Composable
 private fun CallNodeActions(
     node: WorkflowNode, nodes: List<WorkflowNode>, actions: List<ActionDescriptor>, profiles: List<ModelProfile>, references: List<PromptReferenceChoice>,
-    onChange: (WorkflowNode) -> Unit, onPrompt: (PromptEditRequest) -> Unit, allowChatOutput: Boolean,
+    onChange: (WorkflowNode) -> Unit, onPrompt: (PromptEditRequest) -> Unit, allowChatOutput: Boolean, tags: List<PromptTag>, usedOutputKeys: Set<String>,
 ) {
     var rename by remember(node.id) { mutableStateOf(false) }
     val action = actions.firstOrNull { it.id == node.actionId }
     val nodeReferences = referencesForWritingNode(references, node.id)
     val usesModel = action?.usesModel == true
     EditorTitleRow(node.title, { rename = true }) { Switch(node.enabled, { onChange(node.copy(enabled = it)) }) }
+    NodeTrajectoryControl(node, onChange)
+    PromptTagSelector(tags, node.tagIds) { onChange(node.copy(tagIds = it)) }
     val primaryActions = actions.filter { it.presentation == ActionPresentation.STANDARD }
-    val choices = primaryActions.map { it.id to (when (it.id) { "macro.process" -> "宏处理"; "prompt.inject" -> "管理提示词 · 插入/更新"; "prompt.remove" -> "管理提示词 · 移除"; else -> it.title }) }.distinctBy { it.first } +
+    val choices = primaryActions.map { it.id to (when (it.id) { "macro.process" -> "宏处理"; "prompt.inject" -> "管理提示词 · 插入/更新"; "prompt.remove" -> "管理提示词 · 移除"; "history.view.copy" -> "复制历史视图 · 压缩/展开"; else -> it.title }) }.distinctBy { it.first } +
         if (node.actionId !in primaryActions.map { it.id }) listOf(node.actionId to "已有动作：${action?.title ?: node.actionId}") else emptyList()
     ChoiceLine("动作", node.actionId, choices) { selected ->
         val args = if (selected.startsWith("prompt.") && node.arguments["id"].isNullOrBlank()) node.arguments + ("id" to node.id) else node.arguments
@@ -224,7 +235,16 @@ private fun CallNodeActions(
             TextProcessingEditor("输出内容处理", node.outputProcessing, nodeReferences) { onChange(node.copy(outputProcessing = it)) }
             if (node.arguments.isNotEmpty()) ActionArgumentForm(node, action, onChange, nodeReferences)
         }
+        "text.extract" -> {
+            PromptTemplateField("提取来源", node.inputTemplate, nodeReferences, { onChange(node.copy(inputTemplate = it)) }, minLines = 2)
+            ActionArgumentForm(node, action, onChange, nodeReferences)
+            Text("提取结果写入本节点自己的结果宏；来源保持原样。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        "history.view.copy", "history.memory.write" -> HistoryActionEditor(node, onChange, nodeReferences)
         else -> ActionArgumentForm(node, action, onChange, nodeReferences)
+    }
+    if (usesModel) {
+        RegexOutputCopyEditor(node, usedOutputKeys) { onChange(node.copy(regexOutputCopy = it)) }
     }
     LegacyConversionOffer(node, onChange)
     if (allowChatOutput) {
@@ -240,7 +260,7 @@ private fun CallNodeActions(
         } else if (node.blocks.isNotEmpty()) EditorDestinationRow("保留的提示词", "${node.blocks.size} 个提示词块") {
             onPrompt(PromptEditRequest(node.blocks, nodeReferences) { onChange(node.copy(blocks = it)) })
         }
-        if (node.actionId !in setOf("model.generate", "prompt.inject", "macro.process", "text.render"))
+        if (node.actionId !in setOf("model.generate", "prompt.inject", "macro.process", "text.render", "text.extract", "history.view.copy", "history.memory.write"))
             PromptTemplateField("输入模板", node.inputTemplate, nodeReferences, { onChange(node.copy(inputTemplate = it)) }, minLines = 2)
         if (nodes.size > 1 || node.dependsOn.isNotEmpty()) {
             Text("依赖节点", style = MaterialTheme.typography.labelLarge)
@@ -248,10 +268,19 @@ private fun CallNodeActions(
             node.dependsOn.filter { id -> nodes.none { it.id == id } }.forEach { id -> ToggleLine("未找到节点：$id", true) { if (!it) onChange(node.copy(dependsOn = node.dependsOn - id)) } }
         }
         Text("结果宏自动归本节点所有。已有地址保持稳定。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        TextFieldLine("宏地址：result. 后的键", node.outputKey, { onChange(node.copy(outputKey = it)) })
+        LegacyAddressLine("result.${node.outputKey}")
         TextFieldLine("结果分类（可选）", node.resultCategory, { onChange(node.copy(resultCategory = it)) })
     }
-    if (rename) EditorRenameDialog("节点名称", node.title, { rename = false }) { onChange(node.copy(title = it)); rename = false }
+    if (rename) NamingDialog("结果宏名称", node.title, node.slug,
+        nodes.filterNot { it.id == node.id }.map { it.title }, nodes.filterNot { it.id == node.id }.map { it.slug },
+        { rename = false }) { title, slug -> onChange(node.copy(title = title, slug = slug)); rename = false }
+}
+
+@Composable
+internal fun NodeTrajectoryControl(node: WorkflowNode, onChange: (WorkflowNode) -> Unit) {
+    ToggleLine("记录轨迹", node.recordTrajectory) { onChange(node.copy(recordTrajectory = it)) }
+    Text("控制此节点写入的结果、状态和宏处理目标。关闭时只更新当前值；每轮分支与恢复数据仍完整保留，已有轨迹不会删除。",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 internal fun nextCallOutputKey(used: Set<String>, stem: String): String = generateSequence(1) { it + 1 }.map { "${stem}_$it" }.first { it !in used }
@@ -261,7 +290,78 @@ internal fun referencesForWritingNode(references: List<PromptReferenceChoice>, n
     references.filterNot { it.producerNodeId == nodeId && !it.macro.startsWith("{{macro.") }
 
 internal fun outputKeysForNewNodes(library: Library?, draftWorkflows: List<Workflow>): Set<String> = buildSet {
-    library?.mainCalls?.forEach { main -> (main.workflows + main.history.processor.workflow).forEach { call -> call.nodes.forEach { add(it.outputKey) } } }
-    library?.groups?.forEach { group -> group.workflows.forEach { call -> call.nodes.forEach { add(it.outputKey) } } }
-    draftWorkflows.forEach { call -> call.nodes.forEach { add(it.outputKey) } }
+    fun collect(call: Workflow) = call.nodes.forEach { node -> add(node.outputKey); node.regexOutputCopy.outputKey.takeIf { node.regexOutputCopy.enabled && it.isNotBlank() }?.let { add(it) } }
+    library?.mainCalls?.forEach { main -> (main.workflows + main.history.processor.workflow).forEach(::collect) }
+    library?.groups?.forEach { group -> group.workflows.forEach(::collect) }
+    draftWorkflows.forEach(::collect)
+}
+
+@Composable
+private fun HistoryActionEditor(node: WorkflowNode, onChange: (WorkflowNode) -> Unit, references: List<PromptReferenceChoice>) {
+    val copyView = node.actionId == "history.view.copy"
+    val args = node.arguments
+    fun set(name: String, value: String) = onChange(node.copy(arguments = args + (name to value)))
+    Text("历史来源使用完整引用，如 {{type:builtin.in:history.name:messages.from:end-3.through:end-1}}。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    val sourceExpression = args["source"] ?: "{{history}}"
+    TextFieldLine("来源历史引用", sourceExpression, { set("source", it) }, minLines = 2)
+    if (HistoryViews.selection(sourceExpression) == null) Text("请输入有效的历史引用。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+    val historyChoices = references.filter { it.sourceId == "history" && it.macro.startsWith("{{type:builtin.in:history.") }
+    if (historyChoices.isNotEmpty()) PromptReferencePicker(historyChoices, { set("source", it) }, versioned = false)
+    if (copyView) {
+        TextFieldLine("副本英文标识", args["targetId"].orEmpty(), { set("targetId", it) })
+        if (args["targetId"]?.let(MacroNaming::isValidSlug) != true) Text("请输入有效的副本英文标识。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        Text("稳定标识只用小写英文字母、数字、_ 或 -，以字母开头。更新同名副本会增加独立版本。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        TextFieldLine("副本名称", args["name"].orEmpty(), { set("name", it) })
+        ChoiceLine("处理方式", args["mode"] ?: "COMPRESS", listOf("COMPRESS" to "压缩为摘要", "EXPAND" to "展开原楼层")) { set("mode", it) }
+        PromptTemplateField("记忆段标识（可为空）", args["ids"].orEmpty(), references, { set("ids", it) }, minLines = 2)
+        Text("可让普通调用读取 {{history.summary}} 中的记忆段标识，再把选择结果宏填到这里；留空表示不指定新的记忆段。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        var regexOpen by remember(node.id) { mutableStateOf(!args["pattern"].isNullOrBlank()) }
+        TextButton(onClick = { regexOpen = !regexOpen }) { Text(if (regexOpen) "收起标识提取" else "正则提取标识（可选）") }
+        if (regexOpen) {
+            TextFieldLine("正则表达式", args["pattern"].orEmpty(), { set("pattern", it) })
+            val groupValue = args["captureGroup"]?.toIntOrNull() ?: 0
+            args["pattern"]?.takeIf { it.isNotBlank() }?.let { pattern -> SafePatterns.validate(pattern, groupValue) }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+            TextFieldLine("捕获组", args["captureGroup"] ?: "0", { set("captureGroup", it) })
+        }
+        Text("副本是可插入结构化历史的视图；用 view:英文标识 引用，不使用普通文本结果宏读取。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    } else {
+        TextFieldLine("记忆段名称", args["title"].orEmpty(), { set("title", it) })
+        PromptTemplateField("摘要内容", node.inputTemplate, references, { onChange(node.copy(inputTemplate = it)) }, minLines = 3)
+        Text("摘要会记录来源楼层及其文本版本；聊天原文仍可从来源楼层查看。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    val known = if (copyView) setOf("source", "targetId", "name", "mode", "ids", "pattern", "captureGroup") else setOf("source", "title")
+    if (args.keys.any { it !in known }) ActionArgumentForm(node, null, onChange, references)
+}
+
+/** The source node keeps its raw result; this configuration publishes one separate copy. */
+@Composable
+internal fun RegexOutputCopyEditor(node: WorkflowNode, usedOutputKeys: Set<String>, onChange: (RegexOutputCopy) -> Unit) {
+    val copy = node.regexOutputCopy
+    EditorSection("正则输出副本", if (copy.enabled) "result.${copy.outputKey.ifBlank { "未设置" }}" else "关闭") {
+        ToggleLine("创建正则副本", copy.enabled) { enabled ->
+            onChange(copy.copy(enabled = enabled,
+                recordTrajectory = if (enabled && copy == RegexOutputCopy()) false else copy.recordTrajectory,
+                outputKey = if (enabled && copy.outputKey.isBlank()) nextCallOutputKey(usedOutputKeys + node.outputKey, "copy") else copy.outputKey))
+        }
+        if (copy.enabled) {
+            Text("从此节点的结果生成独立副本；原结果宏 result.${node.outputKey} 保留。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            ToggleLine("副本记录轨迹", copy.recordTrajectory) { onChange(copy.copy(recordTrajectory = it)) }
+            Text("关闭时只更新副本当前值；每轮分支与恢复数据仍完整保留，已有轨迹不会删除。",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TextFieldLine("副本结果键", copy.outputKey, { onChange(copy.copy(outputKey = it)) })
+            if (copy.outputKey.isBlank() || copy.outputKey == node.outputKey) Text("副本结果键须与原结果键不同。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            ChoiceLine("处理方式", copy.mode, listOf(RegexTransformMode.EXTRACT to "提取匹配文本", RegexTransformMode.REPLACE to "替换匹配文本")) { onChange(copy.copy(mode = it)) }
+            TextFieldLine("正则表达式", copy.pattern, { onChange(copy.copy(pattern = it)) })
+            SafePatterns.validate(copy.pattern, if (copy.mode == RegexTransformMode.EXTRACT) copy.captureGroup else 0)?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            if (copy.mode == RegexTransformMode.EXTRACT) {
+                var group by remember(node.id, copy.captureGroup) { mutableStateOf(copy.captureGroup.toString()) }
+                OutlinedTextField(group, { value -> group = value; value.toIntOrNull()?.takeIf { it >= 0 }?.let { onChange(copy.copy(captureGroup = it)) } },
+                    label = { Text("捕获组 · 0 为完整匹配") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            } else TextFieldLine("替换内容", copy.replacement, { onChange(copy.copy(replacement = it)) }, minLines = 2)
+            ToggleLine("在聊天中显示处理后的副本", copy.display) { onChange(copy.copy(display = it)) }
+            Text("副本始终可用 result.${copy.outputKey.ifBlank { "副本结果键" }} 引用；显示开关只影响正文呈现。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
 }

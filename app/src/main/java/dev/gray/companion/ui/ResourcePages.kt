@@ -68,6 +68,7 @@ internal fun ResourceScreen(
     onEdit: (Editing) -> Unit,
     onUpdate: ((Library) -> Library) -> Unit,
     modifier: Modifier,
+    onManageTags: (() -> Unit)? = null,
 ) {
     val associationCounts = remember(library) { library.resourceAssociationCounts() }
     val rows = remember(library, selected, associationCounts) {
@@ -126,6 +127,9 @@ internal fun ResourceScreen(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
+            if (selected == ResourceKind.PACKAGE && onManageTags != null) item {
+                EditorDestinationRow("提示词标签", "管理全局标签目录") { onManageTags?.invoke() }
+            }
             item {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("${rows.size} 项", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))

@@ -37,6 +37,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.gray.companion.core.Library
+import dev.gray.companion.core.HtmlTemplate
+import dev.gray.companion.core.MacroHtmlBinding
+import dev.gray.companion.core.MacroHtmlValueKind
 import dev.gray.companion.core.MacroResolver
 import dev.gray.companion.core.MacroTile
 import dev.gray.companion.core.MacroTileKind
@@ -46,6 +49,7 @@ import dev.gray.companion.core.MacroTileStyle
 import dev.gray.companion.core.MacroOutputContracts
 import dev.gray.companion.core.MacroReferences
 import dev.gray.companion.core.OutputSlot
+import dev.gray.companion.core.ResultReferences
 import dev.gray.companion.core.SafePatterns
 import dev.gray.companion.core.StatusFields
 import dev.gray.companion.core.Session
@@ -68,10 +72,14 @@ internal fun MacroTilesEditor(tiles: List<MacroTile>, references: List<PromptRef
 private fun MacroTileForm(tile: MacroTile, references: List<PromptReferenceChoice>, onChange: (MacroTile) -> Unit, onRemove: () -> Unit) {
     OutlinedCard(Modifier.fillMaxWidth()) { Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         TextFieldLine("标题", tile.title, { onChange(tile.copy(title = it)) })
-        PromptTemplateField(if (tile.kind == MacroTileKind.STATUS) "状态宏（XML）" else "显示的宏或模板", tile.template, references, { onChange(tile.copy(template = it)) }, minLines = 1)
-        ChoiceLine("显示形式", tile.kind, listOf(MacroTileKind.TEXT to "文本", MacroTileKind.NUMBER to "数值", MacroTileKind.PROGRESS to "进度", MacroTileKind.STATUS to "状态栏")) { onChange(tile.copy(kind = it)) }
+        PromptTemplateField(when (tile.kind) {
+            MacroTileKind.STATUS -> "状态宏（XML）"
+            MacroTileKind.HTML -> "HTML 数据源宏"
+            else -> "显示的宏或模板"
+        }, tile.template, references, { onChange(tile.copy(template = it)) }, minLines = 1)
+        ChoiceLine("显示形式", tile.kind, listOf(MacroTileKind.TEXT to "文本", MacroTileKind.NUMBER to "数值", MacroTileKind.PROGRESS to "进度", MacroTileKind.STATUS to "状态栏", MacroTileKind.HTML to "HTML 模板")) { onChange(tile.copy(kind = it)) }
         ChoiceLine("显示位置", tile.placement, listOf(MacroTilePlacement.CHAT to "聊天正文下方", MacroTilePlacement.SIDEBAR to "独立侧栏")) { onChange(tile.copy(placement = it)) }
-        if (tile.placement == MacroTilePlacement.CHAT && tile.kind != MacroTileKind.STATUS) ChoiceLine("聊天面板区域", tile.slot, listOf(
+        if (tile.placement == MacroTilePlacement.CHAT && tile.kind != MacroTileKind.STATUS && tile.kind != MacroTileKind.HTML) ChoiceLine("聊天面板区域", tile.slot, listOf(
             OutputSlot.BEFORE_BODY to "正文之前", OutputSlot.BODY to "正文区域", OutputSlot.AFTER_BODY to "正文之后"
         )) { onChange(tile.copy(slot = it)) }
         if (tile.kind == MacroTileKind.STATUS) {
@@ -96,6 +104,34 @@ private fun MacroTileForm(tile: MacroTile, references: List<PromptReferenceChoic
                 TextButton(onClick = { onChange(tile.copy(fields = tile.fields.filterIndexed { i, _ -> i != fieldIndex })) }) { Text("删除字段") }
             } }
             OutlinedButton(onClick = { onChange(tile.copy(fields = tile.fields + MacroStatusField())) }) { Text("添加状态字段") }
+        }
+        if (tile.kind == MacroTileKind.HTML) {
+            Text("数据源先按下方正则提取整块，再用各值的正则提取。HTML/CSS 是静态模板；文字值只可放在元素正文，数值可用于 CSS 或数值属性。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TextFieldLine("HTML 正文片段", tile.htmlTemplate, { onChange(tile.copy(htmlTemplate = it)) }, minLines = 6)
+            TextFieldLine("CSS 样式", tile.htmlCss, { onChange(tile.copy(htmlCss = it)) }, minLines = 5)
+            Text("示例：<span>{{text.place}}</span>；进度宽度：style=\"width:{{number.level}}%\"。不加载外部资源。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            tile.htmlBindings.forEachIndexed { index, binding -> key(index) {
+                HorizontalDivider()
+                Text("提取值 ${index + 1}", style = MaterialTheme.typography.labelLarge)
+                fun update(changed: MacroHtmlBinding) = onChange(tile.copy(htmlBindings = tile.htmlBindings.toMutableList().also { it[index] = changed }))
+                TextFieldLine("变量名", binding.name, { update(binding.copy(name = it)) })
+                ChoiceLine("值类型", binding.kind, listOf(MacroHtmlValueKind.TEXT to "文字", MacroHtmlValueKind.NUMBER to "数值")) { update(binding.copy(kind = it)) }
+                TextFieldLine("提取正则（留空使用整个数据源）", binding.pattern, { update(binding.copy(pattern = it)) })
+                var groupDraft by remember(tile.id, index) { mutableStateOf(binding.captureGroup.toString()) }
+                OutlinedTextField(groupDraft, { input ->
+                    if (input.isEmpty() || (input.all(Char::isDigit) && input.toIntOrNull() != null)) {
+                        groupDraft = input
+                        update(binding.copy(captureGroup = input.toIntOrNull() ?: 0))
+                    }
+                }, label = { Text("捕获组（0 为完整匹配）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                SafePatterns.validate(binding.pattern, binding.captureGroup)?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                TextButton(onClick = { onChange(tile.copy(htmlBindings = tile.htmlBindings.filterIndexed { i, _ -> i != index })) }) { Text("删除值") }
+            } }
+            OutlinedButton(onClick = {
+                val next = generateSequence(1) { it + 1 }.map { "value_$it" }.first { name -> tile.htmlBindings.none { it.name == name } }
+                onChange(tile.copy(htmlBindings = tile.htmlBindings + MacroHtmlBinding(name = next)))
+            }) { Text("添加提取值") }
+            HtmlTemplate.validate(tile).take(3).forEach { issue -> Text(issue.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         }
         if (tile.kind == MacroTileKind.PROGRESS) {
             var minDraft by remember(tile.id) { mutableStateOf(tile.minimum.toString()) }
@@ -127,9 +163,9 @@ private fun MacroTileForm(tile: MacroTile, references: List<PromptReferenceChoic
             Slider(value = tile.style.fontSize.toFloat().coerceIn(8f, 32f), onValueChange = { onChange(tile.copy(style = tile.style.copy(fontSize = it.toInt()))) }, valueRange = 8f..32f, steps = 23)
             Text("圆角 ${tile.style.cornerRadius} dp", style = MaterialTheme.typography.bodySmall)
             Slider(value = tile.style.cornerRadius.toFloat().coerceIn(0f, 32f), onValueChange = { onChange(tile.copy(style = tile.style.copy(cornerRadius = it.toInt()))) }, valueRange = 0f..32f, steps = 31)
-            if (tile.kind == MacroTileKind.STATUS) Text("状态栏始终使用整行宽度。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (tile.kind == MacroTileKind.STATUS || tile.kind == MacroTileKind.HTML) Text("状态栏和 HTML 模板始终使用整行宽度。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             else ChoiceLine("磁贴宽度", tile.style.widthPercent, listOf(50 to "半行", 100 to "整行")) { onChange(tile.copy(style = tile.style.copy(widthPercent = it))) }
-            if (tile.kind == MacroTileKind.STATUS) Text("状态栏可用上方颜色、字号与圆角设置。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (tile.kind == MacroTileKind.STATUS || tile.kind == MacroTileKind.HTML) Text("状态栏与 HTML 模板的外层容器可用上方颜色、字号与圆角设置。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             else {
                 StyleCssEditor(tile.style) { onChange(tile.copy(style = it)) }
                 StyleJsonEditor(tile.style) { onChange(tile.copy(style = it)) }
@@ -190,7 +226,7 @@ private val TILE_COLOR = Regex("^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$")
 private fun validTileColor(value: String): Boolean = value.isEmpty() || TILE_COLOR.matches(value)
 internal fun tileColor(value: String): Color? = if (validTileColor(value) && value.isNotEmpty()) Color(android.graphics.Color.parseColor(value)) else null
 
-internal data class ResolvedTile(val tile: MacroTile, val value: String, val error: String?, val waiting: Boolean = false)
+internal data class ResolvedTile(val tile: MacroTile, val value: String, val error: String?, val waiting: Boolean = false, val html: String? = null)
 
 internal fun configuredMacroTiles(library: Library, session: Session): List<MacroTile> {
     val main = library.mainCalls.firstOrNull { it.id == session.mainCallId }
@@ -213,11 +249,13 @@ internal fun resolveMacroTiles(library: Library, session: Session, placement: Ma
                 else -> false
             }
         } == true
-        val contract = if (patternIssue == null && currentSource) MacroOutputContracts.read(tile, rendered) else null
+        val pending = tile.kind in setOf(MacroTileKind.STATUS, MacroTileKind.HTML) && rendered.isEmpty() && isDeclaredPending(tile, library, session)
+        val contract = if (patternIssue == null && !pending && (currentSource || tile.kind == MacroTileKind.HTML))
+            MacroOutputContracts.read(tile, rendered) else null
         val value = if (patternIssue == null) contract?.value ?: SafePatterns.extract(tile.pattern, rendered, tile.captureGroup).orEmpty() else ""
         val error = patternIssue ?: contract?.error
-        val waiting = tile.kind == MacroTileKind.STATUS && value.isEmpty() && error == null && isDeclaredPending(tile, library, session)
-        ResolvedTile(tile, value, error, waiting)
+        val waiting = pending && value.isEmpty() && error == null
+        ResolvedTile(tile, value, error, waiting, contract?.html)
     }.filter { !it.tile.hideWhenEmpty || it.value.isNotEmpty() || it.error != null || it.waiting }
 }
 
@@ -229,10 +267,8 @@ private fun isDeclaredPending(tile: MacroTile, library: Library, session: Sessio
         else -> return false
     }
     if (key.isBlank() || key.any { it in "@#{}" }) return false
-    val main = library.mainCalls.firstOrNull { it.id == session.mainCallId }
-    val workflows = main?.workflows.orEmpty() + library.loadedCallGroups(session, main).flatMap { it.workflows }
-    if (workflows.none { workflow -> workflow.nodes.any { it.outputKey == key } }) return false
-    return "result.$key" !in session.macroHistory && key !in session.results
+    if (ResultReferences.declarations(library, session).none { it.key == key }) return false
+    return "result.$key" !in session.macroHistory && "result.$key" !in session.currentOnlyMacros && key !in session.results
 }
 
 /** Current dashboard only. Historical message regions are not rebound to later macro values. */
@@ -240,14 +276,16 @@ private fun isDeclaredPending(tile: MacroTile, library: Library, session: Sessio
 internal fun MacroTileDashboard(library: Library, session: Session) {
     val resolved = remember(library, session) { resolveMacroTiles(library, session, MacroTilePlacement.CHAT) }
     if (resolved.isEmpty()) return
-    val statuses = resolved.filter { it.tile.kind == MacroTileKind.STATUS }
+    val statuses = resolved.filter { it.tile.kind == MacroTileKind.STATUS || it.tile.kind == MacroTileKind.HTML }
     val bodyIndex = session.messages.indexOfLast { !it.deleted && it.role == dev.gray.companion.core.Role.ASSISTANT && it.outputSlot == OutputSlot.BODY }
     val userIndex = session.messages.indexOfLast { !it.deleted && it.role == dev.gray.companion.core.Role.USER }
     val showStatus = bodyIndex >= 0 && bodyIndex > userIndex
     if (showStatus && statuses.isNotEmpty()) Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        statuses.forEach { item -> key(item.tile.id) { MacroStatusPanel(item.tile, item.value, item.error, item.waiting) } }
+        statuses.forEach { item -> key(item.tile.id) {
+            if (item.tile.kind == MacroTileKind.HTML) HtmlMacroDisplay(item) else MacroStatusPanel(item.tile, item.value, item.error, item.waiting)
+        } }
     }
-    val legacyTiles = resolved.filter { it.tile.kind != MacroTileKind.STATUS }
+    val legacyTiles = resolved.filter { it.tile.kind != MacroTileKind.STATUS && it.tile.kind != MacroTileKind.HTML }
     if (legacyTiles.isEmpty()) return
     var expanded by remember(session.id) { mutableStateOf(true) }
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -299,6 +337,7 @@ internal fun CurrentTile(item: ResolvedTile) {
                     }
                 }
                 MacroTileKind.STATUS -> MacroStatusPanel(tile, item.value, item.error, item.waiting)
+                MacroTileKind.HTML -> HtmlMacroDisplay(item)
             }
         }
     }

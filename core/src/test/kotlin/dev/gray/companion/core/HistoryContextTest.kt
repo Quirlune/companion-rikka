@@ -75,9 +75,10 @@ class HistoryContextTest {
         val run = WorkflowEngine().run(library, session, "sent", gateway)
         assertEquals(RunStatus.SUCCESS, run.status)
         assertEquals(listOf("okay"), run.replies.map { it.text })
-        assertEquals("compressed", run.historyDigests[main.id]?.text)
-        assertEquals(reply.id, run.historyDigests[main.id]?.throughMessageId)
-        assertEquals(2, run.historyDigests[main.id]?.coveredFloors)
+        val segment = run.historyMemory.segments.values.single()
+        assertEquals("compressed", segment.summary)
+        assertEquals(listOf(older.id, reply.id), segment.sources.map { it.messageId })
+        assertTrue(run.historyDigests.isEmpty())
         assertFalse(session.historyDigests.containsKey(main.id))
     }
 }

@@ -7,7 +7,10 @@ import org.xml.sax.InputSource
 
 private val structuredHistoryToken = Regex("\\{\\{\\s*history\\s*\\}\\}")
 internal fun isStructuredHistoryBlock(template: String): Boolean =
-    structuredHistoryToken.matches(template.trim())
+    structuredHistoryToken.matches(template.trim()) || (template.trim().let {
+        it.startsWith("{{") && it.endsWith("}}") && Regex("\\{\\{[^{}]*\\}\\}").matches(it) &&
+            (PromptReferenceLanguage.compile(it).reference as? PromptReferenceLanguage.QueryPlan)?.historySelection != null
+    })
 internal fun containsStructuredHistoryToken(template: String): Boolean =
     structuredHistoryToken.containsMatchIn(template)
 
@@ -170,6 +173,22 @@ internal class TemplateRenderer(
     }
 
     private fun resolve(expression: String, path: String): String {
+        if (Regex("^[a-zA-Z_][a-zA-Z0-9_-]*\\s*:").containsMatchIn(expression)) {
+            val compiled = PromptReferenceLanguage.compile(expression)
+            val selection = (compiled.reference as? PromptReferenceLanguage.QueryPlan)?.historySelection
+            if (selection == null) {
+                issues += Issue(path, compiled.diagnostics.firstOrNull()?.message ?: "此来源的新式引用尚未绑定运行时")
+                return ""
+            }
+            val main = macroView.library.mainCalls.firstOrNull { it.id == currentSession.mainCallId } ?: return ""
+            val projection = if (renderingHistory) HistoryViews.project(macroView.library, currentSession, main, selection) else {
+                renderingHistory = true
+                try { HistoryViews.project(macroView.library, currentSession, main, selection) { render(it, "history.insertion") } }
+                finally { renderingHistory = false }
+            }
+            issues += projection.issues.map { it.copy(path = path) }
+            return projection.messages.joinToString("\n") { it.text }
+        }
         val tagged = expression.substringBefore('#')
         val base = tagged.substringBefore('@')
         val parts = base.split('.')
@@ -199,7 +218,7 @@ internal class TemplateRenderer(
             }
             val version = macroView.selectVersion(address, versionSelector)
             val value = if (address.startsWith("state.") && versionSelector == "latest")
-                state[address.substring(6)]?.takeIf { version?.enabled != false }
+                state[address.substring(6)]?.takeIf { !macroView.currentValueUnavailable(address) && version?.enabled != false }
                 else if (version != null) version.text.takeIf { version.enabled } else if (versionSelector == "latest")
                 unversioned(address) else null
             if (value == null) {
@@ -218,12 +237,13 @@ internal class TemplateRenderer(
             expression == "user.prompt" -> macroView.library.userPrompt(macroView.session)
             base.startsWith("state.") && base.length > 6 -> {
                 val version = macroView.selectVersion(base, "latest")
-                state[base.substring(6)]?.takeIf { version?.enabled != false }
+                state[base.substring(6)]?.takeIf { !macroView.currentValueUnavailable(base) && version?.enabled != false }
             }
             base.startsWith("result.") && base.length > 7 -> unversioned(base)
             base.startsWith("results.") && base.length > 8 -> ResultReferences.category(
                 base.substring(8), resources.resultDeclarations, results, resultOrigins,
-                { key -> macroView.selectVersion("result.$key", "latest")?.enabled != false })
+                { key -> !macroView.currentValueUnavailable("result.$key") &&
+                    macroView.selectVersion("result.$key", "latest")?.enabled != false })
             base.startsWith("category.") && base.length > 9 -> resources.entries
                 .filter { it.second.category == base.substring(9) }
                 .joinToString("\n") { (source, entry) -> entryText("$source.${entry.key}", entry) }
@@ -251,7 +271,8 @@ internal class TemplateRenderer(
         address.startsWith("result.") -> {
             val key = address.substring(7)
             if (key in currentSession.unavailableResultKeys || key in currentSession.pendingRun?.unavailableKeys.orEmpty() ||
-                !macroView.originVisible(resultOrigins[key]) || macroView.selectVersion(address, "latest")?.enabled == false) null else results[key]
+                macroView.currentValueUnavailable(address) || !macroView.originVisible(resultOrigins[key]) ||
+                macroView.selectVersion(address, "latest")?.enabled == false) null else results[key]
         }
         address == "character.name" -> {
             val version = macroView.selectVersion(address, "latest")
@@ -384,12 +405,25 @@ class PromptCompiler {
                 } && checkedRecognition(block.recognition, "node.${node.id}.block.${block.id}.recognition", issues) {
                     blockRenderer.render(it, "node.${node.id}.block.${block.id}.recognition")
                 } }
-        val hasStructuredBlock = blocks.any { (block, resolved) -> !resolved && isStructuredHistoryBlock(block.template) }
+        val structured = blocks.filter { (block, resolved) -> !resolved && isStructuredHistoryBlock(block.template) }
+            .associate { (block, _) ->
+                val selection = (PromptReferenceLanguage.compile(block.template).reference as? PromptReferenceLanguage.QueryPlan)?.historySelection
+                val projection = if (selection == null || main == null) HistoryProjection(
+                    formedContext?.projected { blockRenderer.render(it, "history.insertion") }.orEmpty()) else
+                    HistoryViews.project(library, session, main, selection,
+                        textOverrides = currentUserMessageId?.let { mapOf(it to renderedInput) }.orEmpty()) {
+                        blockRenderer.render(it, "history.insertion")
+                    }
+                issues += projection.issues.map { it.copy(path = "node.${node.id}.block.${block.id}") }
+                block.id to projection.messages
+            }
+        val hasStructuredBlock = structured.isNotEmpty()
         val usesStructuredHistory = hasStructuredBlock && formedContext != null
-        val projectedHistory = if (usesStructuredHistory || node.includeHistory && !node.explicitHistory)
+        val projectedHistory = if (usesStructuredHistory) structured.values.first() else if (node.includeHistory && !node.explicitHistory)
             formedContext?.projected { blockRenderer.render(it, "history.insertion") } ?: transformedHistory else emptyList()
         val implicitHistory = projectedHistory
-        val historyContainsCurrent = formedContext?.containsMessage(currentUserMessageId) ?: (currentIndex >= 0)
+        val historyContainsCurrent = if (usesStructuredHistory) structured.values.flatten().any { it.id == currentUserMessageId }
+            else formedContext?.containsMessage(currentUserMessageId) ?: (currentIndex >= 0)
         val needsInput = if (processingHistory) renderedInput.isNotBlank() else
             (!node.includeHistory || node.explicitHistory || !historyContainsCurrent) &&
                 (!usesStructuredHistory || !historyContainsCurrent)
@@ -399,11 +433,12 @@ class PromptCompiler {
         val after = mutableListOf<ChatMessage>()
         val inserted = MutableList(formedHistory.size + 1) { mutableListOf<ChatMessage>() }
         val historyMarkerId = "structured-history:${node.id}"
+        val primaryStructuredId = structured.keys.firstOrNull()
         blocks.forEach { (block, resolved) ->
             val path = "node.${node.id}.block.${block.id}"
             if (block.depth < 0) issues += Issue("$path.depth", "插入深度不能小于零")
             val messages = if (!resolved && isStructuredHistoryBlock(block.template)) {
-                if (usesStructuredHistory) listOf(ChatMessage(id = historyMarkerId, role = block.role)) else emptyList()
+                if (usesStructuredHistory) listOf(ChatMessage(id = "$historyMarkerId:${block.id}", role = block.role)) else emptyList()
             } else {
                 val source = if (resolved) block.template else blockRenderer.render(block.template, path, block.hideWhenReferencesEmpty)
                 val value = try {
@@ -420,7 +455,7 @@ class PromptCompiler {
             when (block.position) {
                 PromptPosition.BEFORE_HISTORY -> before += messages
                 PromptPosition.AFTER_HISTORY -> after += messages
-                PromptPosition.IN_HISTORY -> if (messages.any { it.id == historyMarkerId }) before += messages else
+                PromptPosition.IN_HISTORY -> if (messages.any { it.id.startsWith("$historyMarkerId:") }) before += messages else
                     inserted[(formedHistory.size.toLong() - block.depth.toLong())
                         .coerceIn(0L, formedHistory.size.toLong()).toInt()] += messages
             }
@@ -434,7 +469,11 @@ class PromptCompiler {
         }
         val messages = buildList {
             fun appendSection(section: List<ChatMessage>) {
-                section.forEach { if (it.id == historyMarkerId) addAll(historyMessages) else add(it) }
+                section.forEach { message ->
+                    if (message.id == "$historyMarkerId:$primaryStructuredId") addAll(historyMessages)
+                    else if (message.id.startsWith("$historyMarkerId:")) addAll(structured[message.id.substringAfter("$historyMarkerId:")].orEmpty())
+                    else add(message)
+                }
             }
             appendSection(before)
             if (!usesStructuredHistory) addAll(historyMessages)

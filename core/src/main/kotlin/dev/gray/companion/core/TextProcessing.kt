@@ -63,6 +63,16 @@ internal fun WorkflowNode.declaredStateWriteAddress(descriptor: ActionDescriptor
         ?.takeIf { it.isNotBlank() && !it.contains("{{") }?.let { "state.$it" }
 }
 
+/** Typed History targets participate in scheduling, but are never ordinary text macro addresses. */
+internal fun WorkflowNode.declaredOutputAddresses(descriptor: ActionDescriptor?): Set<String> = buildSet {
+    add("result.$outputKey")
+    declaredStateWriteAddress(descriptor)?.let(::add)
+    declaredWriteAddress(descriptor)?.let(::add)
+    if (regexOutputCopy.enabled) add("result.${regexOutputCopy.outputKey}")
+    if (actionId == "history.view.copy") arguments["targetId"]?.trim()?.takeIf { it.isNotBlank() && !it.contains("{{") }
+        ?.let { add("history-view:$it") }
+}
+
 /** Pure ordered text operations. Errors reject this node; previously accepted receipts remain. */
 object TextProcessing {
     private const val MAX_OUTPUT_LENGTH = 1_000_000

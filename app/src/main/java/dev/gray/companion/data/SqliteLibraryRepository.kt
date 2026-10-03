@@ -32,7 +32,7 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
             while (cursor.moveToNext()) meta[cursor.getString(0)] = cursor.getString(1)
         }
         val schema = meta["schema"]?.toIntOrNull() ?: if (rows.isEmpty()) 1 else error("Library metadata is damaged")
-        val known = setOf("character", "main_call", "package", "group", "profile", "session", "connection", "chat_folder", "saved_chat", "persona")
+        val known = setOf("character", "main_call", "package", "group", "profile", "session", "connection", "chat_folder", "saved_chat", "persona", "prompt_tag")
         require(rows.keys.all { it in known }) { "Unknown resource record type" }
         val decoded = Library(
             schemaVersion = schema,
@@ -48,6 +48,7 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
             chatFolders = decode(rows["chat_folder"], ChatFolder.serializer()),
             savedChats = decode(rows["saved_chat"], SavedChat.serializer()),
             personas = decode(rows["persona"], UserPersona.serializer()),
+            promptTags = decode(rows["prompt_tag"], PromptTag.serializer()),
             selectedPersonaId = meta["selected_persona"],
             user = meta["user"]?.let { json.decodeFromString(UserIdentity.serializer(), it) } ?: UserIdentity(),
             titleConfig = meta["title_config"]?.let { json.decodeFromString(ChatTitleConfig.serializer(), it) } ?: ChatTitleConfig()
@@ -71,6 +72,7 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
         remember("chat_folder", decoded.chatFolders) { it.id }
         remember("saved_chat", decoded.savedChats) { it.id }
         remember("persona", decoded.personas) { it.id }
+        remember("prompt_tag", decoded.promptTags) { it.id }
         persistedRecords = persisted
         encodedRecords = encoded
         library
@@ -111,6 +113,7 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
             add("chat_folder", library.chatFolders, ChatFolder.serializer()) { it.id }
             add("saved_chat", library.savedChats, SavedChat.serializer()) { it.id }
             add("persona", library.personas, UserPersona.serializer()) { it.id }
+            add("prompt_tag", library.promptTags, PromptTag.serializer()) { it.id }
             for ((key, value) in wanted) if (previous[key] != value) {
                 if (previous[key]?.second == value.second) {
                     check(db.update("records", ContentValues().apply { put("ordinal", value.first) },

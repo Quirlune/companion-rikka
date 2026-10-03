@@ -8,7 +8,10 @@ class HistoryContext(
     private val session: Session,
     private val main: MainCall,
     private val processing: Boolean = false,
-    private val capturedPending: Pending? = null
+    private val capturedPending: Pending? = null,
+    private val legacyProcessing: Boolean = false,
+    private val floorNumbers: Map<String, Int> = emptyMap(),
+    private val projectionSegments: List<HistoryMemorySegment>? = null
 ) {
     data class Pending(
         val messages: List<ChatMessage>, val text: String, val throughMessageId: String,
@@ -25,6 +28,12 @@ class HistoryContext(
     private val selected: IntRange = if (processing) range(HistoryRange(), floors.size)
         else range(main.history.range, floors.size)
     private val selectedFloors = if (selected.isEmpty()) emptyList() else floors.slice(selected)
+    private val validSegments = if (legacyProcessing || (session.historyMemory.segments.isEmpty() && digest == null)) emptyList() else {
+        val sources = archivedFloors.map(HistoryMemory::source)
+        val positions = sources.withIndex().associate { it.value.messageId to it.index }
+        HistoryMemory.effectiveSegments(session, main).values.filter { HistoryMemory.matches(it, sources, positions) }
+    }
+    private val segments = validSegments.filter { it.workflowId == main.history.processor.workflow.id }
     private val pending = capturedPending ?: candidate()
     private val speakerRules = main.history.speakers.associateBy { it.speaker }
     private val floorRules = main.history.floors.associateBy { it.messageId }
@@ -34,14 +43,15 @@ class HistoryContext(
     fun pendingCandidate(): Pending? = pending
     fun containsMessage(id: String?): Boolean = id != null && selectedFloors.any { it.id == id }
     fun withMessages(messages: List<ChatMessage>): HistoryContext = HistoryContext(
-        library, session.copy(messages = messages), main, processing, capturedPending
+        library, session.copy(messages = messages), main, processing, capturedPending, legacyProcessing, floorNumbers, projectionSegments
     )
 
     fun read(key: String, renderInsertion: (String) -> String = { it }): String? = when (key) {
         "raw" -> rawText(selectedFloors)
         "text" -> projected(renderInsertion).joinToString("\n") { it.text }
         "pending" -> pending?.text.orEmpty()
-        "summary" -> digest?.text.orEmpty()
+        "summary" -> if (legacyProcessing) digest?.text.orEmpty()
+            else validSegments.joinToString("\n") { HistoryViews.summaryMessage(it).text }
         "count" -> selectedFloors.size.toString()
         "pending.count" -> (pending?.newFloors ?: 0).toString()
         else -> null
@@ -52,6 +62,16 @@ class HistoryContext(
         val useDigest = digest != null && !processing && selected.first == 0 && selected.last >= digest.coveredFloors - 1 &&
             insertions.keys.none { it in 1 until digest.coveredFloors }
         val output = mutableListOf<ChatMessage>()
+        val selectedPositions = selectedFloors.withIndex().associate { it.value.id to it.index }
+        val candidateSegments = (projectionSegments ?: if (processing) emptyList() else segments).filter { segment ->
+            val start = selectedPositions[segment.sources.first().messageId] ?: -1
+            start >= 0 && start + segment.sources.size <= selectedFloors.size &&
+                insertions.keys.none { it > start && it < start + segment.sources.size }
+        }
+        val overlaps = candidateSegments.flatMap { it.sources.map { source -> source.messageId } }.groupingBy { it }.eachCount()
+        // An ambiguous automatic mapping exposes original floors instead of choosing an arbitrary summary.
+        val segmentStarts = candidateSegments.filter { segment -> segment.sources.none { overlaps[it.messageId]!! > 1 } }
+            .associateBy { it.sources.first().messageId }
         var cursor = 0
         while (cursor <= selectedFloors.size) {
             insertions[cursor].orEmpty().forEach { insertion ->
@@ -63,9 +83,15 @@ class HistoryContext(
                     id = "history-digest:${main.id}:${digest.throughMessageId}")
                 cursor = digest.coveredFloors
             } else {
-                val originalIndex = selected.first + cursor
-                output += wrapped(selectedFloors[cursor], originalIndex + 1)
-                cursor++
+                val segment = segmentStarts[selectedFloors[cursor].id]
+                if (segment != null) {
+                    output += HistoryViews.summaryMessage(segment).copy(role = main.history.apiRole ?: Role.SYSTEM)
+                    cursor += segment.sources.size
+                } else {
+                    val originalIndex = selected.first + cursor
+                    output += wrapped(selectedFloors[cursor], floorNumbers[selectedFloors[cursor].id] ?: originalIndex + 1)
+                    cursor++
+                }
             }
         }
         if (output.isEmpty()) return output
@@ -109,6 +135,16 @@ class HistoryContext(
             cutoff = (cutoff downTo 0).firstOrNull { eligible[it].role == Role.USER } ?: 0
         }
         val covered = digest?.coveredFloors ?: 0
+        if (!legacyProcessing) {
+            val coveredIds = segments.flatMapTo(mutableSetOf()) { it.sources.map { source -> source.messageId } }
+            val uncovered = (covered until cutoff).filter { eligible[it].id !in coveredIds }
+            if (uncovered.size < config.minimumNewFloors || uncovered.isEmpty()) return null
+            val start = uncovered.first()
+            var end = start
+            while (end < cutoff && eligible[end].id !in coveredIds) end++
+            val source = eligible.subList(start, end)
+            return Pending(source, rawText(source), source.last().id, end, source.size)
+        }
         val newFloors = cutoff - covered
         if (newFloors < config.minimumNewFloors || newFloors <= 0) return null
         val source = buildList {
@@ -124,6 +160,7 @@ class HistoryContext(
         fun rangeValid(range: HistoryRange, count: Int): Boolean = count == 0 ||
             endpoint(range.from, count) <= endpoint(range.through, count) ||
             endpoint(range.from, count) >= count || endpoint(range.through, count) < 0
+        fun selectedRange(selection: HistoryRange, count: Int): IntRange = range(selection, count)
         private fun range(range: HistoryRange, count: Int): IntRange {
             if (count == 0) return IntRange.EMPTY
             val first = endpoint(range.from, count)

@@ -9,19 +9,24 @@ internal data class EventPlan(val trigger: String, val waves: List<List<PlannedN
 
 internal data class RunPlan(val events: Map<String, EventPlan>) {
     companion object {
-        fun create(workflows: List<Workflow>, availableActions: Map<String, RegisteredAction>): Pair<RunPlan?, Issue?> {
+        fun create(workflows: List<Workflow>, availableActions: Map<String, RegisteredAction>, executionVersion: Int = 3): Pair<RunPlan?, Issue?> {
             val events = linkedMapOf<String, EventPlan>()
             val categories = mutableMapOf<String, String>()
             for (workflow in workflows.filter { it.enabled }) for (node in workflow.nodes.filter { it.enabled }) {
                 val target = node.declaredWriteAddress(availableActions[node.actionId]?.descriptor)
                     ?.takeIf { it.startsWith("result.") }?.substringAfter("result.")
-                for (key in listOfNotNull(node.outputKey, target).distinct()) {
+                for (key in (listOfNotNull(node.outputKey, target) + listOfNotNull(
+                    node.regexOutputCopy.outputKey.takeIf { node.regexOutputCopy.enabled })).distinct()) {
                     val previous = categories.putIfAbsent(key, node.resultCategory)
                     if (previous != null && previous != node.resultCategory)
                         return null to Issue("workflow.${workflow.id}.node.${node.id}", "同一个输出宏须使用相同分类")
                 }
             }
-            for ((trigger, eventWorkflows) in workflows.filter { it.enabled }.groupBy { it.trigger }) {
+            for (workflow in workflows.filter { it.enabled }) {
+                if (executionVersion >= 2 && workflow.effectiveTrigger() == RuntimeEvents.workflowCompleted(workflow.id))
+                    return null to Issue("workflow.${workflow.id}", "工作流不能监听自身完成事件")
+            }
+            for ((trigger, eventWorkflows) in workflows.filter { it.enabled }.groupBy { it.effectiveTrigger() }) {
                 val nodes = mutableListOf<PlannedNode>()
                 for (workflow in eventWorkflows) {
                     for (node in workflow.nodes) {
@@ -33,7 +38,9 @@ internal data class RunPlan(val events: Map<String, EventPlan>) {
                             }
                             val issue = action.descriptor.validate(node.arguments, "workflow.${workflow.id}.node.${node.id}").firstOrNull { it.error }
                             if (issue != null) return null to issue
-                            if (node.actionId == "event.emit" && node.arguments["event"]?.trim() in RuntimeEvents.reserved) {
+                            val eventName = node.arguments["event"].orEmpty().trim()
+                            if (node.actionId == "event.emit" && (if (executionVersion == 1) eventName in RuntimeEvents.reserved
+                                else RuntimeEvents.isReserved(eventName))) {
                                 return null to Issue("workflow.${workflow.id}.node.${node.id}.argument.event", "此事件由运行时派发")
                             }
                         }
@@ -55,13 +62,7 @@ internal data class RunPlan(val events: Map<String, EventPlan>) {
                             ref.node.enabled && ref.node.condition == null && ref.node.recognition == null &&
                             ref.node.dependsOn.all { "${ref.workflow.id}/$it" in unconditional }
                     }
-                    val macroKeys = guaranteed.flatMap { ref ->
-                        buildSet {
-                            add("result.${ref.node.outputKey}")
-                            ref.node.declaredStateWriteAddress(ref.action?.descriptor)?.let(::add)
-                            ref.node.declaredWriteAddress(ref.action?.descriptor)?.let(::add)
-                        }
-                    }
+                    val macroKeys = guaranteed.flatMap { ref -> ref.node.declaredOutputAddresses(ref.action?.descriptor) }
                     if (macroKeys.size != macroKeys.toSet().size) {
                         return null to Issue("event.$trigger", "并行节点写入同一宏地址")
                     }

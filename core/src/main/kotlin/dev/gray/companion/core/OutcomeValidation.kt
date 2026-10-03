@@ -8,6 +8,9 @@ internal class NodeExecutionFailure(
     val retryable: Boolean = true
 ) : RuntimeException()
 
+/** Provenance is captured by the engine, never supplied as a handler effect. */
+internal data class ValidatedCandidate(val outcome: ActionOutcome, val rawBodyText: String? = null)
+
 /** Pure candidate checks. No state, versions, replies or events are published here. */
 internal class OutcomeValidator(private val library: Library, session: Session) {
     private val tiles = (library.mainCalls.firstOrNull { it.id == session.mainCallId }?.tiles.orEmpty() +
@@ -21,7 +24,7 @@ internal class OutcomeValidator(private val library: Library, session: Session) 
         if (ref.action?.descriptor?.execution == ActionExecution.PURE_MODEL && outcome.hasEffects())
             throw NodeExecutionFailure(ref, "纯模型动作返回了状态、宏、注入或事件副作用",
                 RecoveryFailureKind.CONFIGURATION, retryable = false)
-        val processed = if (ref.node.outputProcessing.isEmpty()) outcome else try {
+        val processedText = if (ref.node.outputProcessing.isEmpty()) outcome else try {
             require(outcome.stateWrites.isEmpty() && outcome.macroWrites.isEmpty() &&
                 outcome.activationWrites.isEmpty())
             val resolver = MacroResolver(library, requireNotNull(context.session), context.input)
@@ -31,6 +34,12 @@ internal class OutcomeValidator(private val library: Library, session: Session) 
             throw NodeExecutionFailure(ref, failure.message.orEmpty(), RecoveryFailureKind.OUTPUT_FORMAT)
         } catch (_: Exception) {
             throw NodeExecutionFailure(ref, "文本处理失败", RecoveryFailureKind.OUTPUT_FORMAT)
+        }
+        val processed = try { RegexOutputCopies.derive(ref.node, processedText) }
+        catch (failure: OutputFormatException) {
+            throw NodeExecutionFailure(ref, failure.message.orEmpty(), RecoveryFailureKind.OUTPUT_FORMAT)
+        } catch (failure: IllegalArgumentException) {
+            throw NodeExecutionFailure(ref, failure.message.orEmpty(), RecoveryFailureKind.CONFIGURATION, retryable = false)
         }
         val values = linkedMapOf("result.${ref.node.outputKey}" to processed.text)
         processed.macroWrites.forEach { (address, value) ->
@@ -43,7 +52,7 @@ internal class OutcomeValidator(private val library: Library, session: Session) 
             val source = MacroOutputContracts.sourceAddress(tile) ?: continue
             val text = values[source] ?: continue
             val problem = MacroOutputContracts.validate(tile, text) ?: continue
-            val kind = if (problem.startsWith("磁贴正则配置无效")) RecoveryFailureKind.CONFIGURATION
+            val kind = if (problem.startsWith("磁贴正则配置无效") || problem.startsWith("HTML 模板配置无效")) RecoveryFailureKind.CONFIGURATION
                 else RecoveryFailureKind.OUTPUT_FORMAT
             throw NodeExecutionFailure(ref, problem, kind, "${tile.title} (${tile.id})", kind != RecoveryFailureKind.CONFIGURATION)
         }

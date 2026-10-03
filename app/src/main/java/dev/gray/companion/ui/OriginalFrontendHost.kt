@@ -27,8 +27,6 @@ import me.rerere.hugeicons.stroke.*
 import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.RikkaNavDisplay
 import me.rerere.rikkahub.rikkaChatTransitions
-import me.rerere.rikkahub.data.datastore.SettingsStore
-import org.koin.compose.koinInject
 import me.rerere.rikkahub.ui.pages.setting.SettingPageLayout
 import me.rerere.rikkahub.companion.CompanionChatPage
 import me.rerere.rikkahub.companion.CompanionSearchPage
@@ -55,7 +53,6 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
     val usage by controller.usage.collectAsStateWithLifecycle()
     val usageError by controller.usageError.collectAsStateWithLifecycle()
     val settings by rememberUserSettingsState()
-    val settingsStore: SettingsStore = koinInject()
     val stack = rememberNavBackStack(Screen.Chat(library.selectedSessionId ?: "active"))
     val navigator = remember(stack) { Navigator(stack) }
     val drawer = rememberDrawerState(DrawerValue.Closed)
@@ -82,6 +79,17 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
         scope.launch {
             try { if (report(controller.updateLibrary(transform))) navigator.popBackStack() }
             finally { saving = false }
+        }
+    }
+    fun saveMemory(ownerId: String, processor: HistoryProcessor, onSaved: () -> Unit) {
+        if (saving) return
+        saving = true
+        scope.launch {
+            try {
+                if (report(controller.updateLibrary { current -> current.copy(mainCalls = current.mainCalls.map { main ->
+                    if (main.id == ownerId) main.copy(history = main.history.copy(processor = processor)) else main
+                }) })) onSaved()
+            } finally { saving = false }
         }
     }
     fun selectCharacter(id: String) { scope.launch {
@@ -113,13 +121,6 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                         OriginalDrawer(
                             library = library, usage = usage, usageError = usageError, usageAsOf = usageAsOf,
                             settings = settings,
-                            onUpdateSettings = { next -> scope.launch { settingsStore.update { it.copy(displaySetting = next.displaySetting) } } },
-                            onRenameUser = { name -> update { current ->
-                                val personaId = current.sessions.firstOrNull { it.id == current.selectedSessionId }?.personaId
-                                val renamed = name.trim().ifBlank { "用户" }
-                                if (personaId == null) current.copy(user = current.user.copy(name = renamed))
-                                else current.copy(personas = current.personas.map { if (it.id == personaId) it.copy(name = renamed) else it })
-                            } },
                             onPinSession = { id -> scope.launch { report(controller.toggleSessionPin(id)) } },
                             onSelectSession = { id -> scope.launch { if (report(controller.selectSession(id))) { drawer.close(); navigator.clearAndNavigate(Screen.Chat(controller.library.value.selectedSessionId ?: "active")) } } },
                             onNewChat = ::newChat,
@@ -181,11 +182,17 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                             entry<Screen.Setting> { CompanionSettingsPage(onExport, onImport) }
                             entry<Screen.CompanionSession> { SessionConfigScreen(library, { navigator.popBackStack() }, ::save, saving,
                                 onManagePersonas = { navigator.navigate(Screen.CompanionPersonas) }) }
+                            entry<Screen.CompanionMemory> {
+                                MemorySettingsPage(library, controller.actionDescriptors, ::saveMemory, { navigator.popBackStack() }, saving)
+                            }
                             entry<Screen.CompanionPersonas> {
                                 Column(Modifier.fillMaxSize()) {
                                     SettingsHeader("用户身份", { navigator.popBackStack() })
                                     PersonasScreen(library, ::edit, ::update, Modifier.weight(1f))
                                 }
+                            }
+                            entry<Screen.CompanionTags> {
+                                TagSettingsPage(library, { tags -> save { it.copy(promptTags = tags) } }, { navigator.popBackStack() }, saving)
                             }
                             entry<Screen.CompanionPromptPreview> { PromptPreviewPage(controller) }
                             entry<Screen.History> { ChatArchiveScreen(library, { navigator.popBackStack() }, ::update, { id -> scope.launch {
@@ -201,7 +208,8 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                 Column(Modifier.fillMaxSize()) {
                                     val kind = ResourceKind.fromRouteIndex(key.kind)
                                     SettingsHeader(kind?.title ?: "资源", { navigator.popBackStack() })
-                                    if (kind != null) ResourceScreen(library, kind, ::edit, ::update, Modifier.weight(1f))
+                                    if (kind != null) ResourceScreen(library, kind, ::edit, ::update, Modifier.weight(1f),
+                                        onManageTags = if (kind == ResourceKind.PACKAGE) ({ navigator.navigate(Screen.CompanionTags) }) else null)
                                 }
                             }
                             entry<Screen.SettingProvider> {
@@ -243,7 +251,7 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                                 } finally { saving = false }
                                             }
                                         }
-                                    }, { navigator.popBackStack() }, title = "${node.title} · 提示词", saving = saving)
+                                    }, { navigator.popBackStack() }, title = "${node.title} · 提示词", saving = saving, tags = library.promptTags)
                                 }
                             }
                             entry<Screen.CompanionEditor> { key ->
@@ -263,7 +271,7 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                         PersonaEditor(initial, library, { value -> save { it.copy(personas = it.personas.replaceOrAdd(value) { it.id }) } }, back, saving)
                                     }
                                     EditorKind.MAIN -> {
-                                        val initial = remember(key) { library.mainCalls.firstOrNull { it.id == key.id } ?: MainCall(id = key.id, name = "新主调用").let { it.copy(primaryWorkflowId = it.workflows.first().id) } }
+                                        val initial = remember(key) { library.mainCalls.firstOrNull { it.id == key.id } ?: newEditorMainCall(key.id) }
                                         MainCallEditor(initial, { value -> save { it.copy(mainCalls = it.mainCalls.replaceOrAdd(value) { it.id }) } }, back, saving, controller.actionDescriptors, library.profiles, library,
                                          onSwitchResource = { draft, targetId ->
                                             if (!saving) {
@@ -324,11 +332,11 @@ private fun CompanionSettingsPage(onExport: () -> Unit, onImport: () -> Unit) {
     SettingPageLayout {
             item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("运行方案") }) {
                 item(onClick = { navigator.navigate(Screen.CompanionSession) }, headlineContent = { Text("当前对话配置") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
-                item(onClick = { navigator.navigate(Screen.CompanionPersonas) }, headlineContent = { Text("用户身份") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionPromptPreview) }, headlineContent = { Text("提示词预览") }, leadingContent = { Icon(HugeIcons.Search01, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionResources(ResourceKind.MAIN.routeIndex)) }, headlineContent = { Text("主调用") }, leadingContent = { Icon(HugeIcons.Brain02, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionResources(ResourceKind.PACKAGE.routeIndex)) }, headlineContent = { Text("提示词包") }, leadingContent = { Icon(HugeIcons.Book03, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionResources(ResourceKind.GROUP.routeIndex)) }, headlineContent = { Text("调用组") }, leadingContent = { Icon(HugeIcons.Package, null) })
+                item(onClick = { navigator.navigate(Screen.CompanionMemory) }, headlineContent = { Text("记忆") }, leadingContent = { Icon(HugeIcons.Brain02, null) })
             } }
             item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("连接与界面") }) {
                 item(onClick = { navigator.navigate(Screen.SettingProvider) }, headlineContent = { Text("模型与 API") }, leadingContent = { Icon(HugeIcons.ServerStack01, null) })

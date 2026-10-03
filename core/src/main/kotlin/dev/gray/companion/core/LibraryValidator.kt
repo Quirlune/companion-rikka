@@ -1,9 +1,10 @@
 package dev.gray.companion.core
 
 object LibraryValidator {
-    fun validate(library: Library): List<Issue> {
+    fun validate(library: Library, executionVersion: Int = 3): List<Issue> {
         val issues = mutableListOf<Issue>()
         if (library.schemaVersion != LibraryFormat.CURRENT_VERSION) issues += Issue("library.schemaVersion", "不支持的资源版本")
+        checkMetadata(library, issues)
         fun unique(values: List<String>, path: String) {
             values.filter { it.isBlank() }.forEach { issues += Issue(path, "ID 或名称不能为空") }
             values.filter { it.isNotBlank() }.groupingBy { it }.eachCount().filterValues { it > 1 }.keys.forEach {
@@ -58,6 +59,15 @@ object LibraryValidator {
             group.boundPackageIds.forEach { if (library.packages.none { pack -> pack.id == it }) issues += Issue("group.${group.id}", "绑定的提示词包不存在") }
         }
         fun checkSession(session: Session, path: String) {
+            checkMemory(session.historyMemory, "$path.historyMemory", issues)
+            session.currentOnlyMacros.forEach { (key, head) ->
+                val at = "$path.currentOnlyMacros.$key"
+                val static = key.startsWith("character.") || key.startsWith("pack.")
+                if (canonicalWriteAddress(key) != key || head.version < 1 ||
+                    (static && head.text == null) || (!static && head.text != null) ||
+                    (head.gap.firstTurn != null && head.gap.firstTurn < 0))
+                    issues += Issue(at, "当前宏的地址、版本或覆盖结构无效")
+            }
             if (session.personaId != null && library.personas.none { it.id == session.personaId })
                 issues += Issue("$path.personaId", "会话用户身份不存在")
             if (session.characterId.isNotBlank() && library.characters.none { it.id == session.characterId }) issues += Issue(path, "角色卡不存在")
@@ -101,6 +111,7 @@ object LibraryValidator {
             val path = "tile.${tile.id}"
             checkTemplate(tile.template, "$path.template", issues)
             SafePatterns.validate(tile.pattern, tile.captureGroup)?.let { issues += Issue("$path.pattern", it) }
+            issues += HtmlTemplate.validate(tile)
             if (tile.title.isBlank()) issues += Issue(path, "磁贴名称不能为空")
             if (!tile.minimum.isFinite() || !tile.maximum.isFinite() || (tile.kind == MacroTileKind.PROGRESS && tile.maximum <= tile.minimum))
                 issues += Issue(path, "进度上下限必须是有效数字，且上限大于下限")
@@ -109,7 +120,8 @@ object LibraryValidator {
                 val at = "$path.fields.$index"
                 if (!StatusFields.validKey(field.key)) issues += Issue("$at.key", "状态字段 XML 路径无效")
                 if (field.title.isBlank()) issues += Issue("$at.title", "状态字段名称不能为空")
-                if (field.kind == MacroTileKind.STATUS) issues += Issue("$at.kind", "状态字段不能嵌套状态视图")
+                if (field.kind !in setOf(MacroTileKind.TEXT, MacroTileKind.NUMBER, MacroTileKind.PROGRESS))
+                    issues += Issue("$at.kind", "状态字段只支持文字、数值或进度")
                 if (!field.minimum.isFinite() || !field.maximum.isFinite() ||
                     field.kind == MacroTileKind.PROGRESS && field.maximum <= field.minimum)
                     issues += Issue(at, "状态字段数值边界无效")
@@ -153,6 +165,11 @@ object LibraryValidator {
             val path = "workflow.${workflow.id}"
             if (workflow.title.isBlank()) issues += Issue(path, "工作流名称不能为空")
             if (workflow.trigger.isBlank()) issues += Issue(path, "触发事件不能为空")
+            workflow.afterWorkflowId?.let { target ->
+                if (target == workflow.id) issues += Issue("$path.afterWorkflowId", "调用不能由自身完成触发")
+                if (allWorkflows.none { it.id == target }) issues += Issue("$path.afterWorkflowId", "完成触发的来源调用不存在")
+                if (workflow.id in processorIds) issues += Issue("$path.afterWorkflowId", "历史处理调用不能改用完成触发")
+            }
             if (workflow.id in processorIds && workflow.trigger != RuntimeEvents.HISTORY_PROCESS) issues += Issue(path, "历史处理调用须使用 history.process")
             if (workflow.id !in processorIds && workflow.trigger == RuntimeEvents.HISTORY_PROCESS) issues += Issue(path, "history.process 只供历史处理调用使用")
             if (workflow.modelProfileId != null && library.profiles.none { it.id == workflow.modelProfileId })
@@ -166,6 +183,14 @@ object LibraryValidator {
                 val nodePath = "$path.node.${node.id}"
                 if (node.title.isBlank()) issues += Issue(nodePath, "节点名称不能为空")
                 if (node.actionId.isBlank()) issues += Issue(nodePath, "动作不能为空")
+                if (node.actionId == "event.emit") {
+                    val event = node.arguments["event"].orEmpty().trim()
+                    val reserved = if (executionVersion == 1) event in RuntimeEvents.reserved else RuntimeEvents.isReserved(event)
+                    // Old resources may contain a custom name using the newly reserved prefix.
+                    // Keep them loadable; the versioned run planner rejects emitting it in v2.
+                    if (reserved) issues += Issue("$nodePath.argument.event", "此事件由运行时派发",
+                        error = event in RuntimeEvents.reserved)
+                }
                 if (node.outputKey.isBlank()) issues += Issue(nodePath, "输出键不能为空")
                 if (node.generation.profileId != null && library.profiles.none { it.id == node.generation.profileId })
                     issues += Issue("$nodePath.generation.profileId", "节点模型不存在")
@@ -174,6 +199,9 @@ object LibraryValidator {
                 node.generation.maxTokens?.let { if (it <= 0) issues += Issue("$nodePath.generation.maxTokens", "最大令牌数必须大于零") }
                 issues += TextProcessing.validate(node.inputProcessing, "$nodePath.inputProcessing")
                 issues += TextProcessing.validate(node.outputProcessing, "$nodePath.outputProcessing")
+                issues += RegexOutputCopies.validate(node.regexOutputCopy, "$nodePath.regexOutputCopy")
+                if (node.regexOutputCopy.enabled && node.regexOutputCopy.outputKey == node.outputKey)
+                    issues += Issue("$nodePath.regexOutputCopy.outputKey", "副本与原始输出不能使用同一个宏地址")
                 if (node.outputProcessing.isNotEmpty() && node.actionId in setOf("state.set", "state.increment", "macro.write", "macro.activate", "macro.process"))
                     issues += Issue("$nodePath.outputProcessing", "此动作的输出处理会与目标值不一致；请在宏处理步骤中修改值")
                 if (node.actionId == "macro.process") {
@@ -217,6 +245,18 @@ object LibraryValidator {
                     if (block.depth < 0) issues += Issue("$blockPath.depth", "插入深度不能小于零")
                 }
                 node.arguments.forEach { (key, value) -> checkTemplate(value, "$nodePath.argument.$key", issues) }
+                if (node.actionId in setOf("history.view.copy", "history.memory.write")) {
+                    val source = node.arguments["source"] ?: "{{history}}"
+                    if (source.isBlank()) issues += Issue("$nodePath.argument.source", "请选择历史来源")
+                    else if (HistoryViews.selection(source) == null)
+                        issues += Issue("$nodePath.argument.source", "来源必须是 History 引用")
+                    if (node.actionId == "history.view.copy") {
+                        if (!MacroNaming.isValidSlug(node.arguments["targetId"].orEmpty()))
+                            issues += Issue("$nodePath.argument.targetId", "历史副本标识须为英文 slug")
+                        SafePatterns.validate(node.arguments["pattern"].orEmpty(), node.arguments["captureGroup"]?.toIntOrNull() ?: 0)
+                            ?.let { issues += Issue("$nodePath.argument.pattern", it) }
+                    }
+                }
                 if (node.actionId == "text.extract") {
                     SafePatterns.validate(node.arguments["pattern"].orEmpty(), node.arguments["captureGroup"]?.toIntOrNull() ?: 0)?.let {
                         issues += Issue("$nodePath.pattern", it)
@@ -235,6 +275,84 @@ object LibraryValidator {
             workflow.nodes.forEach { visit(it.id) }
         }
         return issues.distinct()
+    }
+
+    private fun checkMetadata(library: Library, issues: MutableList<Issue>) {
+        val tagIds = library.promptTags.map { it.id }
+        if (tagIds.any { it.isBlank() } || tagIds.distinct().size != tagIds.size)
+            issues += Issue("library.promptTagIds", "标签 ID 不能为空或重复")
+        val catalogue = tagIds.toSet()
+        fun tags(ids: List<String>, path: String) {
+            if (ids.distinct().size != ids.size) issues += Issue("$path.tagIds", "不能重复分配同一标签")
+            ids.filter { it.isBlank() || it !in catalogue }.distinct().forEach {
+                issues += Issue("$path.tagIds", "标签不存在：$it")
+            }
+        }
+        fun slugs(values: List<Pair<String, String>>, path: String) {
+            // Empty defaults remain legal for older direct in-memory constructors.
+            val supplied = values.filter { it.second.isNotEmpty() }
+            supplied.forEach { (itemPath, slug) ->
+                MacroNaming.slugProblem(slug)?.let { issues += Issue("$itemPath.slug", it) }
+            }
+            supplied.groupingBy { it.second }.eachCount().filterValues { it > 1 }.keys.forEach {
+                issues += Issue("$path.slugs", "同级英文标识重复：$it")
+            }
+        }
+        slugs(library.promptTags.map { "tag.${it.id}" to it.slug }, "library.promptTags")
+        library.promptTags.forEach { tag ->
+            MacroNaming.nameProblem(tag.name)?.let { issues += Issue("tag.${tag.id}.name", it) }
+        }
+        slugs(library.characters.map { "character.${it.id}" to it.slug }, "library.characters")
+        slugs(library.packages.map { "pack.${it.id}" to it.slug }, "library.packages")
+        slugs(library.mainCalls.map { "main.${it.id}" to it.slug }, "library.mainCalls")
+        slugs(library.groups.map { "group.${it.id}" to it.slug }, "library.groups")
+        slugs(library.personas.map { "persona.${it.id}" to it.slug }, "library.personas")
+        library.personas.forEach { tags(it.tagIds, "persona.${it.id}") }
+        fun entries(entries: List<PromptEntry>, path: String) {
+            slugs(entries.map { "entry.${it.id}" to it.slug }, "$path.entries")
+            entries.forEach { tags(it.tagIds, "entry.${it.id}") }
+        }
+        library.characters.forEach { entries(it.entries, "character.${it.id}") }
+        library.packages.forEach { entries(it.entries, "pack.${it.id}") }
+        fun workflows(workflows: List<Workflow>, path: String) {
+            slugs(workflows.map { "workflow.${it.id}" to it.slug }, "$path.workflows")
+            workflows.forEach { workflow ->
+                val workflowPath = "workflow.${workflow.id}"
+                slugs(workflow.nodes.map { "$workflowPath.node.${it.id}" to it.slug }, "$workflowPath.nodes")
+                workflow.nodes.forEach { node ->
+                    val nodePath = "$workflowPath.node.${node.id}"
+                    tags(node.tagIds, nodePath)
+                    slugs(node.blocks.map { "$nodePath.block.${it.id}" to it.slug }, "$nodePath.blocks")
+                    node.blocks.forEach { tags(it.tagIds, "$nodePath.block.${it.id}") }
+                }
+            }
+        }
+        library.mainCalls.forEach { workflows(it.workflows + it.history.processor.workflow, "main.${it.id}") }
+        library.groups.forEach { workflows(it.workflows, "group.${it.id}") }
+    }
+
+    /** Only saved structure is checked here; unavailable old sources are diagnosed when read. */
+    private fun checkMemory(memory: HistoryMemoryState, path: String, issues: MutableList<Issue>) {
+        memory.segments.forEach { (id, segment) ->
+            if (id != segment.id || segment.summary.isBlank() || segment.sources.isEmpty() ||
+                segment.sources.map { it.messageId }.distinct().size != segment.sources.size)
+                issues += Issue("$path.segments.$id", "记忆段身份、摘要或来源无效")
+        }
+        memory.captures.forEach { (id, sources) ->
+            if (id.isBlank() || sources.map { it.messageId }.distinct().size != sources.size ||
+                sources.any { it.messageId.isBlank() || it.revisionId.isBlank() || it.fingerprint.isBlank() })
+                issues += Issue("$path.captures.$id", "历史捕获来源无效")
+        }
+        memory.views.forEach { (id, versions) ->
+            if (!MacroNaming.isValidSlug(id) || versions.isEmpty()) issues += Issue("$path.views.$id", "历史副本标识或版本无效")
+            versions.forEachIndexed { index, view ->
+                if (view.viewId != id || view.revision != index + 1 || view.name.isBlank() || view.captureId !in memory.captures ||
+                    (view.baseViewId == null) != (view.baseRevision == null) || view.segmentModes.keys.any { it !in memory.segments })
+                    issues += Issue("$path.views.$id.${view.revision}", "历史副本结构无效")
+                if (view.baseViewId != null && memory.views[view.baseViewId].orEmpty().none { it.revision == view.baseRevision })
+                    issues += Issue("$path.views.$id.${view.revision}", "历史副本基础版本不存在")
+            }
+        }
     }
 
     private fun validHttpsAddress(value: String): Boolean = try {

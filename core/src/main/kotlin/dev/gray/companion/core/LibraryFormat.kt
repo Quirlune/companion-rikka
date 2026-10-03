@@ -7,7 +7,7 @@ import kotlinx.serialization.json.intOrNull
 
 /** Resource wire versions are independent of the Android SQLite table version. */
 object LibraryFormat {
-    const val CURRENT_VERSION = 2
+    const val CURRENT_VERSION = 5
     private const val LEGACY_VERSION = 1
 
     val json = Json { ignoreUnknownKeys = false; encodeDefaults = true }
@@ -26,31 +26,35 @@ object LibraryFormat {
         return upgrade(if (decoded.schemaVersion == version) decoded else decoded.copy(schemaVersion = version))
     }
 
-    /** Version 2 names the journal contract; version 1 keeps the same execution meaning. */
+    /** Additive resource upgrades preserve legacy addresses and each journal's execution version. */
     fun upgrade(library: Library): Library {
         checkVersion(library.schemaVersion)
+        val named = MacroNaming.normalize(library)
         fun upgradeSession(session: Session): Session {
             val pending = session.pendingRun ?: return session
             val frozen = pending.frozenResources
             checkVersion(frozen.schemaVersion)
-            if (frozen.schemaVersion == CURRENT_VERSION) return session
+            val namedFrozen = MacroNaming.normalize(frozen)
+            val upgradedFrozen = if (namedFrozen.schemaVersion == CURRENT_VERSION) namedFrozen
+                else namedFrozen.copy(schemaVersion = CURRENT_VERSION)
+            if (upgradedFrozen === frozen) return session
             return session.copy(pendingRun = pending.copy(
-                frozenResources = frozen.copy(schemaVersion = CURRENT_VERSION)
+                frozenResources = upgradedFrozen
             ))
         }
-        var changed = library.schemaVersion != CURRENT_VERSION
-        val sessions = library.sessions.map { session ->
+        var changed = named.schemaVersion != CURRENT_VERSION
+        val sessions = named.sessions.map { session ->
             upgradeSession(session).also { if (it !== session) changed = true }
         }
-        val savedChats = library.savedChats.map { saved ->
+        val savedChats = named.savedChats.map { saved ->
             val snapshot = upgradeSession(saved.snapshot)
             if (snapshot === saved.snapshot) saved else saved.copy(snapshot = snapshot).also { changed = true }
         }
-        return if (changed) library.copy(schemaVersion = CURRENT_VERSION, sessions = sessions, savedChats = savedChats)
-            else library
+        return if (changed) named.copy(schemaVersion = CURRENT_VERSION, sessions = sessions, savedChats = savedChats)
+            else named
     }
 
     private fun checkVersion(version: Int) {
-        require(version == LEGACY_VERSION || version == CURRENT_VERSION) { "不支持的资源版本：$version" }
+        require(version in LEGACY_VERSION..CURRENT_VERSION) { "不支持的资源版本：$version" }
     }
 }

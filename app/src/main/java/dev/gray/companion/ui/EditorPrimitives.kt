@@ -135,7 +135,7 @@ internal fun MacroHelp(onInsert: (String) -> Unit) {
             SuggestionChip(onClick = { onInsert(macro) }, label = { Text(macro, style = MaterialTheme.typography.labelSmall) })
         } }
     }
-    Text("可选历史版本：@turn-1、@update-1、@version-12，写在 #XML 路径之前。例：{{macro.mood@turn-1}}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Text("可选历史引用：@turn-1、@update-1、@version-12，写在 #XML 路径之前；update 只计算已记录的轨迹点。例：{{macro.mood@turn-1}}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 @Composable

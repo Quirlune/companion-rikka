@@ -5,7 +5,8 @@ internal data class InvocationEnvironment(
     val session: Session,
     val input: String,
     val history: HistoryContext,
-    val currentUserMessageId: String?
+    val currentUserMessageId: String?,
+    val executionVersion: Int = 3
 )
 
 internal data class RenderedInvocationInput(
@@ -44,7 +45,9 @@ internal class InvocationPreparer(private val library: Library) {
         val descriptor = requireNotNull(ref.action).descriptor
         val macroFields = descriptor.fields.filter { it.type == ActionFieldType.MACRO }.mapTo(mutableSetOf()) { it.key }
         val arguments = descriptor.withDefaults(ref.node.arguments).mapValues { (key, value) ->
-            if (key in macroFields) value else renderer.render(value, "node.${ref.node.id}.argument.$key")
+            // History sources are read references, not writable text macro addresses. Keep the selector intact.
+            if (key in macroFields || (ref.node.actionId.startsWith("history.") && key == "source")) value
+            else renderer.render(value, "node.${ref.node.id}.argument.$key")
         }
         return RenderedInvocationInput(input, arguments, issues.toList())
     }
@@ -63,12 +66,19 @@ internal class InvocationPreparer(private val library: Library) {
             library, session, ref.node, environment.input, session.results, session.state,
             environment.currentUserMessageId, session.resultOrigins, environment.history, inputs.text
         )
+        val configIssues = RegexOutputCopies.validate(ref.node.regexOutputCopy, "node.${ref.node.id}.regexOutputCopy") +
+            if (ref.node.regexOutputCopy.enabled && ref.node.regexOutputCopy.outputKey == ref.node.outputKey)
+                listOf(Issue("node.${ref.node.id}.regexOutputCopy", "副本与原始输出不能使用同一个宏地址")) else emptyList()
+        configIssues.firstOrNull { it.error }?.let {
+            throw NodeExecutionFailure(ref, it.message, RecoveryFailureKind.CONFIGURATION, retryable = false)
+        }
         val issues = inputs.issues + preview.issues + descriptor.validate(inputs.arguments, "node.${ref.node.id}")
         issues.firstOrNull { it.error }?.let {
             throw NodeExecutionFailure(ref, it.message, RecoveryFailureKind.PROMPT, retryable = false)
         }
-        if (ref.node.actionId == "event.emit" && inputs.arguments["event"]?.trim() in
-            RuntimeEvents.reserved) {
+        val emittedEvent = inputs.arguments["event"].orEmpty().trim()
+        if (ref.node.actionId == "event.emit" && (if (environment.executionVersion == 1)
+            emittedEvent in RuntimeEvents.reserved else RuntimeEvents.isReserved(emittedEvent))) {
             throw NodeExecutionFailure(ref, "此事件由运行时派发", RecoveryFailureKind.PROMPT, retryable = false)
         }
         val profile = if (descriptor.usesModel) {

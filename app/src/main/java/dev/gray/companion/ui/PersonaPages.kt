@@ -164,13 +164,20 @@ internal fun PersonaEditor(
     onBack: () -> Unit,
     saving: Boolean = false,
 ) {
-    var persona by remember(initial.id) { mutableStateOf(initial) }
+    val baseline = remember(initial.id) { MacroNaming.normalize(initial, library.personas.filterNot { it.id == initial.id }.map { it.slug }).let { value ->
+        if (value.name.isBlank() || library.personas.none { it.id == value.id })
+            value.copy(name = nextDisplayName(library.personas.filterNot { it.id == value.id }.map { it.name }, "用户身份"))
+        else value
+    } }
+    var persona by remember(initial.id) { mutableStateOf(baseline) }
+    var rename by remember(initial.id) { mutableStateOf(false) }
     var avatarOpen by remember(initial.id) { mutableStateOf(false) }
     var avatarBusy by remember(initial.id) { mutableStateOf(false) }
     val useCount = library.sessions.count { it.personaId == initial.id } + library.savedChats.count { it.snapshot.personaId == initial.id }
-    EditorPage("用户身份", onBack, { onSave(persona.copy(name = persona.name.trim().ifBlank { "用户" })) },
-        dirty = persona != initial, saving = saving || avatarBusy) {
-        TextFieldLine("身份名称（{{user.name}}）", persona.name, { persona = persona.copy(name = it) })
+    EditorPage("用户身份", onBack, { onSave(persona.copy(name = persona.name.trim())) },
+        dirty = persona != baseline, saving = saving || avatarBusy) {
+        EditorTitleRow("${persona.name} / ${persona.slug}", { rename = true })
+        PromptTagSelector(library.promptTags, persona.tagIds) { persona = persona.copy(tagIds = it) }
         CardGroup {
             item(
                 onClick = { avatarOpen = !avatarOpen },
@@ -187,6 +194,10 @@ internal fun PersonaEditor(
         if (useCount > 0) Text("$useCount 个对话或收藏引用此身份；修改后的资料供这些对话后续读取，已有消息的称呼保留。",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
+    if (rename) NamingDialog("用户身份名称", persona.name, persona.slug,
+        library.personas.filterNot { it.id == persona.id }.map { it.name },
+        library.personas.filterNot { it.id == persona.id }.map { it.slug },
+        { rename = false }) { name, slug -> persona = persona.copy(name = name, slug = slug); rename = false }
 }
 
 @Composable
