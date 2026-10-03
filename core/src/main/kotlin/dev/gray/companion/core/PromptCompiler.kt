@@ -6,7 +6,7 @@ import javax.xml.parsers.DocumentBuilderFactory
 import org.xml.sax.InputSource
 
 private val structuredHistoryToken = Regex("\\{\\{\\s*history\\s*\\}\\}")
-internal fun isStructuredHistoryBlock(template: String, executionVersion: Int = 5): Boolean =
+internal fun isStructuredHistoryBlock(template: String, executionVersion: Int = 6): Boolean =
     structuredHistoryToken.matches(template.trim()) || (template.trim().let {
         it.startsWith("{{") && it.endsWith("}}") && Regex("\\{\\{[^{}]*\\}\\}").matches(it) &&
             HistoryViews.selection(it, executionVersion)?.let { _ ->
@@ -45,7 +45,7 @@ internal fun loadedResources(
     issues: MutableList<Issue>? = null,
     resultOrigins: Map<String, ResultOrigin> = session.resultOrigins,
     historyContext: HistoryContext? = null,
-    executionVersion: Int = 5
+    executionVersion: Int = 6
 ): LoadedResources {
     val view = MacroReadView(library, session)
     val character = view.character
@@ -141,7 +141,7 @@ internal class TemplateRenderer(
     private val resultOrigins: Map<String, ResultOrigin> = emptyMap(),
     session: Session? = null,
     historyContext: HistoryContext? = null,
-    private val executionVersion: Int = 5
+    private val executionVersion: Int = 6
 ) {
     private val token = Regex("\\{\\{([^{}]*)\\}\\}")
     private val currentSession = session ?: resources.macroView.session
@@ -404,7 +404,7 @@ class PromptCompiler {
         resultOrigins: Map<String, ResultOrigin> = session.resultOrigins,
         historyContext: HistoryContext? = null,
         preprocessedInput: String? = null,
-        executionVersion: Int = 5
+        executionVersion: Int = 6
     ): PromptPreview {
         val issues = mutableListOf<Issue>()
         val main = library.mainCalls.firstOrNull { it.id == session.mainCallId }

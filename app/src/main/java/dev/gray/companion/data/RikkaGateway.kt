@@ -4,6 +4,9 @@ import android.content.Context
 import dev.gray.companion.core.ChatMessage
 import dev.gray.companion.core.CredentialStore
 import dev.gray.companion.core.ModelGateway
+import dev.gray.companion.core.ModelDelta
+import dev.gray.companion.core.ModelResponse
+import dev.gray.companion.core.ReasoningSnapshot
 import dev.gray.companion.core.ModelProfile
 import dev.gray.companion.core.ModelCatalog
 import dev.gray.companion.core.ModelRequestFailure
@@ -88,13 +91,18 @@ class RikkaGateway(
     }
 
     override suspend fun generateAttempt(profile: ModelProfile, messages: List<ChatMessage>, onDelta: suspend (String) -> Unit): String =
+        generateResponseAttempt(profile, messages) { delta ->
+            if (delta is ModelDelta.Text) onDelta(delta.text)
+        }.text
+
+    override suspend fun generateResponseAttempt(profile: ModelProfile, messages: List<ChatMessage>, onDelta: suspend (ModelDelta) -> Unit): ModelResponse =
         requestPermits.withPermit {
             connectionPermits[ModelCatalog.credentialId(profile)]?.withPermit {
                 request(profile, messages, onDelta)
             } ?: request(profile, messages, onDelta)
         }
 
-    private suspend fun request(profile: ModelProfile, messages: List<ChatMessage>, onDelta: suspend (String) -> Unit): String {
+    private suspend fun request(profile: ModelProfile, messages: List<ChatMessage>, onDelta: suspend (ModelDelta) -> Unit): ModelResponse {
         lastFailureMessage = null
         if (profile.model.isBlank()) throw GatewayFailure("请先填写模型 ID", retryable = false)
         val secret = credentials.get(ModelCatalog.credentialId(profile))
@@ -114,6 +122,9 @@ class RikkaGateway(
             Role.ASSISTANT -> UIMessage.assistant(message.text)
         } }
         val answer = StringBuilder()
+        val reasoningText = StringBuilder()
+        var reasoningStartedAt: Long? = null
+        var reasoningFinishedAt: Long? = null
         val params = TextGenerationParams(model = model, temperature = profile.temperature,
             topP = profile.topP, maxTokens = profile.maxTokens,
             reasoningLevel = when (profile.reasoning) {
@@ -134,15 +145,43 @@ class RikkaGateway(
         var reportedTotal: Long? = null
         try {
             manager.getProviderByType(setting).streamText(setting, uiMessages, params).collect { chunk ->
-                if (chunk is StreamChunk.TextDelta) {
-                    answer.append(chunk.text)
-                    onDelta(chunk.text)
-                } else if (chunk is StreamChunk.Usage) {
-                    // Provider events are cumulative snapshots, sometimes split by input/output.
-                    promptTokens = maxOf(promptTokens ?: 0L, chunk.usage.promptTokens.toLong())
-                    completionTokens = maxOf(completionTokens ?: 0L, chunk.usage.completionTokens.toLong())
-                    reportedTotal = maxOf(reportedTotal ?: 0L, chunk.usage.totalTokens.toLong())
+                when (chunk) {
+                    is StreamChunk.TextDelta -> {
+                        answer.append(chunk.text)
+                        onDelta(ModelDelta.Text(chunk.text))
+                    }
+                    is StreamChunk.ReasoningStart -> {
+                        if (reasoningStartedAt == null) reasoningStartedAt = System.currentTimeMillis()
+                        reasoningFinishedAt = null
+                        onDelta(ModelDelta.ReasoningStart(reasoningStartedAt!!))
+                    }
+                    is StreamChunk.ReasoningDelta -> {
+                        if (reasoningStartedAt == null || reasoningFinishedAt != null) {
+                            if (reasoningStartedAt == null) reasoningStartedAt = System.currentTimeMillis()
+                            reasoningFinishedAt = null
+                            onDelta(ModelDelta.ReasoningStart(reasoningStartedAt!!))
+                        }
+                        reasoningText.append(chunk.text)
+                        onDelta(ModelDelta.Reasoning(chunk.text))
+                    }
+                    is StreamChunk.ReasoningEnd -> {
+                        if (reasoningStartedAt != null) {
+                            reasoningFinishedAt = System.currentTimeMillis()
+                            onDelta(ModelDelta.ReasoningEnd(reasoningFinishedAt!!))
+                        }
+                    }
+                    is StreamChunk.Usage -> {
+                        // Provider events are cumulative snapshots, sometimes split by input/output.
+                        promptTokens = maxOf(promptTokens ?: 0L, chunk.usage.promptTokens.toLong())
+                        completionTokens = maxOf(completionTokens ?: 0L, chunk.usage.completionTokens.toLong())
+                        reportedTotal = maxOf(reportedTotal ?: 0L, chunk.usage.totalTokens.toLong())
+                    }
+                    else -> Unit
                 }
+            }
+            if (reasoningStartedAt != null && reasoningFinishedAt == null) {
+                reasoningFinishedAt = System.currentTimeMillis()
+                onDelta(ModelDelta.ReasoningEnd(reasoningFinishedAt!!))
             }
             if (answer.isEmpty()) {
                 lastFailureMessage = "模型没有返回文本"
@@ -172,7 +211,9 @@ class RikkaGateway(
                     promptTokens = promptTokens, completionTokens = completionTokens, totalTokens = total))
             }
         }
-        return answer.toString()
+        return ModelResponse(answer.toString(), reasoningStartedAt?.let { started ->
+            ReasoningSnapshot(reasoningText.toString(), started, reasoningFinishedAt)
+        })
     }
 
     companion object {

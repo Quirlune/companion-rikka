@@ -18,7 +18,8 @@ internal class OutcomePublisher(
         compiledModelTargets: Set<String>,
         processingHistory: Boolean,
         automaticSegment: HistoryMemorySegment? = null,
-        rawModelText: String? = null
+        rawModelText: String? = null,
+        fullResponseText: String? = null, reasoningSnapshot: ReasoningSnapshot? = null
     ): RecoveryReceipt {
         val origin = ResultOrigin(resourceByWorkflow.getValue(ref.workflow.id), ref.workflow.id,
             ref.node.id, ref.node.resultCategory)
@@ -87,7 +88,9 @@ internal class OutcomePublisher(
             if (record) {
                 MacroReferences.publish(history, address, value, enabled, origin, turn, userMessageId, contentOrigin,
                     minimumVersion = head?.version ?: 0, precedingGap = head?.gap,
-                    rawText = rawModelText.takeIf { modelOwnResult })
+                    rawText = rawModelText.takeIf { modelOwnResult },
+                    fullResponseText = fullResponseText.takeIf { modelOwnResult },
+                    reasoningSnapshot = reasoningSnapshot.takeIf { modelOwnResult })
                 heads.remove(address)
             } else {
                 val number = Math.addExact(maxOf(head?.version ?: 0, history[address]?.lastOrNull()?.version ?: 0), 1)
@@ -142,7 +145,7 @@ internal class OutcomePublisher(
             ChatMessage(role = Role.ASSISTANT, text = text, outputSlot = ref.node.outputSlot,
                 turnId = userMessageId, workflowId = ref.workflow.id, nodeId = ref.node.id,
                 speakerName = library.characters.firstOrNull { it.id == current.characterId }?.name,
-                rawText = rawModelText.takeIf { ref.node.outputSlot == OutputSlot.BODY })
+                rawText = rawModelText.takeIf { ref.node.outputSlot == OutputSlot.BODY }, reasoningSnapshot = reasoningSnapshot)
         else null
         return RecoveryReceipt(ref.key, outcome, reply, publication)
     }

@@ -31,6 +31,7 @@ import dev.gray.companion.core.RecoveryDecisionKind
 import dev.gray.companion.core.RecoveryFailure
 import dev.gray.companion.core.Role
 import dev.gray.companion.core.OutputSlot
+import dev.gray.companion.core.MessageOperations
 import me.rerere.ai.ui.UIMessagePart
 import dev.gray.companion.ui.MacroTileDashboard
 import dev.gray.companion.ui.FrozenHtmlBody
@@ -263,6 +264,8 @@ fun CompanionChatPage(
                         val messageId = history.logicalMessageIds[uiMessage.id]
                         val original = session.messages.firstOrNull { it.id == messageId && !it.deleted }
                         if (original == null) scope.launch { snackbar.showSnackbar("消息已失效，请重试") }
+                        else if (original.authoredOpening && (activeBusy || !MessageOperations.canSelectOpening(session, original.id)))
+                            scope.launch { snackbar.showSnackbar("对话开始后请新建聊天修改开场白") }
                         else {
                             editingCoreMessageId = original.id
                             input.editingMessage = uiMessage.id
@@ -272,6 +275,8 @@ fun CompanionChatPage(
                     onRegenerate = { uiMessage ->
                         val messageId = history.logicalMessageIds[uiMessage.id]
                         if (messageId == null) scope.launch { snackbar.showSnackbar("消息已失效，请重试") }
+                        else if (session.messages.any { it.id == messageId && it.authoredOpening })
+                            scope.launch { snackbar.showSnackbar("开场白来自角色卡；请用左右箭头选择，或新建聊天") }
                         else scope.launch {
                             if (!controller.regenerateMessage(session.id, messageId))
                                 snackbar.showSnackbar(controller.error.value ?: "重新生成失败")
@@ -289,10 +294,15 @@ fun CompanionChatPage(
                         val node = history.nodes.firstOrNull { it.currentMessage.id == uiMessage.id }
                         val choice = node?.let { history.branchChoices[it.id]?.getOrNull(it.selectIndex) }
                         scope.launch {
+                            if (choice is CompanionBranchChoice.Opening && (activeBusy || !MessageOperations.canSelectOpening(session, choice.messageId))) {
+                                snackbar.showSnackbar("对话开始后请新建聊天修改开场白")
+                                return@launch
+                            }
                             val issues = when (choice) {
                                 is CompanionBranchChoice.Generation -> controller.deleteGenerationVariant(
                                     session.id, choice.turnId, choice.variantId)
                                 is CompanionBranchChoice.Text -> controller.deleteMessage(session.id, choice.messageId)
+                                is CompanionBranchChoice.Opening -> controller.deleteMessage(session.id, choice.messageId)
                                 null -> null
                             }
                             if (issues == null) snackbar.showSnackbar("消息已失效，请重试")
@@ -307,6 +317,10 @@ fun CompanionChatPage(
                                     session.id, choice.turnId, choice.variantId, choice.messageId, choice.revisionId)
                                 is CompanionBranchChoice.Text -> controller.selectTextRevision(
                                     session.id, choice.messageId, choice.revisionId)
+                                is CompanionBranchChoice.Opening -> if (activeBusy || !MessageOperations.canSelectOpening(session, choice.messageId)) {
+                                    snackbar.showSnackbar("对话开始后请新建聊天选择开场白")
+                                    return@launch
+                                } else controller.selectOpeningRevision(session.id, choice.messageId, choice.revisionId)
                                 null -> null
                             }
                             if (issues == null) snackbar.showSnackbar("消息分支已失效，请重试")
@@ -316,6 +330,13 @@ fun CompanionChatPage(
                     readOnly = activeBusy,
                     enableTts = false,
                     assistantTextContent = frozenHtml,
+                    branchSelectionEnabled = { node ->
+                        val opening = history.branchChoices[node.id]?.firstOrNull() as? CompanionBranchChoice.Opening
+                        opening == null || (!activeBusy && MessageOperations.canSelectOpening(session, opening.messageId))
+                    },
+                    onBranchSelectionDisabled = {
+                        scope.launch { snackbar.showSnackbar("对话开始后请新建聊天选择开场白") }
+                    },
                     afterMessage = { node ->
                         if (node.id == statusBodyNodeId) MacroTileDashboard(
                             library, displaySession, settings.displaySetting.companionBodyStatusGapDp.toInt()

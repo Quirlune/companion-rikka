@@ -166,9 +166,18 @@ internal fun CharacterEditor(initial: CharacterCard, packages: List<PromptPackag
             )
             SelectionContainer { Text("{{character.${field.key}}}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
             if (field.key == "profile") {
-                PromptTemplateField("开场消息（仅新对话）", card.greeting, greetingReferences,
+                PromptTemplateField("首选开场消息（仅新对话）", card.greeting, greetingReferences,
                     { card = card.copy(greeting = it) }, minLines = 3)
-                Text("新建对话时显示一次，不请求模型；可引用 {{user.name}} 与角色资料。留空时不添加开场消息。",
+                card.alternateGreetings.forEachIndexed { index, greeting -> key(index) {
+                    PromptTemplateField("备选开场 ${index + 2}", greeting, greetingReferences,
+                        { changed -> card = card.copy(alternateGreetings = card.alternateGreetings.toMutableList().also { it[index] = changed }) }, minLines = 3)
+                    MoveButtons(index, card.alternateGreetings.size,
+                        { card = card.copy(alternateGreetings = card.alternateGreetings.moved(index, index - 1)) },
+                        { card = card.copy(alternateGreetings = card.alternateGreetings.moved(index, index + 1)) },
+                        { card = card.copy(alternateGreetings = card.alternateGreetings.filterIndexed { i, _ -> i != index }) })
+                } }
+                OutlinedButton(onClick = { card = card.copy(alternateGreetings = card.alternateGreetings + "") }) { Text("添加备选开场") }
+                Text("新建对话时冻结开场选项，不请求模型；发送用户消息前可在聊天中用左右箭头切换。已聊过的开场不会随后修改。",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }

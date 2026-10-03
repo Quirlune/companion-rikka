@@ -140,6 +140,8 @@ fun ChatList(
     footer: (@Composable () -> Unit)? = null,
     assistantTextContent: Map<Uuid, @Composable () -> Unit> = emptyMap(),
     afterMessage: (@Composable (MessageNode) -> Unit)? = null,
+    branchSelectionEnabled: (MessageNode) -> Boolean = { true },
+    onBranchSelectionDisabled: (MessageNode) -> Unit = {},
 ) {
     AnimatedContent(
         targetState = previewMode,
@@ -187,6 +189,8 @@ fun ChatList(
                 footer = footer,
                 assistantTextContent = assistantTextContent,
                 afterMessage = afterMessage,
+                branchSelectionEnabled = branchSelectionEnabled,
+                onBranchSelectionDisabled = onBranchSelectionDisabled,
             )
         }
     }
@@ -222,6 +226,8 @@ private fun ChatListNormal(
     footer: (@Composable () -> Unit)? = null,
     assistantTextContent: Map<Uuid, @Composable () -> Unit> = emptyMap(),
     afterMessage: (@Composable (MessageNode) -> Unit)? = null,
+    branchSelectionEnabled: (MessageNode) -> Boolean = { true },
+    onBranchSelectionDisabled: (MessageNode) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val loadingState by rememberUpdatedState(loading)
@@ -382,6 +388,8 @@ private fun ChatListNormal(
                             readOnly = readOnly,
                             enableTts = enableTts,
                             assistantTextContent = assistantTextContent[node.currentMessage.id],
+                            branchSelectionEnabled = branchSelectionEnabled(node),
+                            onBranchSelectionDisabled = { onBranchSelectionDisabled(node) },
                         )
                     }
                     afterMessage?.invoke(node)

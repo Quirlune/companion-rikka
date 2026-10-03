@@ -557,6 +557,8 @@ sealed interface Screen : NavKey {
     @Serializable data class CompanionRecoveryPrompt(val sessionId: String, val runId: String, val nodeKey: String) : Screen
     @Serializable data object CompanionSession : Screen
     @Serializable data object CompanionMemory : Screen
+    @Serializable data object CompanionReasoning : Screen
+    @Serializable data object CompanionImportHistory : Screen
     @Serializable data object CompanionPersonas : Screen
     @Serializable data object CompanionUsage : Screen
     @Serializable data object CompanionTiles : Screen

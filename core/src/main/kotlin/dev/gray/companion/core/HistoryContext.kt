@@ -12,7 +12,7 @@ class HistoryContext(
     private val legacyProcessing: Boolean = false,
     private val floorNumbers: Map<String, Int> = emptyMap(),
     private val projectionSegments: List<HistoryMemorySegment>? = null,
-    val executionVersion: Int = 5
+    val executionVersion: Int = 6
 ) {
     data class Pending(
         val messages: List<ChatMessage>, val text: String, val throughMessageId: String,
@@ -169,7 +169,7 @@ class HistoryContext(
         val config = main.history.processor
         val kind = config.sourceKind
         val sources = eligible.map { message ->
-            if (kind == HistorySourceKind.MODEL_RAW && message.role == Role.ASSISTANT && message.rawText == null) null
+            if (kind == HistorySourceKind.MODEL_RAW && message.role == Role.ASSISTANT && !message.authoredOpening && message.rawText == null) null
             else HistoryMemory.source(message, kind)
         }
         val positions = eligible.withIndex().associate { it.value.id to it.index }

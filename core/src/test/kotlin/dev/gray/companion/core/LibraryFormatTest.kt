@@ -18,7 +18,7 @@ class LibraryFormatTest {
         val pending = original.copy(pendingRun = recovery)
         val legacy = frozen.copy(sessions = listOf(pending), selectedSessionId = original.id,
             savedChats = listOf(SavedChat(id = "archive", folderId = "folder", snapshot = pending)))
-        for (version in 1..6) {
+        for (version in 1 until LibraryFormat.CURRENT_VERSION) {
         // Encode the actual legacy shape, rather than a current model with an old version number.
         val oldDocument = withoutMetadata(LibraryFormat.json.encodeToJsonElement(Library.serializer(), legacy))
         val oldWire = oldDocument.toString().replace("\"schemaVersion\":1", "\"schemaVersion\":$version")
@@ -93,13 +93,33 @@ class LibraryFormatTest {
         assertEquals("raw model response", restored.sessions.single().macroHistory.getValue("result.model").single().rawText)
     }
 
+    @Test fun reasoningArchivesRoundTripButUndoReceiptsStayLocal() {
+        val reasoning = ReasoningSnapshot("private analysis", 10, 20)
+        val response = MacroVersion(1, "body", ResultOrigin("main", "flow", "node"),
+            rawText = "body", fullResponseText = "<think>private analysis</think>body", reasoningSnapshot = reasoning)
+        val library = LibraryFormat.upgrade(Library(
+            reasoningParsing = ReasoningParsingConfig(ReasoningParsingMode.TAGGED),
+            characters = listOf(CharacterCard(name = "Card", namespace = "card", alternateGreetings = listOf("second"))),
+            sessions = listOf(Session(messages = listOf(ChatMessage(role = Role.ASSISTANT, text = "body",
+                rawText = "body", reasoningSnapshot = reasoning)), macroHistory = mapOf("result.reply" to listOf(response)))),
+            configurationEdits = listOf(ConfigurationEditReceipt(label = "local undo"))))
+        val wire = LibraryFormat.encode(library)
+        assertFalse(wire.contains("configurationEdits"))
+        assertFalse(wire.contains("local undo"))
+        val restored = LibraryFormat.decode(wire)
+        assertEquals(library.copy(configurationEdits = emptyList()), restored)
+        assertEquals(reasoning, restored.sessions.single().messages.single().reasoningSnapshot)
+        assertEquals(response, restored.sessions.single().macroHistory.getValue("result.reply").single())
+    }
+
     private fun withoutMetadata(value: JsonElement): JsonElement = when (value) {
         is JsonArray -> JsonArray(value.map(::withoutMetadata))
         is JsonObject -> JsonObject(value.filterKeys { key ->
             key !in setOf("slug", "tagIds", "promptTags", "afterWorkflowId", "regexOutputCopy",
                 "historyMemory", "historyWrites", "completedWorkflowIds", "htmlTemplate", "htmlCss", "htmlBindings",
                 "recordTrajectory", "currentOnlyMacros", "headWrites", "headRemovals", "precedingGap", "rawText",
-                "bodySourceTileId", "bodyTextTemplate", "bodyDisplay", "bodyDisplayReceipt", "sourceKind") &&
+                "bodySourceTileId", "bodyTextTemplate", "bodyDisplay", "bodyDisplayReceipt", "sourceKind",
+                "reasoningParsing", "reasoningSnapshot", "fullResponseText", "alternateGreetings", "authoredOpening") &&
                 !(key == "title" && "key" in value && "text" in value && "category" in value)
         }.mapValues { (_, item) -> withoutMetadata(item) })
         else -> value

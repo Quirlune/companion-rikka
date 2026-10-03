@@ -99,6 +99,12 @@ internal fun NodeModelOptionsEditor(node: WorkflowNode, profiles: List<ModelProf
         ChoiceLine("推理级别", options.reasoning, listOf<Pair<ModelReasoning?, String>>(null to "继承") + ModelReasoning.entries.map { it to it.name }) {
             onChange(node.copy(generation = options.copy(reasoning = it)))
         }
+        ToggleLine("此节点覆盖全局思考解析", node.reasoningParsing != null) { enabled ->
+            onChange(node.copy(reasoningParsing = if (enabled) ReasoningParsingConfig() else null))
+        }
+        node.reasoningParsing?.let { parsing ->
+            ReasoningParsingFields(parsing) { onChange(node.copy(reasoningParsing = it)) }
+        }
     }
     TextProcessingEditor("输出内容处理", node.outputProcessing, references) { onChange(node.copy(outputProcessing = it)) }
 }

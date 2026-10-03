@@ -9,6 +9,7 @@ import dev.gray.companion.core.OutputSlot
 import dev.gray.companion.core.Role
 import dev.gray.companion.core.Session
 import dev.gray.companion.core.Protocol
+import dev.gray.companion.core.ReasoningSnapshot
 import dev.gray.companion.core.ModelCatalog
 import dev.gray.companion.core.MessageOperations
 import dev.gray.companion.core.userName
@@ -27,6 +28,7 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import java.nio.charset.StandardCharsets
 import java.time.Instant
+import kotlin.time.Instant as KotlinInstant
 import java.util.UUID
 import kotlin.uuid.Uuid
 
@@ -43,7 +45,7 @@ internal fun projectCompanionChat(
 ): CompanionChatProjection {
     val settings = presentationSettings
     val pending = orderTurnRegions(
-        pendingOutputs.filter { it.text.isNotEmpty() },
+        pendingOutputs.filter { it.text.isNotEmpty() || it.reasoningSnapshot != null },
         turnId = { it.turnId },
         outputSlot = { it.outputSlot },
     ).map { output ->
@@ -53,7 +55,10 @@ internal fun projectCompanionChat(
             messages = listOf(UIMessage(
                 id = stableUuid(key),
                 role = MessageRole.ASSISTANT,
-                parts = listOf(UIMessagePart.Text(regionText(output.text, output.outputSlot))),
+                parts = buildList {
+                    output.reasoningSnapshot?.let { add(it.toReasoningPart()) }
+                    if (output.text.isNotEmpty()) add(UIMessagePart.Text(regionText(output.text, output.outputSlot)))
+                },
                 createdAt = kotlin.time.Instant.fromEpochMilliseconds(session.updatedAt).toLocalDateTime(TimeZone.currentSystemDefault()),
             )),
         )
@@ -132,6 +137,7 @@ internal fun projectCompanionProviders(library: Library): List<ProviderSetting> 
 
 internal sealed interface CompanionBranchChoice {
     data class Text(val messageId: String, val revisionId: String) : CompanionBranchChoice
+    data class Opening(val messageId: String, val revisionId: String) : CompanionBranchChoice
     data class Generation(
         val turnId: String,
         val variantId: String,
@@ -241,7 +247,8 @@ internal fun projectCompanionHistory(session: Session): CompanionHistoryProjecti
                 if (revisionId == activeId) selectedIndex = uiMessages.size
                 uiMessages += message.copy(text = text).toDisplayMessage(uiId, createdAt)
                 message.displayForRevision(revisionId)?.let { bodyDisplays[uiId] = it }
-                branchChoices += CompanionBranchChoice.Text(message.id, revisionId)
+                branchChoices += if (message.authoredOpening) CompanionBranchChoice.Opening(message.id, revisionId)
+                    else CompanionBranchChoice.Text(message.id, revisionId)
                 logicalIds[uiId] = message.id
             }
         } else {
@@ -250,7 +257,8 @@ internal fun projectCompanionHistory(session: Session): CompanionHistoryProjecti
                 if (revisionId == activeId) selectedIndex = uiMessages.size
                 uiMessages += message.copy(text = text).toDisplayMessage(uiId, createdAt)
                 message.displayForRevision(revisionId)?.let { bodyDisplays[uiId] = it }
-                branchChoices += CompanionBranchChoice.Text(message.id, revisionId)
+                branchChoices += if (message.authoredOpening) CompanionBranchChoice.Opening(message.id, revisionId)
+                    else CompanionBranchChoice.Text(message.id, revisionId)
                 logicalIds[uiId] = message.id
             }
         }
@@ -271,8 +279,17 @@ private fun ChatMessage.toDisplayMessage(id: Uuid, timestamp: Long = createdAt):
         Role.ASSISTANT -> MessageRole.ASSISTANT
         Role.SYSTEM -> MessageRole.SYSTEM
     },
-    parts = listOf(UIMessagePart.Text(if (role == Role.ASSISTANT) regionText(text, outputSlot) else text)),
+    parts = buildList {
+        if (role == Role.ASSISTANT) reasoningSnapshot?.takeIf { it.text.isNotBlank() }?.let { add(it.toReasoningPart()) }
+        add(UIMessagePart.Text(if (role == Role.ASSISTANT) regionText(text, outputSlot) else text))
+    },
     createdAt = kotlin.time.Instant.fromEpochMilliseconds(timestamp).toLocalDateTime(TimeZone.currentSystemDefault()),
+)
+
+private fun ReasoningSnapshot.toReasoningPart() = UIMessagePart.Reasoning(
+    reasoning = text,
+    createdAt = KotlinInstant.fromEpochMilliseconds(startedAt),
+    finishedAt = finishedAt?.let { KotlinInstant.fromEpochMilliseconds(it) },
 )
 
 /** Only adjacent outputs from a known turn move; legacy messages and user boundaries stay intact. */

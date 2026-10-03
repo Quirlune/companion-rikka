@@ -5,6 +5,8 @@ interface ModelGateway {
     /** One request. Report transport failures as ModelRequestFailure so core can apply its retry budget. */
     suspend fun generateAttempt(profile: ModelProfile, messages: List<ChatMessage>, onDelta: suspend (String) -> Unit): String =
         generate(profile, messages, onDelta)
+    suspend fun generateResponseAttempt(profile: ModelProfile, messages: List<ChatMessage>, onDelta: suspend (ModelDelta) -> Unit): ModelResponse =
+        ModelResponse(generateAttempt(profile, messages) { onDelta(ModelDelta.Text(it)) })
     fun maxParallelCandidates(profile: ModelProfile): Int = 1
 }
 

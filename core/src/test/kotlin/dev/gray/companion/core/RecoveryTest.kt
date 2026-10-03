@@ -52,7 +52,7 @@ class RecoveryTest {
             override suspend fun generate(profile: ModelProfile, messages: List<ChatMessage>,
                 onDelta: suspend (String) -> Unit): String { calls++; error("Unknown journals must not execute") }
         }
-        for (unknown in listOf(journal.copy(formatVersion = 2), journal.copy(executionVersion = 6))) {
+        for (unknown in listOf(journal.copy(formatVersion = 2), journal.copy(executionVersion = 7))) {
             val current = before.copy(pendingRun = unknown)
             val result = WorkflowEngine().resume(base, current, gateway, unknown,
                 RecoveryDecision(RecoveryDecisionKind.RETRY, "flow/failed"))

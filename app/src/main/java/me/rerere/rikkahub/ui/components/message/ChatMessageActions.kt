@@ -77,6 +77,8 @@ fun ColumnScope.ChatMessageActionButtons(
     onClearTranslation: (UIMessage) -> Unit = {},
     readOnly: Boolean = false,
     enableTts: Boolean = true,
+    branchSelectionEnabled: Boolean = true,
+    onBranchSelectionDisabled: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val settings = LocalSettings.current
@@ -199,7 +201,8 @@ fun ColumnScope.ChatMessageActionButtons(
             tint = actionIconColor
         )
 
-        if (!readOnly) ChatMessageBranchSelector(node = node, onUpdate = onUpdate)
+        if (!readOnly || !branchSelectionEnabled) ChatMessageBranchSelector(node = node, onUpdate = onUpdate,
+            enabled = branchSelectionEnabled, onDisabledClick = onBranchSelectionDisabled)
 
         if (settings.displaySetting.showDateTimeInMessage) {
             Text(

@@ -117,11 +117,12 @@ object MacroReferences {
     fun publish(
         history: MutableMap<String, List<MacroVersion>>, address: String, text: String, enabled: Boolean,
         origin: ResultOrigin, turn: Int, turnId: String?, valueOrigin: ResultOrigin? = null,
-        minimumVersion: Int = 0, precedingGap: MacroGap? = null, rawText: String? = null
+        minimumVersion: Int = 0, precedingGap: MacroGap? = null, rawText: String? = null,
+        fullResponseText: String? = null, reasoningSnapshot: ReasoningSnapshot? = null
     ): MacroVersion {
         val previous = history[address].orEmpty()
         val version = MacroVersion(Math.addExact(maxOf(previous.lastOrNull()?.version ?: 0, minimumVersion), 1),
-            text, origin, enabled, turn, turnId, valueOrigin, precedingGap, rawText)
+            text, origin, enabled, turn, turnId, valueOrigin, precedingGap, rawText, fullResponseText, reasoningSnapshot)
         history[address] = previous + version
         return version
     }
@@ -201,7 +202,7 @@ internal class MacroReadView(val library: Library, val session: Session) {
 }
 
 /** Shared display/template entry point. It never invokes a model or executes behavior. */
-class MacroResolver(library: Library, session: Session, input: String = "", executionVersion: Int = 5) {
+class MacroResolver(library: Library, session: Session, input: String = "", executionVersion: Int = 6) {
     private val mutableIssues = mutableListOf<Issue>()
     private val renderer = TemplateRenderer(
         loadedResources(library, session, session.state, session.results, input, mutableIssues, executionVersion = executionVersion),

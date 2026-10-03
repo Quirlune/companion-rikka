@@ -3,6 +3,8 @@ package dev.gray.companion.core
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -148,7 +150,10 @@ object SillyTavernImport {
         val pack = PromptPackage(id = packId, namespace = packNamespace, name = "$sourceName · 场景", entries = packageEntries)
         val card = CharacterCard(id = characterId, namespace = namespace, name = sourceName,
             description = normalized(data.string("description"), "角色介绍"), entries = entries,
-            boundPackageIds = listOf(pack.id), greeting = normalized(data.string("first_mes"), "开场白"))
+            boundPackageIds = listOf(pack.id), greeting = normalized(data.string("first_mes"), "开场白"),
+            alternateGreetings = data["alternate_greetings"]?.jsonArray.orEmpty().mapIndexed { index, item ->
+                normalized(item.jsonPrimitive.content, "开场白 ${index + 2}")
+            })
 
         val preset = root.obj("preset")
         val promptObjects = preset.array("prompts").mapNotNull { it as? JsonObject }

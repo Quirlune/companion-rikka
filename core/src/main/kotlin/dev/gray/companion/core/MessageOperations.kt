@@ -102,7 +102,8 @@ object MessageOperations {
             !canRestore -> "手动修改过运行状态"
             else -> "宏历史与此轮检查点不一致"
         }
-        return MessageCapabilities(!message.deleted, !message.deleted, canRegenerate,
+        val editable = !message.deleted && (!message.authoredOpening || canSelectOpening(session, messageId))
+        return MessageCapabilities(editable, editable, canRegenerate,
             !message.deleted && userAlive && canRestore && knownHistory && record?.variants.orEmpty().size > 1, canFork,
             regenerateReason, forkReason)
     }
@@ -326,8 +327,18 @@ object MessageOperations {
         )
     }
 
+    fun canSelectOpening(session: Session, messageId: String): Boolean =
+        session.pendingRun == null && session.messages.none { it.role == Role.USER } &&
+            session.messages.any { it.id == messageId && it.authoredOpening && !it.deleted }
+
+    fun selectOpeningRevision(session: Session, messageId: String, revisionId: String): MessageOperationResult =
+        if (!canSelectOpening(session, messageId)) unavailable("message.$messageId", "对话开始后请新建聊天选择开场白")
+        else selectTextRevision(session, messageId, revisionId)
+
     fun selectTextRevision(session: Session, messageId: String, revisionId: String): MessageOperationResult =
-        changeText(session, messageId) { current ->
+        if (session.messages.any { it.id == messageId && it.authoredOpening } && !canSelectOpening(session, messageId))
+            unavailable("message.$messageId", "对话开始后请新建聊天选择开场白")
+        else changeText(session, messageId) { current ->
             if ((current.activeTextRevisionId ?: current.id) == revisionId) current else {
                 val chosen = current.textRevisions.firstOrNull { it.id == revisionId } ?: return@changeText null
                 current.copy(
@@ -389,6 +400,8 @@ object MessageOperations {
         if (index < 0) return unavailable("message.$messageId", "消息不存在")
         val current = session.messages[index]
         if (current.deleted) return unavailable("message.$messageId", "消息已删除")
+        if (current.authoredOpening && !canSelectOpening(session, messageId))
+            return unavailable("message.$messageId", "对话开始后请新建聊天选择开场白")
         val changed = change(current) ?: return unavailable("message.$messageId", "文本候选不存在")
         if (changed == current) return MessageOperationResult(session)
         val messages = session.messages.toMutableList().also { it[index] = changed }

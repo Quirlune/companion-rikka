@@ -28,6 +28,8 @@ fun ChatMessageBranchSelector(
     node: MessageNode,
     modifier: Modifier = Modifier,
     onUpdate: (MessageNode) -> Unit,
+    enabled: Boolean = true,
+    onDisabledClick: () -> Unit = {},
 ) {
     Row(
         modifier = modifier,
@@ -42,13 +44,13 @@ fun ChatMessageBranchSelector(
                 contentDescription = "Prev",
                 modifier = Modifier
                     .clip(CircleShape)
-                    .alpha(if (node.selectIndex == 0) 0.5f else 1f)
+                    .alpha(if (!enabled || node.selectIndex == 0) 0.5f else 1f)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = LocalIndication.current,
                         onClick = {
                             if (node.selectIndex > 0) {
-                                onUpdate(
+                                if (!enabled) onDisabledClick() else onUpdate(
                                     node.copy(
                                         selectIndex = node.selectIndex - 1
                                     )
@@ -72,13 +74,13 @@ fun ChatMessageBranchSelector(
                 contentDescription = "Next",
                 modifier = Modifier
                     .clip(CircleShape)
-                    .alpha(if (node.selectIndex == node.messages.lastIndex) 0.5f else 1f)
+                    .alpha(if (!enabled || node.selectIndex == node.messages.lastIndex) 0.5f else 1f)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = LocalIndication.current,
                         onClick = {
                             if (node.selectIndex < node.messages.lastIndex) {
-                                onUpdate(
+                                if (!enabled) onDisabledClick() else onUpdate(
                                     node.copy(
                                         selectIndex = node.selectIndex + 1
                                     )

@@ -27,7 +27,8 @@ import kotlinx.serialization.Serializable
 @Serializable data class MacroVersion(
     val version: Int, val text: String, val origin: ResultOrigin, val enabled: Boolean = true,
     val turn: Int? = null, val turnId: String? = null, val valueOrigin: ResultOrigin? = null,
-    val precedingGap: MacroGap? = null, val rawText: String? = null
+    val precedingGap: MacroGap? = null, val rawText: String? = null,
+    val fullResponseText: String? = null, val reasoningSnapshot: ReasoningSnapshot? = null
 )
 @Serializable enum class InjectionScope { TURN, SESSION }
 @Serializable data class PromptInjection(

@@ -56,9 +56,8 @@ class MainActivity : ComponentActivity(), VolumeKeyScrollOwner {
                     contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
                         ?: error("无法读取文件")
                 }
-                val issues = controller.importBundle(json)
-                fileError = if (issues.any { it.error }) issues.filter { it.error }.take(3).joinToString("；") { it.message }
-                else "导入完成" + issues.take(3).joinToString(separator = "；", prefix = if (issues.isEmpty()) "" else "；") { it.message }
+                controller.previewConfigurationImport(json)
+                fileError = "待预览"
             } catch (e: Exception) { fileError = e.message ?: "导入失败" }
         }
     }

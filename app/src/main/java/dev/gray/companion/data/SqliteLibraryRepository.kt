@@ -32,7 +32,7 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
             while (cursor.moveToNext()) meta[cursor.getString(0)] = cursor.getString(1)
         }
         val schema = meta["schema"]?.toIntOrNull() ?: if (rows.isEmpty()) 1 else error("Library metadata is damaged")
-        val known = setOf("character", "main_call", "package", "group", "profile", "session", "connection", "chat_folder", "saved_chat", "persona", "prompt_tag")
+        val known = setOf("character", "main_call", "package", "group", "profile", "session", "connection", "chat_folder", "saved_chat", "persona", "prompt_tag", "config_edit")
         require(rows.keys.all { it in known }) { "Unknown resource record type" }
         val decoded = Library(
             schemaVersion = schema,
@@ -50,6 +50,8 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
             personas = decode(rows["persona"], UserPersona.serializer()),
             promptTags = decode(rows["prompt_tag"], PromptTag.serializer()),
             selectedPersonaId = meta["selected_persona"],
+            reasoningParsing = meta["reasoning_parsing"]?.let { json.decodeFromString(ReasoningParsingConfig.serializer(), it) } ?: ReasoningParsingConfig(),
+            configurationEdits = decode(rows["config_edit"], ConfigurationEditReceipt.serializer()),
             user = meta["user"]?.let { json.decodeFromString(UserIdentity.serializer(), it) } ?: UserIdentity(),
             titleConfig = meta["title_config"]?.let { json.decodeFromString(ChatTitleConfig.serializer(), it) } ?: ChatTitleConfig()
         )
@@ -73,6 +75,7 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
         remember("saved_chat", decoded.savedChats) { it.id }
         remember("persona", decoded.personas) { it.id }
         remember("prompt_tag", decoded.promptTags) { it.id }
+        remember("config_edit", decoded.configurationEdits) { it.id }
         persistedRecords = persisted
         encodedRecords = encoded
         library
@@ -114,6 +117,7 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
             add("saved_chat", library.savedChats, SavedChat.serializer()) { it.id }
             add("persona", library.personas, UserPersona.serializer()) { it.id }
             add("prompt_tag", library.promptTags, PromptTag.serializer()) { it.id }
+            add("config_edit", library.configurationEdits, ConfigurationEditReceipt.serializer()) { it.id }
             for ((key, value) in wanted) if (previous[key] != value) {
                 if (previous[key]?.second == value.second) {
                     check(db.update("records", ContentValues().apply { put("ordinal", value.first) },
@@ -132,6 +136,7 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
             putMeta(db, "selected_persona", library.selectedPersonaId)
             putMeta(db, "user", json.encodeToString(UserIdentity.serializer(), library.user))
             putMeta(db, "title_config", json.encodeToString(ChatTitleConfig.serializer(), library.titleConfig))
+            putMeta(db, "reasoning_parsing", json.encodeToString(ReasoningParsingConfig.serializer(), library.reasoningParsing))
             db.setTransactionSuccessful()
         } catch (failure: Exception) {
             persistedRecords = null

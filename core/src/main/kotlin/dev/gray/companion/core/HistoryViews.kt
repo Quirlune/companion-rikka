@@ -2,7 +2,7 @@ package dev.gray.companion.core
 
 /** Reads source references without publishing captures or macro versions. */
 object HistoryViews {
-    fun selection(expression: String, executionVersion: Int = 5): HistorySelection? {
+    fun selection(expression: String, executionVersion: Int = 6): HistorySelection? {
         val result = PromptReferenceLanguage.compile(expression)
         val ref = result.reference ?: return null
         if (executionVersion < 5 && result.fields.any { it.name == "source" }) return null
@@ -42,7 +42,7 @@ object HistoryViews {
     fun summaries(session: Session, main: MainCall, kind: HistorySourceKind): List<HistoryMemorySegment> {
         val floors = session.messages.filter { !it.deleted && it.outputSlot == OutputSlot.BODY }
         val sources = floors.map { message ->
-            if (kind == HistorySourceKind.MODEL_RAW && message.role == Role.ASSISTANT && message.rawText == null) null
+            if (kind == HistorySourceKind.MODEL_RAW && message.role == Role.ASSISTANT && !message.authoredOpening && message.rawText == null) null
             else HistoryMemory.source(message, kind)
         }
         val positions = floors.withIndex().associate { it.value.id to it.index }

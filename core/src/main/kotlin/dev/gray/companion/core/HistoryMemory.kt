@@ -63,7 +63,7 @@ object HistoryMemory {
     }
 
     internal fun sourceMessage(message: ChatMessage, kind: HistorySourceKind): ChatMessage =
-        if (kind == HistorySourceKind.MODEL_RAW && message.role == Role.ASSISTANT) message.copy(
+        if (kind == HistorySourceKind.MODEL_RAW && message.role == Role.ASSISTANT && !message.authoredOpening) message.copy(
             text = requireNotNull(message.rawText) { "初始模型原文缺失：${message.id}" },
             activeTextRevisionId = message.id, activeTextRevisionCreatedAt = message.createdAt, bodyDisplay = null
         ) else message
@@ -111,7 +111,7 @@ object HistoryMemory {
 
     fun resolve(ref: HistorySourceRef, index: Map<String, ChatMessage>): ChatMessage? {
         val message = index[ref.messageId]?.takeUnless { it.deleted || it.outputSlot != OutputSlot.BODY } ?: return null
-        val resolved = if (ref.sourceKind == HistorySourceKind.MODEL_RAW && message.role == Role.ASSISTANT) {
+        val resolved = if (ref.sourceKind == HistorySourceKind.MODEL_RAW && message.role == Role.ASSISTANT && !message.authoredOpening) {
             if (message.rawText == null || ref.revisionId != message.id) return null
             sourceMessage(message, ref.sourceKind)
         } else if ((message.activeTextRevisionId ?: message.id) == ref.revisionId) message else {

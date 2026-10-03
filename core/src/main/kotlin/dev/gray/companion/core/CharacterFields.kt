@@ -60,14 +60,17 @@ fun Library.startNewConversation(characterId: String? = null): Library {
         groupIds = selected?.groupIds?.toList() ?: emptyList(),
         personaId = selectedPersonaId ?: selected?.personaId
     )
-    val greeting = characters.firstOrNull { it.id == fresh.characterId }?.greeting.orEmpty()
-    val opening = if (greeting.isBlank()) emptyList() else {
-        val resolver = MacroResolver(this, fresh)
-        val rendered = resolver.render(greeting)
-        require(resolver.issues.none { it.error }) { "开场白包含无效宏" }
-        if (rendered.isBlank()) emptyList() else listOf(ChatMessage(role = Role.ASSISTANT, text = rendered,
-            speakerName = characters.firstOrNull { it.id == fresh.characterId }?.name))
-    }
+    val card = characters.firstOrNull { it.id == fresh.characterId }
+    val resolver = MacroResolver(this, fresh)
+    val greetings = (listOf(card?.greeting.orEmpty()) + card?.alternateGreetings.orEmpty())
+        .filter { it.isNotBlank() }.map { resolver.render(it) }.filter { it.isNotBlank() }
+    require(resolver.issues.none { it.error }) { "开场白包含无效宏" }
+    val opening = greetings.firstOrNull()?.let { first ->
+        val now = System.currentTimeMillis()
+        listOf(ChatMessage(role = Role.ASSISTANT, text = first, createdAt = now,
+            speakerName = card?.name, authoredOpening = true,
+            textRevisions = greetings.drop(1).mapIndexed { index, text -> TextRevision(newId(), text, now + index + 1) }))
+    }.orEmpty()
     val started = fresh.copy(messages = opening)
     return copy(sessions = sessions + started, selectedSessionId = started.id)
 }

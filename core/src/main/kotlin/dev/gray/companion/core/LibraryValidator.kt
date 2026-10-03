@@ -1,10 +1,12 @@
 package dev.gray.companion.core
 
 object LibraryValidator {
-    fun validate(library: Library, executionVersion: Int = 5): List<Issue> {
+    fun validate(library: Library, executionVersion: Int = 6): List<Issue> {
         val issues = mutableListOf<Issue>()
         if (library.schemaVersion != LibraryFormat.CURRENT_VERSION) issues += Issue("library.schemaVersion", "不支持的资源版本")
         checkMetadata(library, issues)
+        if (executionVersion >= 6)
+            library.reasoningParsing.validationError()?.let { issues += Issue("library.reasoningParsing", it) }
         fun unique(values: List<String>, path: String) {
             values.filter { it.isBlank() }.forEach { issues += Issue(path, "ID 或名称不能为空") }
             values.filter { it.isNotBlank() }.groupingBy { it }.eachCount().filterValues { it > 1 }.keys.forEach {
@@ -52,6 +54,9 @@ object LibraryValidator {
             unique(card.entries.map { it.key }, "character.${card.id}.entries")
             if (card.entries.any { it.key == "name" }) issues += Issue("character.${card.id}.entries", "name 是角色名称保留键")
             checkTemplate(card.greeting, "character.${card.id}.greeting", issues)
+            card.alternateGreetings.forEachIndexed { index, greeting ->
+                checkTemplate(greeting, "character.${card.id}.alternateGreetings.$index", issues)
+            }
             card.boundPackageIds.forEach { if (library.packages.none { pack -> pack.id == it }) issues += Issue("character.${card.id}", "绑定的提示词包不存在") }
         }
         library.packages.forEach { unique(it.entries.map { entry -> entry.key }, "pack.${it.id}.entries") }
@@ -197,6 +202,8 @@ object LibraryValidator {
             val writerCategories = mutableMapOf<String, String>()
             workflow.nodes.forEach { node ->
                 val nodePath = "$path.node.${node.id}"
+                if (executionVersion >= 6)
+                    node.reasoningParsing?.validationError()?.let { issues += Issue("$nodePath.reasoningParsing", it) }
                 if (node.title.isBlank()) issues += Issue(nodePath, "节点名称不能为空")
                 if (node.actionId.isBlank()) issues += Issue(nodePath, "动作不能为空")
                 if (node.actionId == "event.emit") {

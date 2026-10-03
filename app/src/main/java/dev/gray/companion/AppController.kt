@@ -27,7 +27,16 @@ import kotlinx.serialization.json.JsonPrimitive
 import java.util.Locale
 import me.rerere.rikkahub.ui.hooks.readBooleanPreference
 
-data class PendingOutput(val workflowId: String, val nodeId: String, val text: String, val outputSlot: OutputSlot = OutputSlot.BODY, val turnId: String? = null)
+data class PendingOutput(val workflowId: String, val nodeId: String, val text: String, val outputSlot: OutputSlot = OutputSlot.BODY, val turnId: String? = null, val reasoningSnapshot: ReasoningSnapshot? = null)
+
+data class ConfigurationImportPreview(
+    val id: String,
+    val label: String,
+    val changes: List<ConfigurationChange>,
+    val settings: List<ConfigurationSettingChange>,
+    val issues: List<Issue>,
+    val undoable: Boolean,
+)
 
 data class ControllerState(
     val loading: Boolean = true,
@@ -81,6 +90,18 @@ class AppController internal constructor(
     private var lastRetry: Pair<String, String>? = null // session ID to input
     @Volatile private var storageReady = false
     private var editingCount = 0
+    private sealed interface ImportDraft {
+        val id: String
+        val warnings: List<Issue>
+        data class Configuration(override val id: String, val plan: ConfigurationPlan,
+            override val warnings: List<Issue>) : ImportDraft
+        data class Legacy(override val id: String, val imported: Library, val selectSession: Boolean,
+            override val warnings: List<Issue>) : ImportDraft
+    }
+    private var importDraft: ImportDraft? = null
+    private data class ImportPreparation(val id: String?, val issues: List<Issue>)
+    private val _configurationImport = MutableStateFlow<ConfigurationImportPreview?>(null)
+    val configurationImport: StateFlow<ConfigurationImportPreview?> = _configurationImport.asStateFlow()
 
     private val _library = MutableStateFlow(Library())
     val library: StateFlow<Library> = _library.asStateFlow()
@@ -274,7 +295,8 @@ class AppController internal constructor(
                         override fun put(profileId: String, secret: String) = error("运行凭据快照只读")
                         override fun remove(profileId: String) = error("运行凭据快照只读")
                     }, sessionId, snapshot.connections.associate { it.id to it.maxConcurrentRequests }, ::recordUsage)
-                    val title = gateway.generate(request.profile, request.messages) {}.trim()
+                    val titleText = gateway.generate(request.profile, request.messages) {}
+                    val title = ReasoningTextParser.parse(titleText, snapshot.reasoningParsing).text.trim()
                     if (title.isBlank()) return@async listOf(Issue("title", "模型没有返回标题"))
                     mutex.withLock {
                         val current = _library.value
@@ -320,6 +342,9 @@ class AppController internal constructor(
 
     suspend fun selectTextRevision(sessionId: String, messageId: String, revisionId: String): List<Issue> =
         updateMessage(sessionId) { MessageOperations.selectTextRevision(it, messageId, revisionId) }
+
+    suspend fun selectOpeningRevision(sessionId: String, messageId: String, revisionId: String): List<Issue> =
+        updateMessage(sessionId) { MessageOperations.selectOpeningRevision(it, messageId, revisionId) }
 
     suspend fun deleteMessage(sessionId: String, messageId: String): List<Issue> =
         updateMessage(sessionId) { MessageOperations.deleteMessage(it, messageId) }
@@ -583,11 +608,12 @@ class AppController internal constructor(
                         _streaming.value = pending.filter { it.outputSlot == OutputSlot.BODY }.joinToString("\n\n") { it.text }
                         _state.value = _state.value.copy(pendingOutputs = pending, streaming = _streaming.value)
                     }
-                    if (update.visible && update.text.isNotEmpty()) {
+                    if (update.visible && (update.text.isNotEmpty() || update.reasoningSnapshot != null)) {
                         val pending = _state.value.pendingOutputs.toMutableList()
                         val index = pending.indexOfFirst { it.workflowId == update.workflowId && it.nodeId == update.nodeId }
-                        if (index < 0) pending += PendingOutput(update.workflowId, update.nodeId, update.text, update.outputSlot, update.turnId)
-                        else pending[index] = pending[index].copy(text = pending[index].text + update.text)
+                        if (index < 0) pending += PendingOutput(update.workflowId, update.nodeId, update.text, update.outputSlot, update.turnId, update.reasoningSnapshot)
+                        else pending[index] = pending[index].copy(text = pending[index].text + update.text,
+                            reasoningSnapshot = update.reasoningSnapshot ?: pending[index].reasoningSnapshot)
                         val ordered = pending.sortedBy { outputOrder[it.workflowId to it.nodeId] ?: Int.MAX_VALUE }
                         _streaming.value = ordered.filter { it.outputSlot == OutputSlot.BODY }.joinToString("\n\n") { it.text }
                         _state.value = _state.value.copy(streaming = _streaming.value, pendingOutputs = ordered)
@@ -677,29 +703,136 @@ class AppController internal constructor(
     suspend fun export(): String = mutex.withLock {
         withContext(Dispatchers.Default) { LibraryFormat.encode(_library.value) }
     }
-    suspend fun importBundle(jsonText: String, selectImportedSession: Boolean = false): List<Issue> {
-        val decoded = try { withContext(Dispatchers.Default) {
-            val document = LibraryFormat.json.parseToJsonElement(jsonText) as? JsonObject ?: error("资源文件须为对象")
-            if ((document["format"] as? JsonPrimitive)?.content == "sillytavern.preview.v1")
-                SillyTavernImport.convert(jsonText, library.value)
-            else ImportResult(ModelCatalog.normalize(LibraryFormat.decode(jsonText)), emptyList())
-        } }
-        catch (failure: IllegalArgumentException) { return listOf(Issue("import", failure.message ?: "JSON 无法读取或格式不受支持")) }
-        catch (_: Exception) { return listOf(Issue("import", "JSON 无法读取或格式不受支持")) }
-        val imported = try { LibraryFormat.upgrade(decoded.library) }
-        catch (_: IllegalArgumentException) { return listOf(Issue("import.schemaVersion", "不支持的资源版本")) }
-        // Validate the merged graph: imports may refer to an existing model or persona.
-        val saved = updateLibrary { old ->
-            val existingTags = old.promptTags.toSet()
-            old.copy(characters = old.characters + imported.characters, mainCalls = old.mainCalls + imported.mainCalls,
-                packages = old.packages + imported.packages, groups = old.groups + imported.groups,
-                profiles = old.profiles + imported.profiles, sessions = old.sessions + imported.sessions, connections = old.connections + imported.connections,
-                chatFolders = old.chatFolders + imported.chatFolders, savedChats = old.savedChats + imported.savedChats,
-                personas = old.personas + imported.personas,
-                promptTags = old.promptTags + imported.promptTags.filterNot { it in existingTags },
-                selectedSessionId = if (selectImportedSession) imported.selectedSessionId ?: old.selectedSessionId else old.selectedSessionId)
+    /** The file picker prepares a fixed plan; no resource or conversation changes here. */
+    suspend fun previewConfigurationImport(jsonText: String): List<Issue> = prepareImport(jsonText, false).issues
+
+    private suspend fun prepareImport(jsonText: String, selectImportedSession: Boolean): ImportPreparation = mutex.withLock {
+        if (!storageReady) return@withLock ImportPreparation(null, listOf(Issue("import", "资源库尚未就绪")))
+        importDraft = null
+        _configurationImport.value = null
+        val current = _library.value
+        val id = newId()
+        val issues = try {
+            withContext(Dispatchers.Default) {
+                val document = LibraryFormat.json.parseToJsonElement(jsonText) as? JsonObject
+                    ?: error("资源文件须为对象")
+                val format = (document["format"] as? JsonPrimitive)?.content
+                if (format == "companion.config.v1") {
+                    val preview = ConfigurationCommands.preview(jsonText, current)
+                    preview.plan?.let { importDraft = ImportDraft.Configuration(id, it, preview.issues.filterNot { issue -> issue.error }) }
+                    _configurationImport.value = ConfigurationImportPreview(id, preview.plan?.label ?: "配置导入",
+                        preview.changes, preview.settings, preview.issues, undoable = true)
+                    preview.issues
+                } else {
+                    val decoded = if (format == "sillytavern.preview.v1") SillyTavernImport.convert(jsonText, current)
+                        else ImportResult(ModelCatalog.normalize(LibraryFormat.decode(jsonText)), emptyList())
+                    val imported = LibraryFormat.upgrade(decoded.library.withStandardCharacterFields())
+                    val warnings = decoded.warnings.map { Issue("import", it, error = false) }
+                    val hasChats = imported.sessions.isNotEmpty() || imported.chatFolders.isNotEmpty() || imported.savedChats.isNotEmpty()
+                    if (!hasChats) {
+                        val preview = ConfigurationCommands.previewResources(imported, current)
+                        val issues = preview.issues + warnings
+                        preview.plan?.let { importDraft = ImportDraft.Configuration(id, it, issues.filterNot { issue -> issue.error }) }
+                        _configurationImport.value = ConfigurationImportPreview(id, "资源导入", preview.changes, preview.settings,
+                            issues, undoable = true)
+                        issues
+                    } else {
+                        val combined = LibraryFormat.upgrade(mergeLegacyImport(current, imported, selectImportedSession))
+                        val issues = LibraryValidator.validate(combined) + warnings + Issue("import.chats",
+                            "这份备份含聊天或收藏；会一并导入，不能用配置撤回移除聊天", error = false)
+                        if (issues.none { it.error }) importDraft = ImportDraft.Legacy(id, imported, selectImportedSession, issues.filterNot { it.error })
+                        _configurationImport.value = ConfigurationImportPreview(id, "资源与聊天备份", emptyList(), emptyList(),
+                            issues + Issue("import.summary", "角色 ${imported.characters.size} · 主调用 ${imported.mainCalls.size} · 提示词包 ${imported.packages.size} · 调用组 ${imported.groups.size} · 聊天 ${imported.sessions.size} · 收藏 ${imported.savedChats.size}", error = false),
+                            undoable = false)
+                        issues
+                    }
+                }
+            }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) {
+            val issues = listOf(Issue("import", failure.message ?: "JSON 无法读取或格式不受支持"))
+            _configurationImport.value = ConfigurationImportPreview(id, "导入预览", emptyList(), emptyList(), issues, undoable = false)
+            issues
         }
-        return if (saved.any { it.error }) saved else saved + decoded.warnings.map { Issue("import", it, error = false) }
+        ImportPreparation(id, issues)
+    }
+
+    fun dismissConfigurationImport() {
+        importDraft = null
+        _configurationImport.value = null
+    }
+
+    suspend fun applyConfigurationImport(previewId: String): List<Issue> = mutex.withLock {
+        if (!storageReady) return@withLock listOf(Issue("import", "资源库尚未就绪"))
+        if (_busy.value || runCompletion?.isCompleted == false || editingCount > 0)
+            return@withLock listOf(Issue("import", "请先等待当前操作完成，再应用配置"))
+        val draft = importDraft?.takeIf { it.id == previewId }
+            ?: return@withLock listOf(Issue("import", "预览已取消或无效，请重新选择文件"))
+        val current = _library.value
+        val result = withContext(Dispatchers.Default) {
+            when (draft) {
+                is ImportDraft.Configuration -> ConfigurationCommands.apply(draft.plan, current)
+                is ImportDraft.Legacy -> {
+                    val merged = LibraryFormat.upgrade(mergeLegacyImport(current, draft.imported, draft.selectSession))
+                    val issues = LibraryValidator.validate(merged)
+                    ConfigurationApplyResult(merged.takeIf { issues.none { it.error } }, null, issues)
+                }
+            }
+        }
+        val changed = result.library ?: return@withLock result.issues
+        val receipt = result.receipt
+        val next = if (receipt == null) changed else changed.copy(
+            configurationEdits = (current.configurationEdits + receipt).takeLast(20))
+        val issues = saveConfiguration(next, result.issues + draft.warnings)
+        if (issues.none { it.error }) dismissConfigurationImport()
+        issues
+    }
+
+    suspend fun undoConfigurationImport(receiptId: String): List<Issue> = mutex.withLock {
+        if (!storageReady) return@withLock listOf(Issue("import.undo", "资源库尚未就绪"))
+        if (_busy.value || runCompletion?.isCompleted == false || editingCount > 0)
+            return@withLock listOf(Issue("import.undo", "请先等待当前操作完成，再撤回配置"))
+        val current = _library.value
+        val receipt = current.configurationEdits.firstOrNull { it.id == receiptId }
+            ?: return@withLock listOf(Issue("import.undo", "撤回记录已不存在"))
+        val result = withContext(Dispatchers.Default) { ConfigurationCommands.undo(receipt, current) }
+        val changed = result.library ?: return@withLock result.issues
+        saveConfiguration(changed.copy(configurationEdits = current.configurationEdits.filterNot { it.id == receiptId }), result.issues)
+    }
+
+    /** Caller holds the admission mutex; configuration and its undo receipt share one transaction. */
+    private suspend fun saveConfiguration(next: Library, issues: List<Issue>): List<Issue> {
+        return try {
+            withContext(NonCancellable) {
+                repository.save(next)
+                revision++
+                _library.value = next
+                _state.value = _state.value.copy(issues = issues, error = null)
+                _error.value = null
+            }
+            // Keep encrypted connection credentials so a configuration-only undo can restore access.
+            issues
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { listOf(Issue("import", "保存失败；原数据仍保留")) }
+    }
+
+    private fun mergeLegacyImport(old: Library, imported: Library, selectSession: Boolean): Library {
+        val existingTags = old.promptTags.toSet()
+        return old.copy(characters = old.characters + imported.characters, mainCalls = old.mainCalls + imported.mainCalls,
+            packages = old.packages + imported.packages, groups = old.groups + imported.groups,
+            profiles = old.profiles + imported.profiles, sessions = old.sessions + imported.sessions,
+            connections = old.connections + imported.connections, chatFolders = old.chatFolders + imported.chatFolders,
+            savedChats = old.savedChats + imported.savedChats, personas = old.personas + imported.personas,
+            promptTags = old.promptTags + imported.promptTags.filterNot { it in existingTags },
+            selectedSessionId = if (selectSession) imported.selectedSessionId ?: old.selectedSessionId else old.selectedSessionId)
+    }
+
+    /** Debug/automation ingestion uses the same validated plan, without opening a UI sheet. */
+    suspend fun importBundle(jsonText: String, selectImportedSession: Boolean = false): List<Issue> {
+        val prepared = prepareImport(jsonText, selectImportedSession)
+        if (prepared.issues.any { it.error }) return prepared.issues
+        val id = prepared.id ?: return listOf(Issue("import", "导入预览不存在"))
+        return applyConfigurationImport(id)
     }
 
     private fun setError(message: String) {

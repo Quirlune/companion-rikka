@@ -50,6 +50,7 @@ import me.rerere.rikkahub.ui.theme.LocalDarkMode
 fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImport: () -> Unit, externalError: String?) {
     val library by controller.library.collectAsStateWithLifecycle()
     val state by controller.state.collectAsStateWithLifecycle()
+    val importPreview by controller.configurationImport.collectAsStateWithLifecycle()
     val usage by controller.usage.collectAsStateWithLifecycle()
     val usageError by controller.usageError.collectAsStateWithLifecycle()
     val settings by rememberUserSettingsState()
@@ -64,6 +65,7 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
     var usageRefreshedAt by remember { mutableLongStateOf(0L) }
     val usageAsOf = remember(usage, usageRefreshedAt) { System.currentTimeMillis() }
     var saving by remember { mutableStateOf(false) }
+    var importBusy by remember { mutableStateOf(false) }
     var consumedSearchTarget by remember { mutableStateOf<String?>(null) }
 
     suspend fun report(issues: List<Issue>): Boolean {
@@ -179,11 +181,28 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                     }
                                 } }
                             }
-                            entry<Screen.Setting> { CompanionSettingsPage(onExport, onImport) }
+                            entry<Screen.Setting> { CompanionSettingsPage(onExport, onImport, library.configurationEdits.size) }
+                            entry<Screen.CompanionImportHistory> {
+                                ConfigurationUndoPage(library.configurationEdits, importBusy,
+                                    { receiptId ->
+                                        if (!importBusy) { importBusy = true; scope.launch {
+                                            try {
+                                                val issues = controller.undoConfigurationImport(receiptId)
+                                                if (issues.any { it.error }) snackbar.showSnackbar(issues.first { it.error }.message)
+                                                else snackbar.showSnackbar("配置已撤回")
+                                            } finally { importBusy = false }
+                                        } }
+                                    }, { navigator.popBackStack() })
+                            }
                             entry<Screen.CompanionSession> { SessionConfigScreen(library, { navigator.popBackStack() }, ::save, saving,
                                 onManagePersonas = { navigator.navigate(Screen.CompanionPersonas) }) }
                             entry<Screen.CompanionMemory> {
                                 MemorySettingsPage(library, controller.actionDescriptors, ::saveMemory, { navigator.popBackStack() }, saving)
+                            }
+                            entry<Screen.CompanionReasoning> {
+                                ReasoningParsingSettingsPage(library.reasoningParsing,
+                                    { parsing -> save { it.copy(reasoningParsing = parsing) } },
+                                    { navigator.popBackStack() }, saving)
                             }
                             entry<Screen.CompanionPersonas> {
                                 Column(Modifier.fillMaxSize()) {
@@ -319,6 +338,19 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                 SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
             }
             saveSessionId?.let { id -> SaveChatDialog(library, id, { session, folder -> scope.launch { report(controller.saveChat(session, folder)) } }, { open(Screen.History) }, { saveSessionId = null }) }
+            importPreview?.let { preview ->
+                ConfigurationImportSheet(preview, importBusy,
+                    onApply = {
+                        if (!importBusy) { importBusy = true; scope.launch {
+                            try {
+                                val issues = controller.applyConfigurationImport(preview.id)
+                                if (issues.any { it.error }) snackbar.showSnackbar(issues.first { it.error }.message)
+                                else snackbar.showSnackbar("导入完成")
+                            } finally { importBusy = false }
+                        } }
+                    },
+                    onCancel = { if (!importBusy) controller.dismissConfigurationImport() })
+            }
         }
     }
 }
@@ -327,7 +359,7 @@ private fun <T> List<T>.replaceOrAdd(value: T, id: (T) -> String): List<T> =
     if (any { id(it) == id(value) }) map { if (id(it) == id(value)) value else it } else this + value
 
 @Composable
-private fun CompanionSettingsPage(onExport: () -> Unit, onImport: () -> Unit) {
+private fun CompanionSettingsPage(onExport: () -> Unit, onImport: () -> Unit, undoCount: Int) {
     val navigator = LocalNavController.current
     SettingPageLayout {
             item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("运行方案") }) {
@@ -341,6 +373,7 @@ private fun CompanionSettingsPage(onExport: () -> Unit, onImport: () -> Unit) {
             item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("连接与界面") }) {
                 item(onClick = { navigator.navigate(Screen.SettingProvider) }, headlineContent = { Text("模型与 API") }, leadingContent = { Icon(HugeIcons.ServerStack01, null) })
                 item(onClick = { navigator.navigate(Screen.SettingModels) }, headlineContent = { Text("自动标题") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
+                item(onClick = { navigator.navigate(Screen.CompanionReasoning) }, headlineContent = { Text("思考解析") }, leadingContent = { Icon(HugeIcons.Brain02, null) })
                 item(onClick = { navigator.navigate(Screen.QuickMessages) }, headlineContent = { Text("快捷输入") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionTiles) }, headlineContent = { Text("显示磁贴") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
                 item(onClick = { navigator.navigate(Screen.SettingPreferencesGeneral) }, headlineContent = { Text("通用偏好") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
@@ -350,6 +383,8 @@ private fun CompanionSettingsPage(onExport: () -> Unit, onImport: () -> Unit) {
             } }
             item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("资源备份") }) {
                 item(onClick = onImport, headlineContent = { Text("导入 JSON") }, leadingContent = { Icon(HugeIcons.ImageUpload, null) })
+                item(onClick = { navigator.navigate(Screen.CompanionImportHistory) }, headlineContent = { Text("配置撤回") },
+                    supportingContent = { Text("$undoCount 次可检查的配置导入") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
                 item(onClick = onExport, headlineContent = { Text("导出 JSON") }, leadingContent = { Icon(HugeIcons.Share04, null) })
             } }
     }

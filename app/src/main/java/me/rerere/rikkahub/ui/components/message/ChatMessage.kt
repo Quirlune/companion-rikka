@@ -120,6 +120,8 @@ fun ChatMessage(
     readOnly: Boolean = false,
     enableTts: Boolean = true,
     assistantTextContent: (@Composable () -> Unit)? = null,
+    branchSelectionEnabled: Boolean = true,
+    onBranchSelectionDisabled: () -> Unit = {},
 ) {
     val message = node.messages[node.selectIndex]
     val settings = LocalSettings.current.displaySetting
@@ -209,6 +211,8 @@ fun ChatMessage(
                     onClearTranslation = onClearTranslation,
                     readOnly = readOnly,
                     enableTts = enableTts,
+                    branchSelectionEnabled = branchSelectionEnabled,
+                    onBranchSelectionDisabled = onBranchSelectionDisabled,
                 )
             }
         }
