@@ -6,7 +6,7 @@ internal data class InvocationEnvironment(
     val input: String,
     val history: HistoryContext,
     val currentUserMessageId: String?,
-    val executionVersion: Int = 7
+    val executionVersion: Int = 8
 )
 
 internal data class RenderedInvocationInput(
@@ -36,7 +36,7 @@ internal class InvocationPreparer(private val library: Library) {
         val input = try {
             TextProcessing.apply(ref.node.inputProcessing,
                 renderer.render(ref.node.inputTemplate, "node.${ref.node.id}.input"),
-                session.state, session.results) {
+                session.state, session.results, environment.executionVersion) {
                 renderer.read(it, "node.${ref.node.id}.inputProcessing")
             }
         } catch (_: Exception) {

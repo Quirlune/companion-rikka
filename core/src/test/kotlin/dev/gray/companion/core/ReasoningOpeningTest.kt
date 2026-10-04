@@ -87,7 +87,7 @@ class ReasoningOpeningTest {
         }
         val journal = LibraryFormat.json.decodeFromString(RunRecovery.serializer(),
             LibraryFormat.json.encodeToString(RunRecovery.serializer(), result.recovery!!))
-        assertEquals(7, journal.executionVersion)
+        assertEquals(8, journal.executionVersion)
         assertTrue(journal.frozenResources.configurationEdits.isEmpty())
         repaired = true
         val resumed = WorkflowEngine().resume(lib.copy(reasoningParsing = ReasoningParsingConfig()), current,

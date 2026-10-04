@@ -5,17 +5,16 @@ import javax.xml.XMLConstants
 import javax.xml.parsers.DocumentBuilderFactory
 import org.xml.sax.InputSource
 
-private val structuredHistoryToken = Regex("\\{\\{\\s*history\\s*\\}\\}")
-internal fun isStructuredHistoryBlock(template: String, executionVersion: Int = 7): Boolean =
-    structuredHistoryToken.matches(template.trim()) || (template.trim().let {
-        it.startsWith("{{") && it.endsWith("}}") && Regex("\\{\\{[^{}]*\\}\\}").matches(it) &&
-            HistoryViews.selection(it, executionVersion)?.let { _ ->
-                val expression = it.removeSurrounding("{{", "}}").trim()
-                expression !in setOf("history.raw", "history.text")
-            } == true
-    })
-internal fun containsStructuredHistoryToken(template: String): Boolean =
-    structuredHistoryToken.containsMatchIn(template)
+internal fun isStructuredHistoryBlock(template: String, executionVersion: Int = 8): Boolean {
+    val text = template.trim()
+    val scan = MacroTemplateTokens.scan(text, executionVersion)
+    val token = scan.tokens.singleOrNull() ?: return false
+    return scan.diagnostics.isEmpty() && token.closed && token.start == 0 && token.endExclusive == text.length &&
+        token.expression.trim() !in setOf("history.raw", "history.text") &&
+        HistoryViews.selection(token.expression, executionVersion) != null
+}
+internal fun containsStructuredHistoryToken(template: String, executionVersion: Int = 8): Boolean =
+    MacroTemplateTokens.scan(template, executionVersion).tokens.any { it.closed && it.expression.trim() == "history" }
 
 internal class LoadedResources(
     val character: CharacterCard?,
@@ -45,7 +44,7 @@ internal fun loadedResources(
     issues: MutableList<Issue>? = null,
     resultOrigins: Map<String, ResultOrigin> = session.resultOrigins,
     historyContext: HistoryContext? = null,
-    executionVersion: Int = 7
+    executionVersion: Int = 8
 ): LoadedResources {
     val view = MacroReadView(library, session)
     val character = view.character
@@ -141,9 +140,8 @@ internal class TemplateRenderer(
     private val resultOrigins: Map<String, ResultOrigin> = emptyMap(),
     session: Session? = null,
     historyContext: HistoryContext? = null,
-    private val executionVersion: Int = 7
+    private val executionVersion: Int = 8
 ) {
-    private val token = Regex("\\{\\{([^{}]*)\\}\\}")
     private val currentSession = session ?: resources.macroView.session
     private val macroView = session?.takeUnless { it === resources.macroView.session }?.let {
         MacroReadView(resources.macroView.library, it)
@@ -158,7 +156,7 @@ internal class TemplateRenderer(
     private val entryStack = linkedSetOf<String>()
 
     fun read(address: String, path: String): String {
-        macroExpressionError(address)?.let { issues.add(Issue(path, it)); return "" }
+        macroExpressionError(address, executionVersion)?.let { issues.add(Issue(path, it)); return "" }
         return resolve(address, path)
     }
 
@@ -167,13 +165,13 @@ internal class TemplateRenderer(
 
     /** Null omits the entire block, before any processing can recreate a heading or wrapper. */
     fun renderBlock(template: String, path: String, hideWhenAllReferencesEmpty: Boolean = false): String? {
-        val remainder = token.replace(template, "")
-        if (remainder.contains("{{") || remainder.contains("}}")) issues.add(Issue(path, "宏格式不完整"))
+        val scan = MacroTemplateTokens.scan(template, executionVersion)
+        scan.diagnostics.forEach { issues += Issue(path, it.message) }
         var hadReference = false
         var hadValue = false
-        val rendered = token.replace(template) { match ->
+        val rendered = MacroTemplateTokens.replace(template, scan) { token ->
             hadReference = true
-            val expression = match.groupValues[1].trim()
+            val expression = token.expression.trim()
             val value = resolve(expression, path)
             if (if (executionVersion >= 7) value.isNotBlank() else value.isNotEmpty()) hadValue = true
             value
@@ -187,9 +185,13 @@ internal class TemplateRenderer(
         if (Regex("^[a-zA-Z_][a-zA-Z0-9_-]*\\s*:").containsMatchIn(expression)) {
             val compiled = PromptReferenceLanguage.compile(expression)
             val plan = compiled.reference as? PromptReferenceLanguage.QueryPlan
-            val selection = plan?.historySelection
+            val selection = plan?.historySelection?.let { if (executionVersion < 8) it.copy(rangeExplicit = false) else it }
             if (executionVersion < 5 && compiled.fields.any { it.name == "source" }) {
                 issues += Issue(path, "此恢复版本不支持 History 来源选择")
+                return ""
+            }
+            if (executionVersion < 8 && compiled.fields.any { it.name == "format" }) {
+                issues += Issue(path, "此恢复版本不支持 History 局部格式")
                 return ""
             }
             if (selection == null) {
@@ -412,7 +414,7 @@ class PromptCompiler {
         resultOrigins: Map<String, ResultOrigin> = session.resultOrigins,
         historyContext: HistoryContext? = null,
         preprocessedInput: String? = null,
-        executionVersion: Int = 7
+        executionVersion: Int = 8
     ): PromptPreview {
         val issues = mutableListOf<Issue>()
         val main = library.mainCalls.firstOrNull { it.id == session.mainCallId }
@@ -424,7 +426,7 @@ class PromptCompiler {
         }
         val renderedInput = preprocessedInput ?: try {
             TextProcessing.apply(node.inputProcessing,
-                renderer.render(node.inputTemplate, "node.${node.id}.input"), state, results) {
+                renderer.render(node.inputTemplate, "node.${node.id}.input"), state, results, executionVersion) {
                 renderer.read(it, "node.${node.id}.inputProcessing")
             }
         } catch (_: Exception) {
@@ -453,7 +455,7 @@ class PromptCompiler {
             .filter { (block, _) -> block.enabled && checkedCondition(block.condition,
                 "node.${node.id}.block.${block.id}", state, results, input, issues) {
                     blockRenderer.read(it, "node.${node.id}.block.${block.id}.condition.expression")
-                } && checkedRecognition(block.recognition, "node.${node.id}.block.${block.id}.recognition", issues) {
+                } && checkedRecognition(block.recognition, "node.${node.id}.block.${block.id}.recognition", issues, executionVersion) {
                     blockRenderer.render(it, "node.${node.id}.block.${block.id}.recognition")
                 } }
         val structured = blocks.filter { (block, resolved) -> !resolved && isStructuredHistoryBlock(block.template, executionVersion) }
@@ -501,7 +503,7 @@ class PromptCompiler {
                 val source = if (resolved) block.template else
                     blockRenderer.renderBlock(block.template, path, block.hideWhenReferencesEmpty) ?: return@forEach
                 val value = try {
-                    TextProcessing.apply(block.processing, source, state, results) {
+                    TextProcessing.apply(block.processing, source, state, results, executionVersion) {
                         blockRenderer.read(it, "$path.processing")
                     }
                 } catch (_: Exception) {

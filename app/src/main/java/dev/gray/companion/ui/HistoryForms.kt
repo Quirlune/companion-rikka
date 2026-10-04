@@ -24,12 +24,13 @@ internal fun NumberLine(label: String, value: Int, minimum: Int = 0, onChange: (
 }
 
 @Composable
-private fun HistoryPointForm(label: String, point: HistoryPoint, onChange: (HistoryPoint) -> Unit) {
+internal fun HistoryPointForm(label: String, point: HistoryPoint, onChange: (HistoryPoint) -> Unit) {
     Text(label, style = MaterialTheme.typography.labelLarge)
     ChoiceLine("位置", point.anchor, listOf(HistoryAnchor.START to "从开头", HistoryAnchor.END to "从末尾", HistoryAnchor.PERCENT to "百分比")) {
         onChange(point.copy(anchor = it, value = if (it == HistoryAnchor.PERCENT) 0.0 else 1.0))
     }
     var draft by remember(label, point.anchor) { mutableStateOf(point.value.toString()) }
+    LaunchedEffect(point.value) { if (draft.toDoubleOrNull() != point.value) draft = point.value.toString() }
     OutlinedTextField(draft, { text ->
         draft = text
         val parsed = text.toDoubleOrNull()

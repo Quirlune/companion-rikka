@@ -7,7 +7,7 @@ import kotlinx.serialization.json.intOrNull
 
 /** Resource wire versions are independent of the Android SQLite table version. */
 object LibraryFormat {
-    const val CURRENT_VERSION = 9
+    const val CURRENT_VERSION = 10
     private const val LEGACY_VERSION = 1
 
     val json = Json { ignoreUnknownKeys = false; encodeDefaults = true }

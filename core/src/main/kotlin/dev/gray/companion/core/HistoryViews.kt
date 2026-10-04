@@ -2,10 +2,11 @@ package dev.gray.companion.core
 
 /** Reads source references without publishing captures or macro versions. */
 object HistoryViews {
-    fun selection(expression: String, executionVersion: Int = 7): HistorySelection? {
+    fun selection(expression: String, executionVersion: Int = 8): HistorySelection? {
         val result = PromptReferenceLanguage.compile(expression)
         val ref = result.reference ?: return null
         if (executionVersion < 5 && result.fields.any { it.name == "source" }) return null
+        if (executionVersion < 8 && result.fields.any { it.name == "format" }) return null
         return when (ref) {
             is PromptReferenceLanguage.LegacyReference -> when (ref.expression) {
                 "history", "history.raw", "history.text" -> HistorySelection(compressed = ref.expression != "history.raw")
@@ -13,12 +14,14 @@ object HistoryViews {
                 "history.model" -> if (executionVersion >= 5) HistorySelection(sourceKind = HistorySourceKind.MODEL_RAW) else null
                 else -> null
             }
-            is PromptReferenceLanguage.QueryPlan -> ref.historySelection
+            is PromptReferenceLanguage.QueryPlan -> ref.historySelection?.let {
+                if (executionVersion < 8) it.copy(rangeExplicit = false) else it
+            }
         }
     }
 
     fun sources(session: Session, selection: HistorySelection, main: MainCall? = null): List<HistorySourceRef> {
-        val range = if (selection.compressed && selection.viewId == null && selection.range == HistoryRange())
+        val range = if (selection.compressed && selection.viewId == null && !selection.rangeExplicit && selection.range == HistoryRange())
             main?.history?.range ?: selection.range else selection.range
         if (selection.viewId == null) {
             val floors = session.messages.filter { !it.deleted && it.outputSlot == OutputSlot.BODY }
@@ -39,7 +42,7 @@ object HistoryViews {
         return all.slice(HistoryContext.selectedRange(range, all.size))
     }
 
-    fun summaries(session: Session, main: MainCall, kind: HistorySourceKind, executionVersion: Int = 7): List<HistoryMemorySegment> {
+    fun summaries(session: Session, main: MainCall, kind: HistorySourceKind, executionVersion: Int = 8): List<HistoryMemorySegment> {
         val floors = session.messages.filter { !it.deleted && it.outputSlot == OutputSlot.BODY }
         val sources = floors.map { message ->
             if (kind == HistorySourceKind.MODEL_RAW && message.role == Role.ASSISTANT && !message.authoredOpening && message.rawText == null) null
@@ -56,7 +59,7 @@ object HistoryViews {
     }
 
     fun project(library: Library, session: Session, main: MainCall, selection: HistorySelection,
-                textOverrides: Map<String, String> = emptyMap(), executionVersion: Int = 7,
+                textOverrides: Map<String, String> = emptyMap(), executionVersion: Int = 8,
                 renderInsertion: (String) -> String = { it }): HistoryProjection = try {
         val selectedSources = sources(session, selection, main)
         val index = HistoryMemory.sourceIndex(session)
@@ -73,7 +76,13 @@ object HistoryViews {
         val compressed = HistoryHierarchy(segments, selectedSources, ordered = projectionVersion >= 2)
             .compressed(modes, projectionVersion)
         // One source-coordinate projection keeps insertions and per-floor wrappers consistent with compression.
-        val displayMain = main.copy(history = main.history.copy(range = HistoryRange()))
+        require(executionVersion >= 8 || selection.format == null) { "此恢复版本不支持 History 局部格式" }
+        val local = selection.format
+        val displayHistory = if (local == null) main.history.copy(range = HistoryRange()) else main.history.copy(
+            range = HistoryRange(), apiRole = local.apiRole, mergeMessages = false, prefix = "", suffix = "",
+            floorPrefix = local.floorPrefix, floorSuffix = local.floorSuffix, speakers = local.speakers,
+            floors = emptyList(), insertions = emptyList())
+        val displayMain = main.copy(history = displayHistory)
         val activeNumbers = session.messages.filter { it.outputSlot == OutputSlot.BODY && !it.deleted }
             .withIndex().associate { it.value.id to it.index + 1 }
         val capturedNumbers = view?.let { HistoryMemory.captureSources(state, it.captureId) }?.withIndex()
@@ -96,7 +105,7 @@ object HistoryViews {
 
     fun copy(session: Session, selection: HistorySelection, targetId: String, name: String,
              mode: HistorySegmentMode, segmentIds: List<String>, main: MainCall? = null,
-             inheritTargetModes: Boolean = false, executionVersion: Int = 7): HistoryMemoryPatch {
+             inheritTargetModes: Boolean = false, executionVersion: Int = 8): HistoryMemoryPatch {
         require(MacroNaming.isValidSlug(targetId)) { "历史副本标识须为英文 slug" }
         // A writer may update its own captured previous version; other pending producers stay masked.
         val resolvedSelection = if (selection.viewId == targetId && selection.revision == null)

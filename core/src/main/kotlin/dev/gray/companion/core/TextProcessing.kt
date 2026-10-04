@@ -76,15 +76,15 @@ internal fun WorkflowNode.declaredOutputAddresses(descriptor: ActionDescriptor?)
 /** Pure ordered text operations. Errors reject this node; previously accepted receipts remain. */
 object TextProcessing {
     private const val MAX_OUTPUT_LENGTH = 1_000_000
-    fun validate(steps: List<TextProcessStep>, path: String): List<Issue> = buildList {
+    fun validate(steps: List<TextProcessStep>, path: String, executionVersion: Int = 8): List<Issue> = buildList {
         if (steps.size > 64) add(Issue(path, "文本处理步骤过多"))
         steps.forEachIndexed { index, step ->
             val at = "$path.$index"
             for ((field, source) in listOf("text" to step.text, "replacement" to step.replacement)) {
-                val remainder = templateToken.replace(source, "")
-                if (remainder.contains("{{") || remainder.contains("}}")) add(Issue("$at.$field", "宏格式不完整"))
-                templateToken.findAll(source).forEach { match ->
-                    macroExpressionError(match.groupValues[1].trim())?.let { add(Issue("$at.$field", it)) }
+                val scan = MacroTemplateTokens.scan(source, executionVersion)
+                scan.diagnostics.forEach { add(Issue("$at.$field", it.message)) }
+                scan.tokens.filter { it.closed }.forEach { token ->
+                    macroExpressionError(token.expression.trim(), executionVersion)?.let { add(Issue("$at.$field", it)) }
                 }
             }
             when (step.kind) {
@@ -108,7 +108,7 @@ object TextProcessing {
     }
 
     fun apply(steps: List<TextProcessStep>, source: String, state: Map<String, String> = emptyMap(),
-              results: Map<String, String> = emptyMap(), readMacro: ((String) -> String?)? = null): String {
+              results: Map<String, String> = emptyMap(), executionVersion: Int = 8, readMacro: ((String) -> String?)? = null): String {
         require(steps.size <= 64) { "文本处理步骤过多" }
         var value = source
         for (step in steps) {
@@ -122,12 +122,12 @@ object TextProcessing {
                 }
                 TextProcessKind.REGEX_REPLACE -> {
                     require(SafePatterns.validate(step.pattern) == null && step.pattern.isNotBlank()) { "正则表达式无效" }
-                    SafePatterns.replace(step.pattern, value, expand(step.replacement, readMacro))
+                    SafePatterns.replace(step.pattern, value, expand(step.replacement, readMacro, executionVersion))
                 }
                 TextProcessKind.TRIM -> value.trim()
-                TextProcessKind.APPEND -> value + expand(step.text, readMacro)
-                TextProcessKind.PREPEND -> expand(step.text, readMacro) + value
-                TextProcessKind.FORMAT -> expand(step.text, readMacro).replace("{value}", value)
+                TextProcessKind.APPEND -> value + expand(step.text, readMacro, executionVersion)
+                TextProcessKind.PREPEND -> expand(step.text, readMacro, executionVersion) + value
+                TextProcessKind.FORMAT -> expand(step.text, readMacro, executionVersion).replace("{value}", value)
                 TextProcessKind.INCREASE -> number((value.ifBlank { "0" }).toBigDecimal() + step.amount.toBigDecimal())
                 TextProcessKind.CLAMP -> {
                     val low = step.min.takeIf { it.isNotBlank() }?.toBigDecimal()
@@ -147,14 +147,13 @@ object TextProcessing {
 
     private fun number(value: BigDecimal): String = value.stripTrailingZeros().toPlainString()
 
-    private val templateToken = Regex("\\{\\{([^{}]*)\\}\\}")
-    private fun expand(source: String, readMacro: ((String) -> String?)?): String {
+    private fun expand(source: String, readMacro: ((String) -> String?)?, executionVersion: Int): String {
         if (source.isEmpty()) return source
-        val remainder = templateToken.replace(source, "")
-        require(!remainder.contains("{{") && !remainder.contains("}}")) { "宏格式不完整" }
-        return templateToken.replace(source) { match ->
-            val address = match.groupValues[1].trim()
-            require(macroExpressionError(address) == null) { "宏地址无效" }
+        val scan = MacroTemplateTokens.scan(source, executionVersion)
+        require(scan.diagnostics.isEmpty()) { scan.diagnostics.first().message }
+        return MacroTemplateTokens.replace(source, scan) { token ->
+            val address = token.expression.trim()
+            require(macroExpressionError(address, executionVersion) == null) { "宏地址无效" }
             readMacro?.invoke(address).orEmpty()
         }
     }

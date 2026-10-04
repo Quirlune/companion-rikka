@@ -35,19 +35,18 @@ object SafePatterns {
 }
 
 object RecognitionEvaluator {
-    fun validate(recognition: Recognition?, path: String = "recognition"): List<Issue> {
+    fun validate(recognition: Recognition?, path: String = "recognition", executionVersion: Int = 8): List<Issue> {
         if (recognition == null) return emptyList()
         val issues = mutableListOf<Issue>()
-        val token = Regex("\\{\\{([^{}]*)\\}\\}")
         var count = 0
         fun visit(group: Recognition, depth: Int) {
             if (depth > 8 || ++count > 128) { issues += Issue(path, "识别规则层级或数量过多"); return }
             group.rules.forEachIndexed { index, rule ->
                 val rulePath = "$path.rule.$index"
-                if (token.replace(rule.template, "").let { it.contains("{{") || it.contains("}}") })
-                    issues += Issue(rulePath, "宏格式不完整")
-                token.findAll(rule.template).forEach { match ->
-                    macroExpressionError(match.groupValues[1].trim())?.let { issues += Issue(rulePath, it) }
+                val scan = MacroTemplateTokens.scan(rule.template, executionVersion)
+                scan.diagnostics.forEach { issues += Issue(rulePath, it.message) }
+                scan.tokens.filter { it.closed }.forEach { token ->
+                    macroExpressionError(token.expression.trim(), executionVersion)?.let { issues += Issue(rulePath, it) }
                 }
                 SafePatterns.validate(rule.pattern, rule.captureGroup)?.let { issues += Issue("$rulePath.pattern", it) }
                 if (rule.op != Compare.EXISTS && (rule.valueType == RecognitionValueType.NUMBER ||
@@ -102,9 +101,9 @@ object RecognitionEvaluator {
 }
 
 internal fun checkedRecognition(
-    recognition: Recognition?, path: String, issues: MutableList<Issue>, read: (String) -> String
+    recognition: Recognition?, path: String, issues: MutableList<Issue>, executionVersion: Int = 8, read: (String) -> String
 ): Boolean {
-    val validation = RecognitionEvaluator.validate(recognition, path)
+    val validation = RecognitionEvaluator.validate(recognition, path, executionVersion)
     issues += validation
     return validation.none { it.error } && RecognitionEvaluator.matches(recognition, read)
 }

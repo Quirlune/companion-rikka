@@ -81,10 +81,12 @@ internal fun MacroCompletionMenu(
     width: Dp,
     maxHeight: Dp,
     onInsert: (String) -> Unit,
+    onConfigureHistory: () -> Unit,
     onOpenBrowser: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val addressQuery = query.substringBefore('@').substringBefore('#')
+    val hasHistory = choices.any { it.macro.startsWith("{{type:builtin.in:history.name:") } || query.startsWith("history")
     val branches = remember(choices, addressQuery) { referenceBranches(choices, addressQuery) }
     var expanded by remember { mutableStateOf(emptySet<String>()) }
     LaunchedEffect(branches, addressQuery) {
@@ -154,6 +156,19 @@ internal fun MacroCompletionMenu(
                 }
             }
             item(key = "divider") { HorizontalDivider(Modifier.padding(vertical = 4.dp)) }
+            if (hasHistory) item(key = "history-context") {
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text("历史上下文…")
+                            Text("设置当前一处引用的范围、来源与每楼格式",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    },
+                    onClick = onConfigureHistory,
+                    modifier = Modifier.focusProperties { canFocus = false },
+                )
+            }
             item(key = "browser") {
                 DropdownMenuItem(
                     text = { Text("全部宏、历史版本与 XML 格式…") },

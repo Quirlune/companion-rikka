@@ -12,7 +12,7 @@ class HistoryContext(
     private val legacyProcessing: Boolean = false,
     private val floorNumbers: Map<String, Int> = emptyMap(),
     private val projectionSegments: List<HistoryMemorySegment>? = null,
-    val executionVersion: Int = 7,
+    val executionVersion: Int = 8,
     private val projectionVersion: Int? = null
 ) {
     data class Pending(

@@ -119,7 +119,7 @@ class HistoryMemoryTest {
         val paused = engine.run(lib, before, "new question", unusedGateway)
         assertEquals(RunStatus.PAUSED, paused.status)
         val journal = requireNotNull(paused.recovery)
-        assertEquals(7, journal.executionVersion)
+        assertEquals(8, journal.executionVersion)
         assertTrue("source" in journal.completedWorkflowIds)
         val resumed = engine.resume(lib, before.copy(pendingRun = journal), unusedGateway, journal,
             RecoveryDecision(RecoveryDecisionKind.RETRY, "consumer/fail"))

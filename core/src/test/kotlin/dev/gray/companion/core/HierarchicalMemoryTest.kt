@@ -182,7 +182,7 @@ class HierarchicalMemoryTest {
         val pending = MessageOperations.recordPartialTurn(before, paused).session!!
         val journal = LibraryFormat.json.decodeFromString(RunRecovery.serializer(),
             LibraryFormat.json.encodeToString(RunRecovery.serializer(), paused.recovery!!))
-        assertEquals(7, journal.executionVersion)
+        assertEquals(8, journal.executionVersion)
         val aggregation = configured.aggregationWorkflow!!
         val model = aggregation.nodes.single { it.actionId == "model.generate" }
         val changedModel = model.copy(blocks = model.blocks.map { it.copy(template = it.template + "\nrepair") })

@@ -44,7 +44,7 @@ data class ActionContext(
     val session: Session? = null,
     val library: Library? = null,
     val workflowId: String = "",
-    val executionVersion: Int = 7,
+    val executionVersion: Int = 8,
     val macroTarget: MacroTargetSnapshot? = null
 )
 
@@ -168,7 +168,7 @@ class ActionRegistry {
                     else -> error("处理模式无效")
                 }
                 val resolver = MacroResolver(library, session, context.input, context.executionVersion)
-                val value = TextProcessing.apply(config.steps, base, context.state, context.results) { resolver.read(it) }
+                val value = TextProcessing.apply(config.steps, base, context.state, context.results, context.executionVersion) { resolver.read(it) }
                 if (address.startsWith("state.")) ActionOutcome(value, stateWrites = mapOf(address.substring(6) to value))
                 else ActionOutcome(value, macroWrites = mapOf(address to value))
             }

@@ -31,7 +31,7 @@ internal class OutcomeValidator(private val library: Library, session: Session) 
                 outcome.activationWrites.isEmpty())
             val resolver = MacroResolver(library, requireNotNull(context.session), context.input, context.executionVersion)
             outcome.copy(text = TextProcessing.apply(ref.node.outputProcessing,
-                outcome.text, context.state, context.results) { resolver.read(it) })
+                outcome.text, context.state, context.results, context.executionVersion) { resolver.read(it) })
         } catch (failure: OutputFormatException) {
             throw NodeExecutionFailure(ref, failure.message.orEmpty(), RecoveryFailureKind.OUTPUT_FORMAT)
         } catch (_: Exception) {

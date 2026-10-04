@@ -1,7 +1,7 @@
 package dev.gray.companion.core
 
 object LibraryValidator {
-    fun validate(library: Library, executionVersion: Int = 7): List<Issue> {
+    fun validate(library: Library, executionVersion: Int = 8): List<Issue> {
         val issues = mutableListOf<Issue>()
         if (library.schemaVersion != LibraryFormat.CURRENT_VERSION) issues += Issue("library.schemaVersion", "不支持的资源版本")
         checkMetadata(library, issues)
@@ -28,7 +28,7 @@ object LibraryValidator {
             if (persona.name.isBlank()) issues += Issue("$path.name", "用户身份名称不能为空")
             if (persona.avatar != null && persona.avatar.decodedBytes() == null)
                 issues += Issue("$path.avatar", "头像必须是 32 KB 以内的 JPEG 或 PNG 图片")
-            checkTemplate(persona.prompt, "$path.prompt", issues)
+            checkTemplate(persona.prompt, "$path.prompt", issues, executionVersion)
         }
         if (library.selectedPersonaId != null && library.personas.none { it.id == library.selectedPersonaId })
             issues += Issue("library.selectedPersonaId", "所选用户身份不存在")
@@ -47,15 +47,15 @@ object LibraryValidator {
         allEntries.forEach { entry ->
             if (!address.matches(entry.key)) issues += Issue("entry.${entry.id}", "条目键不能用于宏地址")
             checkCondition(entry.condition, "entry.${entry.id}.condition", issues)
-            if (entry.isTemplate) checkTemplate(entry.text, "entry.${entry.id}.text", issues)
+            if (entry.isTemplate) checkTemplate(entry.text, "entry.${entry.id}.text", issues, executionVersion)
         }
         library.characters.forEach { card ->
             if (card.avatar != null && card.avatar.decodedBytes() == null) issues += Issue("character.${card.id}.avatar", "头像必须是 32 KB 以内的 JPEG 或 PNG 图片")
             unique(card.entries.map { it.key }, "character.${card.id}.entries")
             if (card.entries.any { it.key == "name" }) issues += Issue("character.${card.id}.entries", "name 是角色名称保留键")
-            checkTemplate(card.greeting, "character.${card.id}.greeting", issues)
+            checkTemplate(card.greeting, "character.${card.id}.greeting", issues, executionVersion)
             card.alternateGreetings.forEachIndexed { index, greeting ->
-                checkTemplate(greeting, "character.${card.id}.alternateGreetings.$index", issues)
+                checkTemplate(greeting, "character.${card.id}.alternateGreetings.$index", issues, executionVersion)
             }
             card.boundPackageIds.forEach { if (library.packages.none { pack -> pack.id == it }) issues += Issue("character.${card.id}", "绑定的提示词包不存在") }
         }
@@ -119,18 +119,18 @@ object LibraryValidator {
                     source.kind == MacroTileKind.HTML -> {
                         if (main.bodyTextTemplate.isBlank()) issues += Issue("main.${main.id}.bodyTextTemplate", "HTML 正文须指定供历史、复制与导出使用的文本模板；使用原正文", error = false)
                         val displayIssues = mutableListOf<Issue>()
-                        checkTemplate(main.bodyTextTemplate, "main.${main.id}.bodyTextTemplate", displayIssues)
+                        checkTemplate(main.bodyTextTemplate, "main.${main.id}.bodyTextTemplate", displayIssues, executionVersion)
                         issues += displayIssues.map { it.copy(error = false) }
                     }
                 }
             }
-            checkHistory(main, issues)
+            checkHistory(main, issues, executionVersion)
         }
         val tiles = library.mainCalls.flatMap { it.tiles } + library.groups.flatMap { it.tiles }
         unique(tiles.map { it.id }, "library.tileIds")
         tiles.forEach { tile ->
             val path = "tile.${tile.id}"
-            checkTemplate(tile.template, "$path.template", issues)
+            checkTemplate(tile.template, "$path.template", issues, executionVersion)
             SafePatterns.validate(tile.pattern, tile.captureGroup)?.let { issues += Issue("$path.pattern", it) }
             issues += HtmlTemplate.validate(tile)
             if (tile.title.isBlank()) issues += Issue(path, "磁贴名称不能为空")
@@ -196,7 +196,7 @@ object LibraryValidator {
             if (workflow.modelProfileId != null && library.profiles.none { it.id == workflow.modelProfileId })
                 issues += Issue("$path.modelProfileId", "工作流模型不存在")
             checkCondition(workflow.condition, "$path.condition", issues)
-            checkRecognition(workflow.recognition, "$path.recognition", issues)
+            checkRecognition(workflow.recognition, "$path.recognition", issues, executionVersion)
             unique(workflow.nodes.map { it.id }, "$path.nodes")
             val ids = workflow.nodes.map { it.id }.toSet()
             val writerCategories = mutableMapOf<String, String>()
@@ -220,8 +220,8 @@ object LibraryValidator {
                 node.generation.temperature?.let { if (!it.isFinite()) issues += Issue("$nodePath.generation.temperature", "温度必须是有限数字") }
                 node.generation.topP?.let { if (!it.isFinite() || it !in 0f..1f) issues += Issue("$nodePath.generation.topP", "Top P 必须在 0 到 1 之间") }
                 node.generation.maxTokens?.let { if (it <= 0) issues += Issue("$nodePath.generation.maxTokens", "最大令牌数必须大于零") }
-                issues += TextProcessing.validate(node.inputProcessing, "$nodePath.inputProcessing")
-                issues += TextProcessing.validate(node.outputProcessing, "$nodePath.outputProcessing")
+                issues += TextProcessing.validate(node.inputProcessing, "$nodePath.inputProcessing", executionVersion)
+                issues += TextProcessing.validate(node.outputProcessing, "$nodePath.outputProcessing", executionVersion)
                 issues += RegexOutputCopies.validate(node.regexOutputCopy, "$nodePath.regexOutputCopy")
                 if (node.regexOutputCopy.enabled && node.regexOutputCopy.outputKey == node.outputKey)
                     issues += Issue("$nodePath.regexOutputCopy.outputKey", "副本与原始输出不能使用同一个宏地址")
@@ -237,11 +237,11 @@ object LibraryValidator {
                             !validVersionSelector(source.substringAfter('@', "latest")))
                             issues += Issue("$nodePath.macroProcess.source", "源宏地址或版本选择无效")
                     }
-                    checkTemplate(config.initial, "$nodePath.macroProcess.initial", issues)
-                    issues += TextProcessing.validate(config.steps, "$nodePath.macroProcess.steps")
+                    checkTemplate(config.initial, "$nodePath.macroProcess.initial", issues, executionVersion)
+                    issues += TextProcessing.validate(config.steps, "$nodePath.macroProcess.steps", executionVersion)
                 }
                 checkCondition(node.condition, "$nodePath.condition", issues)
-                checkRecognition(node.recognition, "$nodePath.recognition", issues)
+                checkRecognition(node.recognition, "$nodePath.recognition", issues, executionVersion)
                 val previousCategory = writerCategories.putIfAbsent(node.outputKey, node.resultCategory)
                 if (previousCategory != null && previousCategory != node.resultCategory) issues += Issue(nodePath, "同一个输出宏须使用相同分类")
                 val targetAddress = if (node.actionId == "macro.process") canonicalWriteAddress(
@@ -256,18 +256,18 @@ object LibraryValidator {
                     if (dependency !in ids) issues += Issue(nodePath, "依赖节点不存在：$dependency")
                     if (dependency == node.id) issues += Issue(nodePath, "节点不能依赖自身")
                 }
-                checkTemplate(node.inputTemplate, "$nodePath.input", issues)
+                checkTemplate(node.inputTemplate, "$nodePath.input", issues, executionVersion)
                 node.blocks.forEach { block ->
                     val blockPath = "$nodePath.block.${block.id}"
-                    checkTemplate(block.template, blockPath, issues)
-                    issues += TextProcessing.validate(block.processing, "$blockPath.processing")
-                    if (containsStructuredHistoryToken(block.template) && !isStructuredHistoryBlock(block.template))
+                    checkTemplate(block.template, blockPath, issues, executionVersion)
+                    issues += TextProcessing.validate(block.processing, "$blockPath.processing", executionVersion)
+                    if (containsStructuredHistoryToken(block.template, executionVersion) && !isStructuredHistoryBlock(block.template, executionVersion))
                         issues += Issue(blockPath, "结构化 history 须单独占一个提示块；混合文本请使用 history.text")
                     checkCondition(block.condition, "$blockPath.condition", issues)
-                    checkRecognition(block.recognition, "$blockPath.recognition", issues)
+                    checkRecognition(block.recognition, "$blockPath.recognition", issues, executionVersion)
                     if (block.depth < 0) issues += Issue("$blockPath.depth", "插入深度不能小于零")
                 }
-                node.arguments.forEach { (key, value) -> checkTemplate(value, "$nodePath.argument.$key", issues) }
+                node.arguments.forEach { (key, value) -> checkTemplate(value, "$nodePath.argument.$key", issues, executionVersion) }
                 if (node.actionId in setOf("history.view.copy", "history.memory.write", "history.memory.select")) {
                     val source = node.arguments["source"] ?: "{{history}}"
                     if (source.isBlank()) issues += Issue("$nodePath.argument.source", "请选择历史来源")
@@ -410,7 +410,7 @@ object LibraryValidator {
             uri.userInfo == null && uri.query == null && uri.fragment == null
     } catch (_: Exception) { false }
 
-    private fun checkHistory(main: MainCall, issues: MutableList<Issue>) {
+    private fun checkHistory(main: MainCall, issues: MutableList<Issue>, executionVersion: Int) {
         val history = main.history
         val path = "main.${main.id}.history"
         if (history.mergeMessages && history.apiRole == null)
@@ -457,7 +457,7 @@ object LibraryValidator {
             issues += Issue("$path.insertions", "历史插入 ID 为空或重复")
         history.insertions.forEachIndexed { index, insertion ->
             point(insertion.at, false, "$path.insertions.$index.at")
-            checkTemplate(insertion.template, "$path.insertions.$index.template", issues)
+            checkTemplate(insertion.template, "$path.insertions.$index.template", issues, executionVersion)
         }
         val processor = history.processor
         if (processor.minimumNewFloors < 1 || processor.keepRecentFloors < 0 || processor.protectFirstFloors < 0 ||
@@ -480,16 +480,15 @@ object LibraryValidator {
         ConditionExpressions.validate(expression)?.let { issues += Issue("$path.expression", it) }
     }
 
-    private fun checkTemplate(template: String, path: String, issues: MutableList<Issue>) {
-        val token = Regex("\\{\\{([^{}]*)\\}\\}")
-        if (token.replace(template, "").let { it.contains("{{") || it.contains("}}") }) issues += Issue(path, "宏格式不完整")
-        token.findAll(template).forEach { match ->
-            val expression = match.groupValues[1].trim()
-            macroExpressionError(expression)?.let { issues += Issue(path, it) }
+    private fun checkTemplate(template: String, path: String, issues: MutableList<Issue>, executionVersion: Int) {
+        val scan = MacroTemplateTokens.scan(template, executionVersion)
+        scan.diagnostics.forEach { issues += Issue(path, it.message) }
+        scan.tokens.filter { it.closed }.forEach { token ->
+            macroExpressionError(token.expression.trim(), executionVersion)?.let { issues += Issue(path, it) }
         }
     }
 
-    private fun checkRecognition(recognition: Recognition?, path: String, issues: MutableList<Issue>) {
-        issues += RecognitionEvaluator.validate(recognition, path)
+    private fun checkRecognition(recognition: Recognition?, path: String, issues: MutableList<Issue>, executionVersion: Int) {
+        issues += RecognitionEvaluator.validate(recognition, path, executionVersion)
     }
 }

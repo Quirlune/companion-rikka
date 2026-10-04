@@ -1,5 +1,8 @@
 package dev.gray.companion.ui
 
+import dev.gray.companion.core.MacroTemplateTokens
+import dev.gray.companion.core.HistoryViews
+
 /** An editable macro at the caret. End includes its remaining text and any closing braces. */
 internal data class MacroCompletionToken(val start: Int, val end: Int, val query: String)
 
@@ -10,16 +13,23 @@ internal fun macroCompletionToken(text: String, selectionStart: Int, selectionEn
     if (selectionStart != selectionEnd) return null
     val caret = selectionStart.coerceIn(0, text.length)
     if (caret < 2) return null
-    val start = text.lastIndexOf("{{", startIndex = caret - 2)
-    if (start < 0) return null
-    val query = text.substring(start + 2, caret)
-    if (query.any { it.isWhitespace() || it == '{' || it == '}' }) return null
+    val outer = MacroTemplateTokens.scan(text).tokens.lastOrNull { token ->
+        caret >= token.start + 2 && caret <= (if (token.closed) token.endExclusive - 2 else token.endExclusive)
+    } ?: return null
+    val history = if (outer.closed) runCatching { HistoryViews.selection(outer.expression) != null }.getOrDefault(false)
+        else outer.expression.startsWith("history") || outer.expression.startsWith("in:history") ||
+            outer.expression.startsWith("type:builtin.in:history") || ".in:history" in outer.expression
+    val query = if (history) "history" else text.substring(outer.start + 2, caret).also {
+        if (it.any { char -> char.isWhitespace() || char == '{' || char == '}' }) return null
+    }
+    if (outer.closed || history) return MacroCompletionToken(outer.start, outer.endExclusive, query)
+    // The scanner owns an incomplete token through end-of-input for diagnostics. Completion of
+    // ordinary macros stops at the next whitespace or brace, so adjacent prose is never erased.
     var end = caret
     while (end < text.length && !text[end].isWhitespace() && text[end] != '{' && text[end] != '}') end++
-    // Consume an existing full or half-written closing delimiter only once.
     if (text.startsWith("}}", end)) end += 2
     else if (end < text.length && text[end] == '}') end++
-    return MacroCompletionToken(start, end, query)
+    return MacroCompletionToken(outer.start, end, query)
 }
 
 internal fun replaceMacroCompletion(

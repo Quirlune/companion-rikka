@@ -36,7 +36,8 @@ import kotlinx.serialization.Serializable
 }
 @Serializable data class HistorySelection(
     val viewId: String? = null, val revision: Int? = null, val range: HistoryRange = HistoryRange(),
-    val compressed: Boolean = false, val sourceKind: HistorySourceKind = HistorySourceKind.DISPLAY
+    val compressed: Boolean = false, val sourceKind: HistorySourceKind = HistorySourceKind.DISPLAY,
+    val format: HistoryReferenceFormat? = null, val rangeExplicit: Boolean = false
 )
 data class HistoryProjection(
     val messages: List<ChatMessage>, val issues: List<Issue> = emptyList(),

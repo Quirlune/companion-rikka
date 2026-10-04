@@ -36,8 +36,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import dev.gray.companion.core.HistorySelection
+import dev.gray.companion.core.HistoryViews
 import kotlin.math.max
 import kotlin.math.min
+
+private data class HistoryReferenceEdit(
+    val source: String, val start: Int, val end: Int, val selection: HistorySelection,
+    val soleStructuredBlock: Boolean,
+)
 
 private class MacroMenuPositionProvider(
     private val margin: Int,
@@ -77,6 +84,7 @@ internal fun PromptTemplateField(
     var focused by remember { mutableStateOf(false) }
     var explicitlyOpen by remember { mutableStateOf(false) }
     var browserOpen by remember { mutableStateOf(false) }
+    var historyEdit by remember { mutableStateOf<HistoryReferenceEdit?>(null) }
     var dismissedAt by remember { mutableStateOf<Pair<String, TextRange>?>(null) }
     var fieldBounds by remember { mutableStateOf(Rect.Zero) }
     val focusRequester = remember { FocusRequester() }
@@ -88,7 +96,8 @@ internal fun PromptTemplateField(
     val token = remember(draft.text, draft.selection) {
         macroCompletionToken(draft.text, draft.selection.start, draft.selection.end)
     }
-    val popupOpen = !browserOpen && (explicitlyOpen || (focused && token != null && dismissedAt != (draft.text to draft.selection)))
+    val popupOpen = !browserOpen && historyEdit == null &&
+        (explicitlyOpen || (focused && token != null && dismissedAt != (draft.text to draft.selection)))
     val visibleBottom = (windowSize.height - imeBottom - marginPx).coerceAtLeast(marginPx + 1)
     val availableHeight = max(
         fieldBounds.top - marginPx * 2,
@@ -120,6 +129,22 @@ internal fun PromptTemplateField(
         browserOpen = false
         dismissedAt = draft.text to draft.selection
         onChange(edited.text)
+    }
+    fun openHistory(reference: String? = null) {
+        val currentToken = macroCompletionToken(draft.text, draft.selection.start, draft.selection.end)
+        val currentExpression = currentToken?.let { draft.text.substring(it.start, it.end) }
+        val selection = reference?.let { runCatching { HistoryViews.selection(it) }.getOrNull() }
+            ?: currentExpression?.let { runCatching { HistoryViews.selection(it) }.getOrNull() } ?: HistorySelection(compressed = true)
+        val start = currentToken?.start ?: minOf(draft.selection.start, draft.selection.end).coerceIn(0, draft.text.length)
+        val end = currentToken?.end ?: maxOf(draft.selection.start, draft.selection.end).coerceIn(start, draft.text.length)
+        val sole = draft.text.substring(0, start).isBlank() && draft.text.substring(end).isBlank()
+        historyEdit = HistoryReferenceEdit(draft.text, start, end, selection, sole)
+        dismissCompletion()
+        browserOpen = false
+        keyboard?.hide()
+    }
+    fun choose(macro: String) {
+        if (runCatching { HistoryViews.selection(macro) }.getOrNull() != null) openHistory(macro) else insert(macro)
     }
     BackHandler(enabled = popupOpen) { dismissCompletion() }
     Box(Modifier.fillMaxWidth()) {
@@ -162,7 +187,8 @@ internal fun PromptTemplateField(
             ) {
                 MacroCompletionMenu(
                     references, token?.query.orEmpty(), popupWidth, popupHeight,
-                    onInsert = ::insert,
+                    onInsert = ::choose,
+                    onConfigureHistory = { openHistory() },
                     onOpenBrowser = {
                         dismissCompletion()
                         browserOpen = true
@@ -175,9 +201,28 @@ internal fun PromptTemplateField(
     if (browserOpen) {
         PromptReferenceSheet(
             references,
-            onInsert = { macro -> insert(macro); focusRequester.requestFocus(); keyboard?.show() },
+            onInsert = { macro ->
+                choose(macro)
+                if (historyEdit == null) { focusRequester.requestFocus(); keyboard?.show() }
+            },
             onDismiss = { browserOpen = false; focusRequester.requestFocus() },
             includeMacroHelp = true,
+            onConfigureHistory = { openHistory() },
         )
+    }
+    historyEdit?.let { edit ->
+        HistoryReferenceEditor(edit.selection, references, edit.soleStructuredBlock,
+            onSave = { expression ->
+                if (draft.text == edit.source) {
+                    val inserted = transformMacro(expression)
+                    val changed = edit.source.replaceRange(edit.start, edit.end, inserted)
+                    draft = TextFieldValue(changed, TextRange(edit.start + inserted.length))
+                    dismissedAt = draft.text to draft.selection
+                    onChange(changed)
+                }
+                historyEdit = null
+                focusRequester.requestFocus()
+            },
+            onDismiss = { historyEdit = null; focusRequester.requestFocus() })
     }
 }

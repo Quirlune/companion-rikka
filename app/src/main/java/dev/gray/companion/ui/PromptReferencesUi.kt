@@ -247,6 +247,7 @@ internal fun PromptReferenceSheet(
     onDismiss: () -> Unit,
     versioned: Boolean = true,
     includeMacroHelp: Boolean = false,
+    onConfigureHistory: (() -> Unit)? = null,
 ) {
     var search by remember { mutableStateOf("") }
     var versionMode by remember { mutableStateOf("latest") }
@@ -273,8 +274,11 @@ internal fun PromptReferenceSheet(
                     modifier = Modifier.fillMaxWidth(), singleLine = true, shape = MaterialTheme.shapes.large)
             }
             item { Text("目录包含当前聊天、编辑配置与可绑定的提示词包；未加载的资料会标明，本轮结果需成功完成后才能引用。", style = MaterialTheme.typography.bodySmall) }
-            if (choices.any { it.macro.startsWith("{{type:builtin.in:history.name:messages") || it.macro.startsWith("{{type:builtin.in:history.name:context") }) item {
-                HistoryReferenceComposer(choices, { onInsert(it); onDismiss() })
+            if (choices.any { it.macro.startsWith("{{type:builtin.in:history.name:messages") || it.macro.startsWith("{{type:builtin.in:history.name:context") }) {
+                onConfigureHistory?.let { configure -> item {
+                    TextButton(onClick = { onDismiss(); configure() }) { Text("历史上下文…") }
+                } }
+                item { HistoryReferenceComposer(choices, { onInsert(it); onDismiss() }) }
             }
             if (versioned) {
                 item {

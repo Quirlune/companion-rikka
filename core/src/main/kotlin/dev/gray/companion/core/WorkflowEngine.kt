@@ -41,7 +41,7 @@ class WorkflowEngine(
         decision: RecoveryDecision,
         onUpdate: suspend (RunUpdate) -> Unit = {}
     ): RunResult {
-        if (recovery.formatVersion != 1 || recovery.executionVersion !in 1..7)
+        if (recovery.formatVersion != 1 || recovery.executionVersion !in 1..8)
             return conflict(recovery, "恢复断点版本不受支持；已接受的数据可保留，请结束此断点后开始新一轮")
         if (decision.nodeKey !in recovery.failures.map { it.nodeKey } ||
             currentSession.pendingRun?.id != recovery.id ||
@@ -167,7 +167,7 @@ class WorkflowEngine(
         onUpdate: suspend (RunUpdate) -> Unit
     ): RunResult {
         val traces = mutableListOf<RunTrace>()
-        val executionVersion = previous?.executionVersion ?: 7
+        val executionVersion = previous?.executionVersion ?: 8
         val legacy = executionVersion == 1
         val updateMutex = Mutex()
         suspend fun trace(ref: PlannedNode?, status: String, detail: String) {
@@ -300,7 +300,7 @@ class WorkflowEngine(
         val recoveryBase = previous ?: RunRecovery(
             id = newId(), sessionId = session.id, turnId = currentUserMessageId.orEmpty(), input = input,
             checkpoint = MessageOperations.captureCheckpoint(session), initialSession = session.copy(pendingRun = null),
-            frozenResources = freezeResources(library, session), executionVersion = 7
+            frozenResources = freezeResources(library, session), executionVersion = 8
         )
         fun replayIncomplete(): Boolean = previous != null && !replayedOldKeys.containsAll(oldAcceptedKeys)
         fun recoverySnapshot(): RunRecovery = recoveryBase.copy(
