@@ -24,8 +24,8 @@ android {
         applicationId = "dev.gray.companion"
         minSdk = 26
         targetSdk = 37
-        versionCode = 193
-        versionName = "0.34-preview"
+        versionCode = 194
+        versionName = "0.35-preview"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

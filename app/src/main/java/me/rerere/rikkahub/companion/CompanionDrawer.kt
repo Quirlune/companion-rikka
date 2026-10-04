@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -60,6 +61,7 @@ fun CompanionDrawer(
     onCreateCharacter: () -> Unit,
     onEditCharacter: (String) -> Unit,
     onSettings: () -> Unit,
+    onMainCalls: () -> Unit,
     onUsage: () -> Unit,
     onEditUser: () -> Unit,
     onSaveChat: (String) -> Unit,
@@ -151,6 +153,13 @@ fun CompanionDrawer(
                 characterByUuid[assistant.id]?.let { onEditCharacter(it.id) }
             },
             onCreateAssistant = onCreateCharacter,
+            showLeadingIcon = false,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        NavigationDrawerItem(
+            label = { Text("主调用", maxLines = 1) },
+            onClick = onMainCalls,
+            selected = false,
             modifier = Modifier.fillMaxWidth(),
         )
         Row(

@@ -1,6 +1,16 @@
 # Companion architecture
 
-Active baseline: revision 34, 2026-10-04. Behavior-preserving maintainability work on frequently changed Companion modules. Preserve revision33 local History formatting, revision32 memory/source identity, complete branch/recovery worlds and original frontend defaults. Dynamic result-target migration remains unimplemented.
+Active baseline: revision 35, 2026-10-04. Native drawer and main-call navigation/layout changes. Preserve revision34 maintainability boundaries, revision33 History formatting, revision32 memory/source identity and complete branch/recovery worlds. Dynamic result-target migration remains unimplemented.
+
+## Revision 35 decisions
+
+- Drawer character row hides its leading smiley using an optional shared-picker flag, retaining original upstream default. Under it a main-call entry opens resource cards. Clicking a card updates only current session mainCallId/updatedAt through AppController's existing validation/admission; no fresh conversation or runtime/history clearing. A separate pencil edits the selected resource; current selection is visible and deletion/new-resource controls remain available.
+- Settings main-call entry opens the current session's main resource directly (first resource/new editor fallback without a current resource). Editor title name dropdown changes the edited resource only, retaining save/discard guards; adjacent pencil opens existing naming dialog. Optional shared title content leaves other editor defaults intact.
+- Remove main-call resource-info page entry and move other calls into its former position. Stored description stays intact. Preserve its default-workflow selector within other calls, including null legacy mode. Group info remains unchanged.
+- History configuration remains global fallback scope/roles/format/insertion settings; explicit per-occurrence History controls remain independent. Body display selects/fixes a template as the final per-round message body; ordinary display tiles are separate. Keep both pending user preference after explanation.
+- Resource wire10, SQLite1, recovery1 and execution8 remain. Ownership is in AGENTS revision35. One offline affected native assembly plus source review; no API, device installation, examples/reset, broad tests or claimed native visual acceptance.
+
+Revision35 acceptance: source diff/whitespace review passed; offline :app:assembleDebug succeeded in1m40s. APK0.35-preview/code194, dev.gray.companion, Android26+, arm64-v8a/x86_64 verifies APKv2 with the same existing certificate. SHA256 `1b327deac1bfaacad61dcdbf8e95b142cb0ae1540d94ead421b45286c6b050d1`. Delivery/evidence in2026-10-04 companion-continuation outputs/前端验收记录.json and work/frontend-v35-build.log. Compiler opt-in/deprecation/safe-call warnings retained. No unit tests, API, device install/start or visual/gesture acceptance; preview stays0.33.
 
 ## Revision 34 decisions
 

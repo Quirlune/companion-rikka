@@ -132,6 +132,7 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                             onCreateCharacter = { edit(Editing(EditorKind.CHARACTER, newId())) },
                             onEditCharacter = { id -> library.characters.firstOrNull { it.id == id }?.let { edit(Editing(EditorKind.CHARACTER, it.id)) } },
                             onSettings = { open(Screen.Setting) },
+                            onMainCalls = { open(Screen.CompanionResources(ResourceKind.MAIN.routeIndex)) },
                             onUsage = { usageDays = 7; open(Screen.CompanionUsage) },
                             onEditUser = { open(Screen.CompanionPersonas) },
                             onSaveChat = { saveSessionId = it },
@@ -181,7 +182,12 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                     }
                                 } }
                             }
-                            entry<Screen.Setting> { CompanionSettingsPage(onExport, onImport, library.configurationEdits.size) }
+                            entry<Screen.Setting> { CompanionSettingsPage(onExport, onImport, library.configurationEdits.size,
+                                onOpenMainCall = {
+                                    val activeId = library.sessions.firstOrNull { it.id == library.selectedSessionId }?.mainCallId
+                                    val main = library.mainCalls.firstOrNull { it.id == activeId } ?: library.mainCalls.firstOrNull()
+                                    edit(Editing(EditorKind.MAIN, main?.id ?: newId()))
+                                }) }
                             entry<Screen.CompanionImportHistory> {
                                 ConfigurationUndoPage(library.configurationEdits, importBusy,
                                     { receiptId ->
@@ -228,7 +234,16 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                     val kind = ResourceKind.fromRouteIndex(key.kind)
                                     SettingsHeader(kind?.title ?: "资源", { navigator.popBackStack() })
                                     if (kind != null) ResourceScreen(library, kind, ::edit, ::update, Modifier.weight(1f),
-                                        onManageTags = if (kind == ResourceKind.PACKAGE) ({ navigator.navigate(Screen.CompanionTags) }) else null)
+                                        onManageTags = if (kind == ResourceKind.PACKAGE) ({ navigator.navigate(Screen.CompanionTags) }) else null,
+                                        onSelectMainCall = if (kind == ResourceKind.MAIN) ({ id ->
+                                            val session = library.sessions.firstOrNull { it.id == library.selectedSessionId }
+                                            if (session == null) scope.launch { snackbar.showSnackbar("请先创建对话。") }
+                                            else if (session.mainCallId == id) navigator.popBackStack()
+                                            else save { current -> current.copy(sessions = current.sessions.map { latest ->
+                                                if (latest.id == session.id) latest.copy(mainCallId = id, updatedAt = System.currentTimeMillis()) else latest
+                                            }) }
+                                        }) else null,
+                                        selectionBusy = saving)
                                 }
                             }
                             entry<Screen.SettingProvider> {
@@ -359,13 +374,13 @@ private fun <T> List<T>.replaceOrAdd(value: T, id: (T) -> String): List<T> =
     if (any { id(it) == id(value) }) map { if (id(it) == id(value)) value else it } else this + value
 
 @Composable
-private fun CompanionSettingsPage(onExport: () -> Unit, onImport: () -> Unit, undoCount: Int) {
+private fun CompanionSettingsPage(onExport: () -> Unit, onImport: () -> Unit, undoCount: Int, onOpenMainCall: () -> Unit) {
     val navigator = LocalNavController.current
     SettingPageLayout {
             item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("运行方案") }) {
                 item(onClick = { navigator.navigate(Screen.CompanionSession) }, headlineContent = { Text("当前对话配置") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionPromptPreview) }, headlineContent = { Text("提示词预览") }, leadingContent = { Icon(HugeIcons.Search01, null) })
-                item(onClick = { navigator.navigate(Screen.CompanionResources(ResourceKind.MAIN.routeIndex)) }, headlineContent = { Text("主调用") }, leadingContent = { Icon(HugeIcons.Brain02, null) })
+                item(onClick = onOpenMainCall, headlineContent = { Text("主调用") }, leadingContent = { Icon(HugeIcons.Brain02, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionResources(ResourceKind.PACKAGE.routeIndex)) }, headlineContent = { Text("提示词包") }, leadingContent = { Icon(HugeIcons.Book03, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionResources(ResourceKind.GROUP.routeIndex)) }, headlineContent = { Text("调用组") }, leadingContent = { Icon(HugeIcons.Package, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionMemory) }, headlineContent = { Text("记忆") }, leadingContent = { Icon(HugeIcons.Brain02, null) })

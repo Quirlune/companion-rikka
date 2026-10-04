@@ -139,7 +139,8 @@ internal fun MacroHelp(onInsert: (String) -> Unit) {
 }
 
 @Composable
-internal fun EditorPage(title: String, onBack: () -> Unit, onSave: () -> Unit, dirty: Boolean = false, saving: Boolean = false, contentSpacing: Dp = 16.dp, content: @Composable ColumnScope.() -> Unit) {
+internal fun EditorPage(title: String, onBack: () -> Unit, onSave: () -> Unit, dirty: Boolean = false, saving: Boolean = false, contentSpacing: Dp = 16.dp,
+    titleContent: (@Composable () -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     var confirmBack by remember { mutableStateOf(false) }
     val focus = LocalFocusManager.current
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -149,7 +150,7 @@ internal fun EditorPage(title: String, onBack: () -> Unit, onSave: () -> Unit, d
     Scaffold(
         topBar = {
             LargeFlexibleTopAppBar(
-                title = { Text(title, maxLines = 1) },
+                title = { if (titleContent != null) titleContent() else Text(title, maxLines = 1) },
                 navigationIcon = { CompanionBackButton(onClick = ::requestBack, enabled = !saving) },
                 actions = {
                     if (dirty && !saving) Text("未保存", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

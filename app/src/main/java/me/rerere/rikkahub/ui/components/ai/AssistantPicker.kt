@@ -80,14 +80,15 @@ fun AssistantPickerDisplay(
     modifier: Modifier = Modifier,
     onEditSheetAssistant: ((Assistant) -> Unit)? = null,
     onCreateAssistant: (() -> Unit)? = null,
+    showLeadingIcon: Boolean = true,
 ) {
     val defaultAssistantName = stringResource(R.string.assistant_page_default_assistant)
     var showPicker by remember { mutableStateOf(false) }
 
     NavigationDrawerItem(
-        icon = {
+        icon = if (showLeadingIcon) ({
             Icon(HugeIcons.LookTop, contentDescription = null)
-        },
+        }) else null,
         label = {
             Row(
                 verticalAlignment = Alignment.CenterVertically,

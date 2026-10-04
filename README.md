@@ -14,7 +14,7 @@ History exposes archived model body and final display body as separate projectio
 
 Configuration JSON packages support resource imports and declarative edits/bindings with preview, atomic application and conflict-aware undo. Multiple authored openings use the native message variant arrows. Optional reasoning-tag parsing excludes reasoning from both body History sources while retaining its own archive; streamed regex output receives final correction.
 
-Current delivery: **0.34-preview**, architecture revision34, resource wire10 (reads1–10), new execution8 (old journals1–7 retain their accepted semantics), SQLite schema1 and recovery format1. The maintainability refactor centralizes compatibility policies/runtime transfers and separates model candidates, import preparation and resource-edit rules from orchestration. This is a development project. Real provider behavior, broad device adaptation and runtime plugin installation are not claimed as complete.
+Current delivery: **0.35-preview**, architecture revision35, resource wire10 (reads1–10), new execution8 (old journals1–7 retain their accepted semantics), SQLite schema1 and recovery format1. The maintainability refactor centralizes compatibility policies/runtime transfers and separates model candidates, import preparation and resource-edit rules from orchestration. This is a development project. Real provider behavior, broad device adaptation and runtime plugin installation are not claimed as complete.
 
 ## Source and architecture
 

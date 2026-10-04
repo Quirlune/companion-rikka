@@ -31,13 +31,14 @@ internal fun DraftLeaveDialog(onCancel: () -> Unit, onSave: () -> Unit, onDiscar
 internal fun CallEditorPage(
     title: String, dirty: Boolean, onBack: () -> Unit, onSave: () -> Unit, saving: Boolean = false,
     onRegisterBack: ((() -> Unit) -> Unit)? = null,
+    titleContent: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     var confirmBack by remember { mutableStateOf(false) }
     fun requestBack() { if (!saving) { if (dirty) confirmBack = true else onBack() } }
     SideEffect { onRegisterBack?.invoke(::requestBack) }
     // EditorPage retains the original native scaffold and input blocking during saves.
-    EditorPage(title, ::requestBack, onSave, saving = saving, contentSpacing = 8.dp) {
+    EditorPage(title, ::requestBack, onSave, saving = saving, contentSpacing = 8.dp, titleContent = titleContent) {
         if (dirty) Text("未保存", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         content()
     }
@@ -66,8 +67,10 @@ internal fun CallListEditor(
     title: String, workflows: List<Workflow>, onBack: () -> Unit,
     onOpen: (String) -> Unit, onAdd: () -> Unit, onToggle: (Workflow, Boolean) -> Unit,
     onRegisterBack: ((() -> Unit) -> Unit)? = null,
+    leadingContent: @Composable ColumnScope.() -> Unit = {},
 ) {
     CallEditorPage(title, false, onBack, onBack, onRegisterBack = onRegisterBack) {
+        leadingContent()
         TextButton(onClick = onAdd) { Icon(HugeIcons.Add01, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("添加调用") }
         val sorted = workflows.sortedBy { !it.enabled }
         if (sorted.isEmpty()) Text("暂无其他调用", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

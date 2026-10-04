@@ -2,6 +2,8 @@
 
 Baseline: revision34, 2026-10-04. Status: implemented and accepted with targeted offline checks and native assembly.
 
+Revision35 UI extension: ResourceScreen exposes optional main-card selection while keeping ordinary edit behavior for other resources. OriginalFrontendHost owns actual session selection and direct settings navigation; editor name switching is a separate resource-edit concern. Shared AssistantPickerDisplay and EditorPage extend via optional icon/title parameters with original defaults. The core and controller remain unchanged. Active UI decisions are in ARCHITECTURE revision35.
+
 ## Authorized scope and invariant
 
 Improve frequently changed Companion modules so small changes have fewer independent integration points. Preserve original frontend defaults, all accepted chats/branches/checkpoints, History authors versus outgoing roles, per-reference formatting isolation, and executions1–8. Resource wire10, SQLite1 and recovery format1 stay unchanged. This is a behavior-preserving refactor, not new runtime functionality or data migration. Stable unrelated upstream/provider/import/media modules remain out of scope unless a concrete integration requires them.

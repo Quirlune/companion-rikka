@@ -5,15 +5,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import dev.gray.companion.core.*
 import kotlinx.serialization.Serializable
 import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.ArrowDown01
 import me.rerere.hugeicons.stroke.PencilEdit01
 import me.rerere.rikkahub.RikkaNavDisplay
-import me.rerere.rikkahub.ui.components.ui.Select
 
 @Serializable
 private sealed interface CallEditorRoute : NavKey {
@@ -60,6 +61,7 @@ internal fun MainCallEditor(
     var promptRequest by remember(initial.id) { mutableStateOf<PromptEditRequest?>(null) }
     val callDrafts = remember(initial.id) { mutableStateMapOf<String, CallDetailDraft>() }
     var rename by remember(initial.id) { mutableStateOf(false) }
+    var switchMenuOpen by remember(initial.id) { mutableStateOf(false) }
     var pendingSwitch by remember(initial.id) { mutableStateOf<PendingMainSwitch?>(null) }
     fun pop() { if (stack.size > 1) stack.removeAt(stack.lastIndex) else onBack() }
     fun open(route: CallEditorRoute) { stack.add(route) }
@@ -91,15 +93,33 @@ internal fun MainCallEditor(
     val default = item.workflows.firstOrNull { it.id == item.primaryWorkflowId } ?: item.workflows.firstOrNull()
     RikkaNavDisplay(stack, { backs[stack.last()]?.invoke() ?: pop() }, entryProvider {
         entry<CallEditorRoute.Home> { route ->
-            CallEditorPage("主调用", item != baseline, onBack, { onSave(item.copy(name = item.name.trim())) }, saving, { backs[route] = it }) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    if (onSwitchResource != null) {
-                        val resources = (library?.mainCalls.orEmpty() + item).distinctBy { it.id }.map { it.id to (if (it.id == item.id) item.name else it.name).ifBlank { "未命名主调用" } }
-                        val options = resources.map { (id, name) -> (id as String?) to name } + listOf(null to "新建主调用…")
-                        Select(options, options.first { it.first == item.id }, { requestSwitch(it.first) }, modifier = Modifier.weight(1f), optionToString = { it.second })
-                    } else Text(item.name.ifBlank { "未命名主调用" }, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-                    IconButton(onClick = { rename = true }, enabled = !saving) { Icon(HugeIcons.PencilEdit01, "重命名主调用") }
-                }
+            CallEditorPage("主调用", item != baseline, onBack, { onSave(item.copy(name = item.name.trim())) }, saving, { backs[route] = it },
+                titleContent = {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        if (onSwitchResource != null && !saving) {
+                            val resources = (library?.mainCalls.orEmpty() + item).distinctBy { it.id }
+                                .map { it.id to (if (it.id == item.id) item.name else it.name).ifBlank { "未命名主调用" } }
+                            val options = resources.map { (id, name) -> (id as String?) to name } + listOf(null to "新建主调用…")
+                            Box(Modifier.weight(1f, fill = false)) {
+                                TextButton(onClick = { switchMenuOpen = true }, contentPadding = PaddingValues(horizontal = 4.dp)) {
+                                    Text(item.name.ifBlank { "未命名主调用" }, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false))
+                                    Icon(HugeIcons.ArrowDown01, null, Modifier.size(16.dp))
+                                }
+                                DropdownMenu(expanded = switchMenuOpen, onDismissRequest = { switchMenuOpen = false }) {
+                                    options.forEach { (id, name) -> DropdownMenuItem(text = { Text(name, maxLines = 1) }, onClick = {
+                                        switchMenuOpen = false
+                                        requestSwitch(id)
+                                    }) }
+                                }
+                            }
+                        } else Text(item.name.ifBlank { "未命名主调用" }, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false))
+                        IconButton(onClick = { rename = true }, enabled = !saving) {
+                            Icon(HugeIcons.PencilEdit01, "重命名主调用", Modifier.size(20.dp))
+                        }
+                    }
+                }) {
                 if (default != null) {
                     CallModelChoice(default.modelProfileId, profiles) { updateWorkflow(default.copy(modelProfileId = it)) }
                     val modelNodes = default.nodes.filter { node -> actions.firstOrNull { it.id == node.actionId }?.usesModel == true }
@@ -129,7 +149,6 @@ internal fun MainCallEditor(
                         nodes = listOf(WorkflowNode(outputKey = key, slug = key, visible = true, recordTrajectory = false)))
                     item = item.copy(workflows = item.workflows + workflow, primaryWorkflowId = workflow.id)
                 }) { Text("添加默认调用") }
-                EditorDestinationRow("其他调用", "${item.workflows.count { it.id != default?.id }} 项") { open(CallEditorRoute.Calls) }
                 HorizontalDivider()
                 EditorDestinationRow("正文显示", item.bodySourceTileId?.let { selected ->
                     (item.tiles + library?.groups.orEmpty().flatMap { it.tiles }).firstOrNull { it.id == selected }?.title ?: "所选模板已不可用"
@@ -137,12 +156,21 @@ internal fun MainCallEditor(
                 EditorDestinationRow("历史配置", "范围、角色、包装与插入项") { open(CallEditorRoute.History) }
                 EditorDestinationRow("关联资源", "${item.boundPackageIds.size} 个提示词包 · ${item.boundGroupIds.size} 个调用组") { open(CallEditorRoute.Bindings) }
                 HorizontalDivider()
-                EditorDestinationRow("资源信息", item.description.lineSequence().firstOrNull()?.take(48)?.takeIf { it.isNotBlank() }) { open(CallEditorRoute.Info) }
+                EditorDestinationRow("其他调用", "${item.workflows.count { it.id != default?.id }} 项") { open(CallEditorRoute.Calls) }
             }
         }
         entry<CallEditorRoute.Calls> { route ->
             CallListEditor("其他调用", item.workflows.filterNot { it.id == default?.id }, ::pop, { id -> item.workflows.firstOrNull { it.id == id }?.let(::openDetails) }, ::addCall,
-                { workflow, enabled -> updateWorkflow(workflow.copy(enabled = enabled)) }, { backs[route] = it })
+                { workflow, enabled -> updateWorkflow(workflow.copy(enabled = enabled)) }, { backs[route] = it }, leadingContent = {
+                    ChoiceLine("默认调用", item.primaryWorkflowId,
+                        listOf<Pair<String?, String>>(null to "保留旧配置的显示方式") +
+                            item.workflows.map { it.id to it.title.ifBlank { "未命名调用" } }) {
+                        item = item.copy(primaryWorkflowId = it)
+                    }
+                    if (item.primaryWorkflowId == null) Text("此资源保留旧配置；首页展示第一项调用，原节点和输出设置保持原样。",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    HorizontalDivider()
+                })
         }
         entry<CallEditorRoute.Details> { route ->
             callDrafts[route.id]?.let { draft ->
@@ -214,18 +242,6 @@ internal fun MainCallEditor(
                 Text("调用组", style = MaterialTheme.typography.titleSmall)
                 ResourceBindingList(library?.groups.orEmpty().map { it.id to it.name.ifBlank { "未命名调用组" } }, groups) { groups = it }
                 Text("关联资源随主调用加载；提示词包通过宏引用参与提示词。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        entry<CallEditorRoute.Info> { route ->
-            val baseline = remember { item }
-            var description by remember { mutableStateOf(item.description) }
-            var primary by remember { mutableStateOf(item.primaryWorkflowId) }
-            CallEditorPage("资源信息", description != baseline.description || primary != baseline.primaryWorkflowId, ::pop,
-                { item = item.copy(description = description, primaryWorkflowId = primary); pop() }, onRegisterBack = { backs[route] = it }) {
-                TextFieldLine("说明", description, { description = it }, minLines = 3)
-                HorizontalDivider()
-                ChoiceLine("默认调用", primary, listOf<Pair<String?, String>>(null to "保留旧配置的显示方式") + item.workflows.map { it.id to it.title.ifBlank { "未命名调用" } }) { primary = it }
-                if (primary == null) Text("此资源保留旧配置；首页展示第一项调用，原节点和输出设置保持原样。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     })

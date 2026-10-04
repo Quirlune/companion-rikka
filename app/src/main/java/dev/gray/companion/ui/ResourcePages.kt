@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.dp
 import dev.gray.companion.core.*
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.MoreVertical
+import me.rerere.hugeicons.stroke.PencilEdit01
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 
 private data class ResourceRow(
@@ -69,7 +70,11 @@ internal fun ResourceScreen(
     onUpdate: ((Library) -> Library) -> Unit,
     modifier: Modifier,
     onManageTags: (() -> Unit)? = null,
+    onSelectMainCall: ((String) -> Unit)? = null,
+    selectionBusy: Boolean = false,
 ) {
+    val activeMainId = library.sessions.firstOrNull { it.id == library.selectedSessionId }?.mainCallId
+    val selectingMain = selected == ResourceKind.MAIN && onSelectMainCall != null
     val associationCounts = remember(library) { library.resourceAssociationCounts() }
     val rows = remember(library, selected, associationCounts) {
         when (selected) {
@@ -133,7 +138,7 @@ internal fun ResourceScreen(
             item {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("${rows.size} 项", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                    Button(onClick = { onEdit(newResource(selected)) }) { Text("新建${selected.title}") }
+                    Button(onClick = { onEdit(newResource(selected)) }, enabled = !selectionBusy) { Text("新建${selected.title}") }
                 }
             }
             item {
@@ -159,15 +164,28 @@ internal fun ResourceScreen(
                 items(filtered, key = { it.id }) { row ->
                     CardGroup {
                         item(
-                            onClick = { onEdit(Editing(selected.editor, row.id)) },
+                            onClick = {
+                                if (!selectionBusy) {
+                                    if (selectingMain) onSelectMainCall?.invoke(row.id)
+                                    else onEdit(Editing(selected.editor, row.id))
+                                }
+                            },
                             headlineContent = {
                                 Text(row.name.ifBlank { "未命名" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             },
                             supportingContent = {
-                                Text(row.supportingText, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Column {
+                                    if (selectingMain && row.id == activeMainId) Text("当前使用", color = MaterialTheme.colorScheme.primary)
+                                    Text(row.supportingText, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                }
                             },
                             trailingContent = {
-                                ResourceRowMenu(onDelete = { pendingDelete = row })
+                                Row {
+                                    if (selectingMain) IconButton(onClick = { onEdit(Editing(selected.editor, row.id)) }, enabled = !selectionBusy) {
+                                        Icon(HugeIcons.PencilEdit01, contentDescription = "编辑${row.name.ifBlank { "主调用" }}")
+                                    }
+                                    ResourceRowMenu(onDelete = { pendingDelete = row }, enabled = !selectionBusy)
+                                }
                             },
                         )
                     }
@@ -201,10 +219,10 @@ internal fun ResourceScreen(
 }
 
 @Composable
-private fun ResourceRowMenu(onDelete: () -> Unit) {
+private fun ResourceRowMenu(onDelete: () -> Unit, enabled: Boolean = true) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        IconButton(onClick = { expanded = true }) {
+        IconButton(onClick = { expanded = true }, enabled = enabled) {
             Icon(HugeIcons.MoreVertical, contentDescription = "更多操作")
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
