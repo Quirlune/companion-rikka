@@ -5,7 +5,7 @@ import javax.xml.XMLConstants
 import javax.xml.parsers.DocumentBuilderFactory
 import org.xml.sax.InputSource
 
-internal fun isStructuredHistoryBlock(template: String, executionVersion: Int = 8): Boolean {
+internal fun isStructuredHistoryBlock(template: String, executionVersion: Int = ExecutionSemantics.CURRENT): Boolean {
     val text = template.trim()
     val scan = MacroTemplateTokens.scan(text, executionVersion)
     val token = scan.tokens.singleOrNull() ?: return false
@@ -13,7 +13,7 @@ internal fun isStructuredHistoryBlock(template: String, executionVersion: Int = 
         token.expression.trim() !in setOf("history.raw", "history.text") &&
         HistoryViews.selection(token.expression, executionVersion) != null
 }
-internal fun containsStructuredHistoryToken(template: String, executionVersion: Int = 8): Boolean =
+internal fun containsStructuredHistoryToken(template: String, executionVersion: Int = ExecutionSemantics.CURRENT): Boolean =
     MacroTemplateTokens.scan(template, executionVersion).tokens.any { it.closed && it.expression.trim() == "history" }
 
 internal class LoadedResources(
@@ -44,7 +44,7 @@ internal fun loadedResources(
     issues: MutableList<Issue>? = null,
     resultOrigins: Map<String, ResultOrigin> = session.resultOrigins,
     historyContext: HistoryContext? = null,
-    executionVersion: Int = 8
+    executionVersion: Int = ExecutionSemantics.CURRENT
 ): LoadedResources {
     val view = MacroReadView(library, session)
     val character = view.character
@@ -140,8 +140,9 @@ internal class TemplateRenderer(
     private val resultOrigins: Map<String, ResultOrigin> = emptyMap(),
     session: Session? = null,
     historyContext: HistoryContext? = null,
-    private val executionVersion: Int = 8
+    private val executionVersion: Int = ExecutionSemantics.CURRENT
 ) {
+    private val semantics = ExecutionSemantics(executionVersion)
     private val currentSession = session ?: resources.macroView.session
     private val macroView = session?.takeUnless { it === resources.macroView.session }?.let {
         MacroReadView(resources.macroView.library, it)
@@ -173,11 +174,11 @@ internal class TemplateRenderer(
             hadReference = true
             val expression = token.expression.trim()
             val value = resolve(expression, path)
-            if (if (executionVersion >= 7) value.isNotBlank() else value.isNotEmpty()) hadValue = true
+            if (if (semantics.omitEmptyReferencesBeforeProcessing) value.isNotBlank() else value.isNotEmpty()) hadValue = true
             value
         }
         return if (hideWhenAllReferencesEmpty && hadReference && !hadValue) {
-            if (executionVersion >= 7) null else ""
+            if (semantics.omitEmptyReferencesBeforeProcessing) null else ""
         } else rendered
     }
 
@@ -185,17 +186,17 @@ internal class TemplateRenderer(
         if (Regex("^[a-zA-Z_][a-zA-Z0-9_-]*\\s*:").containsMatchIn(expression)) {
             val compiled = PromptReferenceLanguage.compile(expression)
             val plan = compiled.reference as? PromptReferenceLanguage.QueryPlan
-            val selection = plan?.historySelection?.let { if (executionVersion < 8) it.copy(rangeExplicit = false) else it }
-            if (executionVersion < 5 && compiled.fields.any { it.name == "source" }) {
+            val selection = plan?.historySelection?.let { if (!semantics.explicitHistoryRanges) it.copy(rangeExplicit = false) else it }
+            if (!semantics.historySources && compiled.fields.any { it.name == "source" }) {
                 issues += Issue(path, "此恢复版本不支持 History 来源选择")
                 return ""
             }
-            if (executionVersion < 8 && compiled.fields.any { it.name == "format" }) {
+            if (!semantics.localHistoryFormats && compiled.fields.any { it.name == "format" }) {
                 issues += Issue(path, "此恢复版本不支持 History 局部格式")
                 return ""
             }
             if (selection == null) {
-                if (plan == null || executionVersion < 5) {
+                if (plan == null || !semantics.staticResourceQueries) {
                     issues += Issue(path, compiled.diagnostics.firstOrNull()?.message ?: "此来源的新式引用尚未绑定运行时")
                     return ""
                 }
@@ -214,7 +215,7 @@ internal class TemplateRenderer(
         val selector = expression.substringAfter('#', "")
         if (base == "history" || base.startsWith("history.")) {
             if (base in setOf("history.display.summary", "history.model.summary")) {
-                if (executionVersion < 5 || '@' in tagged || '#' in expression) {
+                if (!semantics.historySources || '@' in tagged || '#' in expression) {
                     issues += Issue(path, "此 History 摘要来源引用不受支持：$expression")
                     return ""
                 }
@@ -414,8 +415,9 @@ class PromptCompiler {
         resultOrigins: Map<String, ResultOrigin> = session.resultOrigins,
         historyContext: HistoryContext? = null,
         preprocessedInput: String? = null,
-        executionVersion: Int = 8
+        executionVersion: Int = ExecutionSemantics.CURRENT
     ): PromptPreview {
+        val semantics = ExecutionSemantics(executionVersion)
         val issues = mutableListOf<Issue>()
         val main = library.mainCalls.firstOrNull { it.id == session.mainCallId }
         val capturedHistory = historyContext ?: main?.let { HistoryContext(library, session, it, executionVersion = executionVersion) }
@@ -434,7 +436,7 @@ class PromptCompiler {
             ""
         }
         val processingHistory = capturedHistory?.isProcessing == true
-        val replacesCurrentInput = !processingHistory && (executionVersion < 7 ||
+        val replacesCurrentInput = !processingHistory && (!semantics.preserveInputWithoutTemplate ||
             node.inputTemplate.isNotBlank() || node.inputProcessing.isNotEmpty())
         val originalHistory = if (processingHistory) capturedHistory.pendingCandidate()?.messages.orEmpty()
             else session.messages.filter { it.outputSlot == OutputSlot.BODY && !it.deleted }
@@ -471,7 +473,7 @@ class PromptCompiler {
                         blockRenderer.render(it, "history.insertion")
                     }
                 issues += projection.issues.map { it.copy(path = "node.${node.id}.block.${block.id}") }
-                if (executionVersion >= 7 && block.hideWhenReferencesEmpty &&
+                if (semantics.omitEmptyReferencesBeforeProcessing && block.hideWhenReferencesEmpty &&
                     projection.messages.none { it.text.isNotBlank() }) null else block.id to projection
             }.toMap()
         val hasStructuredBlock = structured.isNotEmpty()
@@ -480,7 +482,7 @@ class PromptCompiler {
             formedContext?.projected { blockRenderer.render(it, "history.insertion") } ?: transformedHistory else emptyList()
         val implicitHistory = projectedHistory
         val historyContainsCurrent = if (usesStructuredHistory) {
-            if (executionVersion >= 5) structured.values.any { currentUserMessageId in it.sourceIds }
+            if (semantics.historySources) structured.values.any { currentUserMessageId in it.sourceIds }
             else structured.values.flatMap { it.messages }.any { it.id == currentUserMessageId }
         }
             else formedContext?.containsMessage(currentUserMessageId) ?: (currentIndex >= 0)

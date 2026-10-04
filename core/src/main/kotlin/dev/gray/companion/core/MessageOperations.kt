@@ -108,10 +108,7 @@ object MessageOperations {
             regenerateReason, forkReason)
     }
 
-    fun captureRuntime(session: Session): RuntimeSnapshot = RuntimeSnapshot(
-        session.state, session.results, session.resultOrigins, session.promptInjections, session.historyDigests,
-        session.unavailableResultKeys, session.historyMemory, session.currentOnlyMacros
-    )
+    fun captureRuntime(session: Session): RuntimeSnapshot = session.runtimeSnapshot()
 
     fun captureCheckpoint(session: Session): TurnCheckpoint = TurnCheckpoint(
         captureRuntime(session), session.macroHistory.mapValues { it.value.size }
@@ -469,10 +466,7 @@ object MessageOperations {
             if (values.size > count) suffix[address] = values.drop(count)
         }
         if (checkpoint.macroLengths.any { (address, count) -> result.macroHistory[address].orEmpty().size < count }) return null
-        return TurnVariant(replies = result.replies, after = RuntimeSnapshot(
-            result.state, result.results, result.resultOrigins, result.promptInjections, result.historyDigests,
-            result.unavailableResultKeys, result.historyMemory, result.currentOnlyMacros
-        ), macroAppends = suffix)
+        return TurnVariant(replies = result.replies, after = result.runtimeSnapshot(), macroAppends = suffix)
     }
 
     private fun macroPrefix(history: Map<String, List<MacroVersion>>, lengths: Map<String, Int>): Map<String, List<MacroVersion>>? {
@@ -483,19 +477,10 @@ object MessageOperations {
     private fun mergeMacros(prefix: Map<String, List<MacroVersion>>, appends: Map<String, List<MacroVersion>>): Map<String, List<MacroVersion>> =
         (prefix.keys + appends.keys).associateWith { address -> prefix[address].orEmpty() + appends[address].orEmpty() }
 
-    private fun materialize(session: Session, result: RunResult): Session = session.copy(
-        state = result.state, results = result.results, resultOrigins = result.resultOrigins,
-        macroHistory = result.macroHistory, promptInjections = result.promptInjections,
-        historyDigests = result.historyDigests, unavailableResultKeys = result.unavailableResultKeys,
-        historyMemory = result.historyMemory, currentOnlyMacros = result.currentOnlyMacros
-    )
+    private fun materialize(session: Session, result: RunResult): Session =
+        session.withRuntime(result.runtimeSnapshot()).copy(macroHistory = result.macroHistory)
 
-    private fun restore(session: Session, runtime: RuntimeSnapshot): Session = session.copy(
-        state = runtime.state, results = runtime.results, resultOrigins = runtime.resultOrigins,
-        promptInjections = runtime.promptInjections, historyDigests = runtime.historyDigests,
-        unavailableResultKeys = runtime.unavailableResultKeys, historyMemory = runtime.historyMemory,
-        currentOnlyMacros = runtime.currentOnlyMacros
-    )
+    private fun restore(session: Session, runtime: RuntimeSnapshot): Session = session.withRuntime(runtime)
 
     private fun unavailable(path: String, message: String) = MessageOperationResult(issues = listOf(Issue(path, message)))
 }

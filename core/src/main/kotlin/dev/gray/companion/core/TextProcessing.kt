@@ -76,7 +76,7 @@ internal fun WorkflowNode.declaredOutputAddresses(descriptor: ActionDescriptor?)
 /** Pure ordered text operations. Errors reject this node; previously accepted receipts remain. */
 object TextProcessing {
     private const val MAX_OUTPUT_LENGTH = 1_000_000
-    fun validate(steps: List<TextProcessStep>, path: String, executionVersion: Int = 8): List<Issue> = buildList {
+    fun validate(steps: List<TextProcessStep>, path: String, executionVersion: Int = ExecutionSemantics.CURRENT): List<Issue> = buildList {
         if (steps.size > 64) add(Issue(path, "文本处理步骤过多"))
         steps.forEachIndexed { index, step ->
             val at = "$path.$index"
@@ -108,7 +108,7 @@ object TextProcessing {
     }
 
     fun apply(steps: List<TextProcessStep>, source: String, state: Map<String, String> = emptyMap(),
-              results: Map<String, String> = emptyMap(), executionVersion: Int = 8, readMacro: ((String) -> String?)? = null): String {
+              results: Map<String, String> = emptyMap(), executionVersion: Int = ExecutionSemantics.CURRENT, readMacro: ((String) -> String?)? = null): String {
         require(steps.size <= 64) { "文本处理步骤过多" }
         var value = source
         for (step in steps) {

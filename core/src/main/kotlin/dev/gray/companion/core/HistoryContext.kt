@@ -12,7 +12,7 @@ class HistoryContext(
     private val legacyProcessing: Boolean = false,
     private val floorNumbers: Map<String, Int> = emptyMap(),
     private val projectionSegments: List<HistoryMemorySegment>? = null,
-    val executionVersion: Int = 8,
+    val executionVersion: Int = ExecutionSemantics.CURRENT,
     private val projectionVersion: Int? = null
 ) {
     data class Pending(
@@ -22,9 +22,10 @@ class HistoryContext(
         val sourceKind: HistorySourceKind = HistorySourceKind.DISPLAY
     )
 
+    private val semantics = ExecutionSemantics(executionVersion)
     private val mutableIssues = mutableListOf<Issue>()
     val issues: List<Issue> get() = mutableIssues.toList()
-    private val sourceKind = if (executionVersion >= 5 && processing) capturedPending?.sourceKind ?: HistorySourceKind.DISPLAY
+    private val sourceKind = if (semantics.historySources && processing) capturedPending?.sourceKind ?: HistorySourceKind.DISPLAY
         else HistorySourceKind.DISPLAY
     val isProcessing: Boolean get() = processing
     private val floors = if (processing && capturedPending != null) capturedPending.messages
@@ -41,13 +42,13 @@ class HistoryContext(
         if (sourceKind == HistorySourceKind.MODEL_RAW && it.role == Role.ASSISTANT && !it.authoredOpening && it.rawText == null) null
         else HistoryMemory.source(it, sourceKind)
     }
-    private val hierarchy = HistoryHierarchy(allSegments, archiveSources, ordered = executionVersion >= 7)
+    private val hierarchy = HistoryHierarchy(allSegments, archiveSources, ordered = semantics.hierarchicalMemory)
     private val validSegments = if (legacyProcessing || (session.historyMemory.segments.isEmpty() && digest == null))
         emptyList() else hierarchy.validSegments().values.toList()
-    private val segments = if (executionVersion >= 7) hierarchy.roots(validSegments.filter {
+    private val segments = if (semantics.hierarchicalMemory) hierarchy.roots(validSegments.filter {
         hierarchy.belongsToFamily(it.id, main.history.processor.workflow.id)
     }) else validSegments.filter { it.workflowId == main.history.processor.workflow.id }
-    private val orderedProjection = (projectionVersion ?: if (executionVersion >= 7) 2 else 1) >= 2
+    private val orderedProjection = (projectionVersion ?: if (semantics.hierarchicalMemory) 2 else 1) >= 2
     private val pending = capturedPending ?: candidate()
     private val speakerRules = main.history.speakers.associateBy { it.speaker }
     private val floorRules = main.history.floors.associateBy { it.messageId }
@@ -150,14 +151,14 @@ class HistoryContext(
         if (!config.workflow.enabled || processing || floors.isEmpty()) return null
         val currentUser = floors.indexOfLast { it.role == Role.USER && it.id == MacroReferences.currentTurnId(session) }
         if (currentUser < 0) return null
-        if (executionVersion >= 7 && config.thresholdBasis == HistoryThresholdBasis.UNCOMPRESSED_FLOORS)
+        if (semantics.hierarchicalMemory && config.thresholdBasis == HistoryThresholdBasis.UNCOMPRESSED_FLOORS)
             return uncompressedCandidate(currentUser)
         val eligible = floors.subList(0, currentUser)
         var cutoff = (eligible.size - config.keepRecentFloors).coerceAtLeast(0)
         if (cutoff < eligible.size && cutoff > 0 && eligible[cutoff].role != Role.USER) {
             cutoff = (cutoff downTo 0).firstOrNull { eligible[it].role == Role.USER } ?: 0
         }
-        if (executionVersion >= 5) return unmarkedCandidate(eligible, cutoff)
+        if (semantics.allValidSummaryMarks) return unmarkedCandidate(eligible, cutoff)
         val covered = digest?.coveredFloors ?: 0
         if (!legacyProcessing) {
             val coveredIds = segments.flatMapTo(mutableSetOf()) { it.sources.map { source -> source.messageId } }

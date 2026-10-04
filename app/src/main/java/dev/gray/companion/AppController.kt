@@ -22,8 +22,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import java.util.Locale
 import me.rerere.rikkahub.ui.hooks.readBooleanPreference
 
@@ -90,15 +88,7 @@ class AppController internal constructor(
     private var lastRetry: Pair<String, String>? = null // session ID to input
     @Volatile private var storageReady = false
     private var editingCount = 0
-    private sealed interface ImportDraft {
-        val id: String
-        val warnings: List<Issue>
-        data class Configuration(override val id: String, val plan: ConfigurationPlan,
-            override val warnings: List<Issue>) : ImportDraft
-        data class Legacy(override val id: String, val imported: Library, val selectSession: Boolean,
-            override val warnings: List<Issue>) : ImportDraft
-    }
-    private var importDraft: ImportDraft? = null
+    private var importDraft: ConfigurationImportDraft? = null
     private data class ImportPreparation(val id: String?, val issues: List<Issue>)
     private val _configurationImport = MutableStateFlow<ConfigurationImportPreview?>(null)
     val configurationImport: StateFlow<ConfigurationImportPreview?> = _configurationImport.asStateFlow()
@@ -170,36 +160,15 @@ class AppController internal constructor(
             if (!storageReady) return@withLock listOf(Issue("library", "资源库尚未就绪；不会覆盖原数据"))
             val before = _library.value
             val edited = try { transform(before) } catch (_: Exception) { return@withLock listOf(Issue("library", "编辑操作失败")) }
-            val frozenSessionChanged = before.sessions.any { previous ->
-                if (previous.pendingRun == null) false else edited.sessions.firstOrNull { it.id == previous.id }?.let { next ->
-                    next.pendingRun != null && (next.messages != previous.messages || next.turnRecords != previous.turnRecords ||
-                        next.characterId != previous.characterId || next.mainCallId != previous.mainCallId ||
-                        next.packageIds != previous.packageIds || next.groupIds != previous.groupIds || next.personaId != previous.personaId ||
-                        MessageOperations.captureRuntime(next) != MessageOperations.captureRuntime(previous) || next.macroHistory != previous.macroHistory)
-                } == true
-            }
-            if (frozenSessionChanged) return@withLock listOf(Issue("recovery", "这一轮仍有断点；请先恢复或跳过，再修改会话环境"))
+            if (LibraryEditPreparation.changesFrozenSession(before, edited))
+                return@withLock listOf(Issue("recovery", "这一轮仍有断点；请先恢复或跳过，再修改会话环境"))
             val rawIssues = LibraryValidator.validate(edited).filter { it.error }
             if (rawIssues.isNotEmpty()) {
                 _state.value = _state.value.copy(issues = rawIssues)
                 return@withLock rawIssues
             }
-            val next = LibraryFormat.upgrade(edited.withStandardCharacterFields()).let { normalized ->
-                val oldSessions = before.sessions.associateBy { it.id }
-                normalized.copy(sessions = normalized.sessions.map { session ->
-                    val previous = oldSessions[session.id]
-                    val named = if (previous != null && before.userName(previous) != normalized.userName(session)) {
-                        val legacyIds = previous.messages.asSequence().filter { it.role == Role.USER && it.speakerName == null }.map { it.id }.toSet()
-                        if (legacyIds.isEmpty()) session else session.copy(messages = session.messages.map { message ->
-                            if (message.id in legacyIds && message.speakerName == null) message.copy(speakerName = before.userName(previous)) else message
-                        })
-                    } else session
-                    if (previous != null && (MessageOperations.captureRuntime(previous) != MessageOperations.captureRuntime(session) || previous.macroHistory != session.macroHistory))
-                        MessageOperations.invalidateRestore(named)
-                    else named
-                })
-            }
-            val issues = LibraryValidator.validate(next).filter { it.error } + removalIssues(before, next)
+            val next = LibraryEditPreparation.normalize(before, edited)
+            val issues = LibraryValidator.validate(next).filter { it.error } + LibraryEditPreparation.removalIssues(before, next)
             if (issues.isNotEmpty()) {
                 _state.value = _state.value.copy(issues = issues)
                 return@withLock issues
@@ -228,17 +197,6 @@ class AppController internal constructor(
         } finally {
             withContext(NonCancellable) { mutex.withLock { editingCount-- } }
         }
-    }
-
-    private fun removalIssues(before: Library, next: Library): List<Issue> {
-        val removed = (before.characters.map { it.id } - next.characters.map { it.id }.toSet()) +
-            (before.mainCalls.map { it.id } - next.mainCalls.map { it.id }.toSet()) +
-            (before.packages.map { it.id } - next.packages.map { it.id }.toSet()) +
-            (before.groups.map { it.id } - next.groups.map { it.id }.toSet())
-        if (removed.isEmpty()) return emptyList()
-        val refs = (next.sessions + next.savedChats.map { it.snapshot }).flatMap { listOf(it.characterId, it.mainCallId) + it.packageIds + it.groupIds } +
-            next.characters.flatMap { it.boundPackageIds } + next.mainCalls.flatMap { it.boundPackageIds + it.boundGroupIds } + next.groups.flatMap { it.boundPackageIds }
-        return removed.filter { it in refs }.map { Issue("resource.$it", "资源仍被会话或绑定使用") }
     }
 
     suspend fun selectSession(id: String): List<Issue> = updateLibrary { it.copy(selectedSessionId = id) }
@@ -434,7 +392,7 @@ class AppController internal constructor(
         return updateLibrary { it.selectCharacter(id) }
     }
     suspend fun resetSessionState(id: String): List<Issue> = updateLibrary { old ->
-        old.copy(sessions = old.sessions.map { if (it.id == id) it.copy(state = emptyMap(), results = emptyMap(), resultOrigins = emptyMap(), macroHistory = emptyMap(), currentOnlyMacros = emptyMap(), promptInjections = emptyList(), historyDigests = emptyMap(), historyMemory = HistoryMemoryState(), pendingRun = null, unavailableResultKeys = emptySet()) else it })
+        old.copy(sessions = old.sessions.map { if (it.id == id) it.withRuntime(RuntimeSnapshot()).copy(macroHistory = emptyMap(), pendingRun = null) else it })
     }
 
     suspend fun preview(input: String = ""): PromptPreview {
@@ -714,49 +672,19 @@ class AppController internal constructor(
         _configurationImport.value = null
         val current = _library.value
         val id = newId()
-        val issues = try {
+        val prepared = try {
             withContext(Dispatchers.Default) {
-                val document = LibraryFormat.json.parseToJsonElement(jsonText) as? JsonObject
-                    ?: error("资源文件须为对象")
-                val format = (document["format"] as? JsonPrimitive)?.content
-                if (format == "companion.config.v1") {
-                    val preview = ConfigurationCommands.preview(jsonText, current)
-                    preview.plan?.let { importDraft = ImportDraft.Configuration(id, it, preview.issues.filterNot { issue -> issue.error }) }
-                    _configurationImport.value = ConfigurationImportPreview(id, preview.plan?.label ?: "配置导入",
-                        preview.changes, preview.settings, preview.issues, undoable = true)
-                    preview.issues
-                } else {
-                    val decoded = if (format == "sillytavern.preview.v1") SillyTavernImport.convert(jsonText, current)
-                        else ImportResult(ModelCatalog.normalize(LibraryFormat.decode(jsonText)), emptyList())
-                    val imported = LibraryFormat.upgrade(decoded.library.withStandardCharacterFields())
-                    val warnings = decoded.warnings.map { Issue("import", it, error = false) }
-                    val hasChats = imported.sessions.isNotEmpty() || imported.chatFolders.isNotEmpty() || imported.savedChats.isNotEmpty()
-                    if (!hasChats) {
-                        val preview = ConfigurationCommands.previewResources(imported, current)
-                        val issues = preview.issues + warnings
-                        preview.plan?.let { importDraft = ImportDraft.Configuration(id, it, issues.filterNot { issue -> issue.error }) }
-                        _configurationImport.value = ConfigurationImportPreview(id, "资源导入", preview.changes, preview.settings,
-                            issues, undoable = true)
-                        issues
-                    } else {
-                        val combined = LibraryFormat.upgrade(mergeLegacyImport(current, imported, selectImportedSession))
-                        val issues = LibraryValidator.validate(combined) + warnings + Issue("import.chats",
-                            "这份备份含聊天或收藏；会一并导入，不能用配置撤回移除聊天", error = false)
-                        if (issues.none { it.error }) importDraft = ImportDraft.Legacy(id, imported, selectImportedSession, issues.filterNot { it.error })
-                        _configurationImport.value = ConfigurationImportPreview(id, "资源与聊天备份", emptyList(), emptyList(),
-                            issues + Issue("import.summary", "角色 ${imported.characters.size} · 主调用 ${imported.mainCalls.size} · 提示词包 ${imported.packages.size} · 调用组 ${imported.groups.size} · 聊天 ${imported.sessions.size} · 收藏 ${imported.savedChats.size}", error = false),
-                            undoable = false)
-                        issues
-                    }
-                }
+                ConfigurationImportPreparer.prepare(jsonText, current, id, selectImportedSession)
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {
             val issues = listOf(Issue("import", failure.message ?: "JSON 无法读取或格式不受支持"))
-            _configurationImport.value = ConfigurationImportPreview(id, "导入预览", emptyList(), emptyList(), issues, undoable = false)
-            issues
+            ConfigurationImportPreparation(null,
+                ConfigurationImportPreview(id, "导入预览", emptyList(), emptyList(), issues, undoable = false), issues)
         }
-        ImportPreparation(id, issues)
+        importDraft = prepared.draft
+        _configurationImport.value = prepared.preview
+        ImportPreparation(id, prepared.issues)
     }
 
     fun dismissConfigurationImport() {
@@ -772,14 +700,7 @@ class AppController internal constructor(
             ?: return@withLock listOf(Issue("import", "预览已取消或无效，请重新选择文件"))
         val current = _library.value
         val result = withContext(Dispatchers.Default) {
-            when (draft) {
-                is ImportDraft.Configuration -> ConfigurationCommands.apply(draft.plan, current)
-                is ImportDraft.Legacy -> {
-                    val merged = LibraryFormat.upgrade(mergeLegacyImport(current, draft.imported, draft.selectSession))
-                    val issues = LibraryValidator.validate(merged)
-                    ConfigurationApplyResult(merged.takeIf { issues.none { it.error } }, null, issues)
-                }
-            }
+            ConfigurationImportPreparer.apply(draft, current)
         }
         val changed = result.library ?: return@withLock result.issues
         val receipt = result.receipt
@@ -816,17 +737,6 @@ class AppController internal constructor(
             issues
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { listOf(Issue("import", "保存失败；原数据仍保留")) }
-    }
-
-    private fun mergeLegacyImport(old: Library, imported: Library, selectSession: Boolean): Library {
-        val existingTags = old.promptTags.toSet()
-        return old.copy(characters = old.characters + imported.characters, mainCalls = old.mainCalls + imported.mainCalls,
-            packages = old.packages + imported.packages, groups = old.groups + imported.groups,
-            profiles = old.profiles + imported.profiles, sessions = old.sessions + imported.sessions,
-            connections = old.connections + imported.connections, chatFolders = old.chatFolders + imported.chatFolders,
-            savedChats = old.savedChats + imported.savedChats, personas = old.personas + imported.personas,
-            promptTags = old.promptTags + imported.promptTags.filterNot { it in existingTags },
-            selectedSessionId = if (selectSession) imported.selectedSessionId ?: old.selectedSessionId else old.selectedSessionId)
     }
 
     /** Debug/automation ingestion uses the same validated plan, without opening a UI sheet. */

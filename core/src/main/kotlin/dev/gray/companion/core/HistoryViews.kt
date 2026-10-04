@@ -2,20 +2,21 @@ package dev.gray.companion.core
 
 /** Reads source references without publishing captures or macro versions. */
 object HistoryViews {
-    fun selection(expression: String, executionVersion: Int = 8): HistorySelection? {
+    fun selection(expression: String, executionVersion: Int = ExecutionSemantics.CURRENT): HistorySelection? {
+        val semantics = ExecutionSemantics(executionVersion)
         val result = PromptReferenceLanguage.compile(expression)
         val ref = result.reference ?: return null
-        if (executionVersion < 5 && result.fields.any { it.name == "source" }) return null
-        if (executionVersion < 8 && result.fields.any { it.name == "format" }) return null
+        if (!semantics.historySources && result.fields.any { it.name == "source" }) return null
+        if (!semantics.localHistoryFormats && result.fields.any { it.name == "format" }) return null
         return when (ref) {
             is PromptReferenceLanguage.LegacyReference -> when (ref.expression) {
                 "history", "history.raw", "history.text" -> HistorySelection(compressed = ref.expression != "history.raw")
-                "history.display" -> if (executionVersion >= 5) HistorySelection() else null
-                "history.model" -> if (executionVersion >= 5) HistorySelection(sourceKind = HistorySourceKind.MODEL_RAW) else null
+                "history.display" -> if (semantics.historySources) HistorySelection() else null
+                "history.model" -> if (semantics.historySources) HistorySelection(sourceKind = HistorySourceKind.MODEL_RAW) else null
                 else -> null
             }
             is PromptReferenceLanguage.QueryPlan -> ref.historySelection?.let {
-                if (executionVersion < 8) it.copy(rangeExplicit = false) else it
+                if (!semantics.explicitHistoryRanges) it.copy(rangeExplicit = false) else it
             }
         }
     }
@@ -42,14 +43,15 @@ object HistoryViews {
         return all.slice(HistoryContext.selectedRange(range, all.size))
     }
 
-    fun summaries(session: Session, main: MainCall, kind: HistorySourceKind, executionVersion: Int = 8): List<HistoryMemorySegment> {
+    fun summaries(session: Session, main: MainCall, kind: HistorySourceKind, executionVersion: Int = ExecutionSemantics.CURRENT): List<HistoryMemorySegment> {
+        val semantics = ExecutionSemantics(executionVersion)
         val floors = session.messages.filter { !it.deleted && it.outputSlot == OutputSlot.BODY }
         val sources = floors.map { message ->
             if (kind == HistorySourceKind.MODEL_RAW && message.role == Role.ASSISTANT && !message.authoredOpening && message.rawText == null) null
             else HistoryMemory.source(message, kind)
         }
         return HistoryHierarchy(HistoryMemory.effectiveSegments(session, main, kind), sources,
-            ordered = executionVersion >= 7).validSegments().values.toList()
+            ordered = semantics.hierarchicalMemory).validSegments().values.toList()
     }
 
     fun originalMessages(session: Session, selection: HistorySelection, main: MainCall? = null): List<ChatMessage> {
@@ -59,8 +61,9 @@ object HistoryViews {
     }
 
     fun project(library: Library, session: Session, main: MainCall, selection: HistorySelection,
-                textOverrides: Map<String, String> = emptyMap(), executionVersion: Int = 8,
+                textOverrides: Map<String, String> = emptyMap(), executionVersion: Int = ExecutionSemantics.CURRENT,
                 renderInsertion: (String) -> String = { it }): HistoryProjection = try {
+        val semantics = ExecutionSemantics(executionVersion)
         val selectedSources = sources(session, selection, main)
         val index = HistoryMemory.sourceIndex(session)
         val originals = selectedSources.map { ref ->
@@ -70,13 +73,13 @@ object HistoryViews {
         val state = session.historyMemory
         val view = selection.viewId?.let { HistoryMemory.view(state, it, selection.revision) ?: error("历史副本不存在") }
         val segments = HistoryMemory.effectiveSegments(session, main, selection.sourceKind)
-        val projectionVersion = view?.projectionVersion ?: if (executionVersion >= 7) 2 else 1
+        val projectionVersion = view?.projectionVersion ?: if (semantics.hierarchicalMemory) 2 else 1
         val modes = view?.let { HistoryMemory.modes(state, it) } ?: if (selection.compressed)
             defaultModes(main, selectedSources, segments, projectionVersion) else emptyMap()
         val compressed = HistoryHierarchy(segments, selectedSources, ordered = projectionVersion >= 2)
             .compressed(modes, projectionVersion)
         // One source-coordinate projection keeps insertions and per-floor wrappers consistent with compression.
-        require(executionVersion >= 8 || selection.format == null) { "此恢复版本不支持 History 局部格式" }
+        require(semantics.localHistoryFormats || selection.format == null) { "此恢复版本不支持 History 局部格式" }
         val local = selection.format
         val displayHistory = if (local == null) main.history.copy(range = HistoryRange()) else main.history.copy(
             range = HistoryRange(), apiRole = local.apiRole, mergeMessages = false, prefix = "", suffix = "",
@@ -105,7 +108,8 @@ object HistoryViews {
 
     fun copy(session: Session, selection: HistorySelection, targetId: String, name: String,
              mode: HistorySegmentMode, segmentIds: List<String>, main: MainCall? = null,
-             inheritTargetModes: Boolean = false, executionVersion: Int = 8): HistoryMemoryPatch {
+             inheritTargetModes: Boolean = false, executionVersion: Int = ExecutionSemantics.CURRENT): HistoryMemoryPatch {
+        val semantics = ExecutionSemantics(executionVersion)
         require(MacroNaming.isValidSlug(targetId)) { "历史副本标识须为英文 slug" }
         // A writer may update its own captured previous version; other pending producers stay masked.
         val resolvedSelection = if (selection.viewId == targetId && selection.revision == null)
@@ -118,7 +122,7 @@ object HistoryViews {
         val base = resolvedSelection.viewId?.let { HistoryMemory.view(state, it, resolvedSelection.revision) ?: error("历史副本不存在") }
         val sameCapture = base?.captureId == captureId
         val target = HistoryMemory.view(state, targetId)?.takeIf { it.sourceKind == selection.sourceKind }
-        val previousSources = if (executionVersion >= 7 && captureId !in state.captures)
+        val previousSources = if (semantics.hierarchicalMemory && captureId !in state.captures)
             target?.let { HistoryMemory.captureSources(state, it.captureId) } else null
         val appendBase = target?.takeIf { previousSources != null && selected.size > previousSources.size &&
             selected.subList(0, previousSources.size) == previousSources }
@@ -129,19 +133,19 @@ object HistoryViews {
         val effective = if (main == null) state.segments.filterValues { segment ->
             segment.sources.all { it.sourceKind == selection.sourceKind }
         } else HistoryMemory.effectiveSegments(session, main, selection.sourceKind)
-        val projectionVersion = if (executionVersion >= 7) 2 else 1
+        val projectionVersion = if (semantics.hierarchicalMemory) 2 else 1
         val selectedHierarchy = HistoryHierarchy(effective, selected, ordered = projectionVersion >= 2)
         val compatibleBase = sameCapture && base?.projectionVersion == projectionVersion
         val inherited = if (base == null && selection.compressed && main != null) defaultModes(main, selected, effective, projectionVersion)
         else if (base == null) emptyMap()
         else HistoryMemory.modes(state, base).filterKeys(selectedHierarchy::valid)
         val revision = state.views[targetId]?.lastOrNull()?.revision ?: 0
-        val priorPreferences = if (inheritTargetModes && executionVersion >= 7) {
+        val priorPreferences = if (inheritTargetModes && semantics.hierarchicalMemory) {
             target?.let { HistoryMemory.modes(state, it).filterKeys(selectedHierarchy::valid) }.orEmpty()
         } else emptyMap()
         val requested = segmentIds.distinct().associateWith { mode }
         // Explicit refresh preserves prior choices; normal copy commands still override them.
-        val chosen = if (inheritTargetModes && executionVersion >= 7) inherited + requested + priorPreferences
+        val chosen = if (inheritTargetModes && semantics.hierarchicalMemory) inherited + requested + priorPreferences
             else inherited + requested
         // A refresh carries only changed preferences when its previous capture is an exact prefix.
         val refreshBase = if (inheritTargetModes && projectionVersion >= 2) target?.takeIf {

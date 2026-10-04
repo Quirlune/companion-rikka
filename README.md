@@ -14,7 +14,7 @@ History exposes archived model body and final display body as separate projectio
 
 Configuration JSON packages support resource imports and declarative edits/bindings with preview, atomic application and conflict-aware undo. Multiple authored openings use the native message variant arrows. Optional reasoning-tag parsing excludes reasoning from both body History sources while retaining its own archive; streamed regex output receives final correction.
 
-Current delivery: **0.33-preview**, architecture revision33, resource wire10 (reads1–10), new execution8 (old journals1–7 retain their accepted semantics), SQLite schema1 and recovery format1. This is a development project. Real provider behavior, broad device adaptation and runtime plugin installation are not claimed as complete.
+Current delivery: **0.34-preview**, architecture revision34, resource wire10 (reads1–10), new execution8 (old journals1–7 retain their accepted semantics), SQLite schema1 and recovery format1. The maintainability refactor centralizes compatibility policies/runtime transfers and separates model candidates, import preparation and resource-edit rules from orchestration. This is a development project. Real provider behavior, broad device adaptation and runtime plugin installation are not claimed as complete.
 
 ## Source and architecture
 
@@ -22,6 +22,7 @@ Current delivery: **0.33-preview**, architecture revision33, resource wire10 (re
 - `app/src/main/java/dev/gray/companion/`: Android controller, repository, gateway and editors.
 - `app/src/main/java/me/rerere/rikkahub/companion/`: projection into the reused native frontend.
 - [Current architecture](docs/ARCHITECTURE.md) describes invariants and extension boundaries.
+- [Maintainability and extension map](docs/MAINTAINABILITY.md) routes routine changes to their owner and records the revision34 refactor contracts.
 - [Continuation handoff](docs/HANDOFF.md) records the delivered state, local preview paths, evidence and next-task instructions.
 - [Prompt reference language v1](docs/PROMPT_LANGUAGE.md) distinguishes implemented History/static selectors from future compiler contracts; existing legacy macros remain compatible.
 - [Configuration packages](docs/CONFIGURATION_PACKAGES.md) describes imports, previews, atomic edits and undo.

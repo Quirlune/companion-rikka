@@ -9,7 +9,8 @@ internal data class EventPlan(val trigger: String, val waves: List<List<PlannedN
 
 internal data class RunPlan(val events: Map<String, EventPlan>) {
     companion object {
-        fun create(workflows: List<Workflow>, availableActions: Map<String, RegisteredAction>, executionVersion: Int = 8): Pair<RunPlan?, Issue?> {
+        fun create(workflows: List<Workflow>, availableActions: Map<String, RegisteredAction>, executionVersion: Int = ExecutionSemantics.CURRENT): Pair<RunPlan?, Issue?> {
+            val semantics = ExecutionSemantics(executionVersion)
             val events = linkedMapOf<String, EventPlan>()
             val categories = mutableMapOf<String, String>()
             for (workflow in workflows.filter { it.enabled }) for (node in workflow.nodes.filter { it.enabled }) {
@@ -23,7 +24,7 @@ internal data class RunPlan(val events: Map<String, EventPlan>) {
                 }
             }
             for (workflow in workflows.filter { it.enabled }) {
-                if (executionVersion >= 2 && workflow.effectiveTrigger() == RuntimeEvents.workflowCompleted(workflow.id))
+                if (semantics.workflowCompletionEvents && workflow.effectiveTrigger() == RuntimeEvents.workflowCompleted(workflow.id))
                     return null to Issue("workflow.${workflow.id}", "工作流不能监听自身完成事件")
             }
             for ((trigger, eventWorkflows) in workflows.filter { it.enabled }.groupBy { it.effectiveTrigger() }) {
@@ -39,8 +40,7 @@ internal data class RunPlan(val events: Map<String, EventPlan>) {
                             val issue = action.descriptor.validate(node.arguments, "workflow.${workflow.id}.node.${node.id}").firstOrNull { it.error }
                             if (issue != null) return null to issue
                             val eventName = node.arguments["event"].orEmpty().trim()
-                            if (node.actionId == "event.emit" && (if (executionVersion == 1) eventName in RuntimeEvents.reserved
-                                else RuntimeEvents.isReserved(eventName))) {
+                            if (node.actionId == "event.emit" && semantics.isReservedEvent(eventName)) {
                                 return null to Issue("workflow.${workflow.id}.node.${node.id}.argument.event", "此事件由运行时派发")
                             }
                         }

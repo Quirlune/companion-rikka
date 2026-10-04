@@ -1,11 +1,12 @@
 package dev.gray.companion.core
 
 object LibraryValidator {
-    fun validate(library: Library, executionVersion: Int = 8): List<Issue> {
+    fun validate(library: Library, executionVersion: Int = ExecutionSemantics.CURRENT): List<Issue> {
+        val semantics = ExecutionSemantics(executionVersion)
         val issues = mutableListOf<Issue>()
         if (library.schemaVersion != LibraryFormat.CURRENT_VERSION) issues += Issue("library.schemaVersion", "不支持的资源版本")
         checkMetadata(library, issues)
-        if (executionVersion >= 6)
+        if (semantics.reasoningArchives)
             library.reasoningParsing.validationError()?.let { issues += Issue("library.reasoningParsing", it) }
         fun unique(values: List<String>, path: String) {
             values.filter { it.isBlank() }.forEach { issues += Issue(path, "ID 或名称不能为空") }
@@ -202,13 +203,13 @@ object LibraryValidator {
             val writerCategories = mutableMapOf<String, String>()
             workflow.nodes.forEach { node ->
                 val nodePath = "$path.node.${node.id}"
-                if (executionVersion >= 6)
+                if (semantics.reasoningArchives)
                     node.reasoningParsing?.validationError()?.let { issues += Issue("$nodePath.reasoningParsing", it) }
                 if (node.title.isBlank()) issues += Issue(nodePath, "节点名称不能为空")
                 if (node.actionId.isBlank()) issues += Issue(nodePath, "动作不能为空")
                 if (node.actionId == "event.emit") {
                     val event = node.arguments["event"].orEmpty().trim()
-                    val reserved = if (executionVersion == 1) event in RuntimeEvents.reserved else RuntimeEvents.isReserved(event)
+                    val reserved = semantics.isReservedEvent(event)
                     // Old resources may contain a custom name using the newly reserved prefix.
                     // Keep them loadable; the versioned run planner rejects emitting it in v2.
                     if (reserved) issues += Issue("$nodePath.argument.event", "此事件由运行时派发",
@@ -225,18 +226,10 @@ object LibraryValidator {
                 issues += RegexOutputCopies.validate(node.regexOutputCopy, "$nodePath.regexOutputCopy")
                 if (node.regexOutputCopy.enabled && node.regexOutputCopy.outputKey == node.outputKey)
                     issues += Issue("$nodePath.regexOutputCopy.outputKey", "副本与原始输出不能使用同一个宏地址")
-                if (node.outputProcessing.isNotEmpty() && node.actionId in setOf("state.set", "state.increment", "macro.write", "macro.activate", "macro.process"))
-                    issues += Issue("$nodePath.outputProcessing", "此动作的输出处理会与目标值不一致；请在宏处理步骤中修改值")
+                issues += ActionConfigurationRules.outputProcessing(node, nodePath)
                 if (node.actionId == "macro.process") {
                     val config = node.macroProcess
-                    val target = config.key.ifBlank { node.arguments["key"].orEmpty() }
-                    if (canonicalWriteAddress(target) == null) issues += Issue("$nodePath.macroProcess.key", "宏目标地址无效")
-                    if (config.mode == MacroProcessMode.COPY) {
-                        val source = config.source.trim().removeSurrounding("{{", "}}").trim()
-                        if (canonicalWriteAddress(source.substringBefore('@')) == null ||
-                            !validVersionSelector(source.substringAfter('@', "latest")))
-                            issues += Issue("$nodePath.macroProcess.source", "源宏地址或版本选择无效")
-                    }
+                    issues += ActionConfigurationRules.macroProcess(node, nodePath)
                     checkTemplate(config.initial, "$nodePath.macroProcess.initial", issues, executionVersion)
                     issues += TextProcessing.validate(config.steps, "$nodePath.macroProcess.steps", executionVersion)
                 }
@@ -269,29 +262,10 @@ object LibraryValidator {
                 }
                 node.arguments.forEach { (key, value) -> checkTemplate(value, "$nodePath.argument.$key", issues, executionVersion) }
                 if (node.actionId in setOf("history.view.copy", "history.memory.write", "history.memory.select")) {
-                    val source = node.arguments["source"] ?: "{{history}}"
-                    if (source.isBlank()) issues += Issue("$nodePath.argument.source", "请选择历史来源")
-                    else if (HistoryViews.selection(source) == null)
-                        issues += Issue("$nodePath.argument.source", "来源必须是 History 引用")
-                    if (node.actionId == "history.view.copy") {
-                        if (!MacroNaming.isValidSlug(node.arguments["targetId"].orEmpty()))
-                            issues += Issue("$nodePath.argument.targetId", "历史副本标识须为英文 slug")
-                        SafePatterns.validate(node.arguments["pattern"].orEmpty(), node.arguments["captureGroup"]?.toIntOrNull() ?: 0)
-                            ?.let { issues += Issue("$nodePath.argument.pattern", it) }
-                    }
-                    if (node.actionId == "history.memory.select") {
-                        val count = node.arguments["count"].orEmpty()
-                        if (count.isNotBlank() && !count.contains("{{") && (count.toIntOrNull()?.let { it >= 0 } != true))
-                            issues += Issue("$nodePath.argument.count", "摘要数量须为非负整数，零表示全部")
-                        val mode = node.arguments["mode"] ?: "UNMERGED_LEAVES"
-                        if (!mode.contains("{{") && mode !in setOf("UNMERGED_LEAVES", "ROOTS"))
-                            issues += Issue("$nodePath.argument.mode", "记忆选择须为未合并小摘要或根摘要")
-                    }
+                    issues += ActionConfigurationRules.historyArguments(node, nodePath)
                 }
                 if (node.actionId == "text.extract") {
-                    SafePatterns.validate(node.arguments["pattern"].orEmpty(), node.arguments["captureGroup"]?.toIntOrNull() ?: 0)?.let {
-                        issues += Issue("$nodePath.pattern", it)
-                    }
+                    issues += ActionConfigurationRules.textExtraction(node, nodePath)
                 }
             }
             val visiting = mutableSetOf<String>()

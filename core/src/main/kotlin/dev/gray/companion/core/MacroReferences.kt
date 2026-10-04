@@ -4,10 +4,10 @@ private val versionSelectorPattern = Regex("latest|(?:turn|update|version)-[0-9]
 internal fun validVersionSelector(value: String): Boolean = versionSelectorPattern.matches(value)
 
 /** The same address syntax is used by templates and read-only trigger lookups. */
-internal fun macroExpressionError(expression: String, executionVersion: Int = 8): String? {
+internal fun macroExpressionError(expression: String, executionVersion: Int = ExecutionSemantics.CURRENT): String? {
     if (Regex("^[a-zA-Z_][a-zA-Z0-9_-]*\\s*:").containsMatchIn(expression.trim())) {
         val compiled = PromptReferenceLanguage.compile(expression)
-        if (executionVersion < 8 && compiled.fields.any { it.name == "format" }) return "此恢复版本不支持 History 局部格式"
+        if (!ExecutionSemantics(executionVersion).localHistoryFormats && compiled.fields.any { it.name == "format" }) return "此恢复版本不支持 History 局部格式"
         return compiled.diagnostics.firstOrNull()?.message ?: if ((compiled.reference as? PromptReferenceLanguage.QueryPlan)?.historySelection != null)
             null else "此来源的新式引用尚未绑定运行时；目前仅支持 builtin history messages"
     }
@@ -203,7 +203,7 @@ internal class MacroReadView(val library: Library, val session: Session) {
 }
 
 /** Shared display/template entry point. It never invokes a model or executes behavior. */
-class MacroResolver(library: Library, session: Session, input: String = "", executionVersion: Int = 8) {
+class MacroResolver(library: Library, session: Session, input: String = "", executionVersion: Int = ExecutionSemantics.CURRENT) {
     private val mutableIssues = mutableListOf<Issue>()
     private val renderer = TemplateRenderer(
         loadedResources(library, session, session.state, session.results, input, mutableIssues, executionVersion = executionVersion),

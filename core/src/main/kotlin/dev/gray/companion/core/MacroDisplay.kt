@@ -53,7 +53,7 @@ object MacroDisplay {
         return "result.$key" !in session.macroHistory && "result.$key" !in session.currentOnlyMacros && key !in session.results
     }
 
-    internal fun freezeBody(library: Library, session: Session, main: MainCall, reply: ChatMessage, executionVersion: Int = 8): BodyFreezeResult {
+    internal fun freezeBody(library: Library, session: Session, main: MainCall, reply: ChatMessage, executionVersion: Int = ExecutionSemantics.CURRENT): BodyFreezeResult {
         val tile = configuredTiles(library, session).singleOrNull { it.id == main.bodySourceTileId }
             ?: return BodyFreezeResult(error = "正文磁贴未加载或不存在")
         if (!tile.enabled || tile.placement != MacroTilePlacement.CHAT ||

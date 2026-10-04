@@ -11,6 +11,8 @@ internal class OutcomePublisher(
     private val userMessageId: String?,
     private val executionVersion: Int
 ) {
+    private val semantics = ExecutionSemantics(executionVersion)
+
     fun prepare(
         ref: PlannedNode,
         outcome: ActionOutcome,
@@ -57,15 +59,15 @@ internal class OutcomePublisher(
         val ownAddress = "result.${ref.node.outputKey}"
         val values = linkedMapOf<String, String>()
         outcome.macroWrites.forEach { (address, value) -> values[canonicalWriteAddress(address)!!] = value }
-        if (ref.node.actionId == "macro.process" || executionVersion >= 3)
+        if (ref.node.actionId == "macro.process" || semantics.currentOnlyMacros)
             outcome.stateWrites.forEach { (key, value) -> values["state.$key"] = value }
         val activations = outcome.activationWrites.mapKeys { (address, _) -> canonicalWriteAddress(address)!! }
         // Activating the action's own output preserves its existing text.
         if (ownAddress !in activations) values.putIfAbsent(ownAddress, outcome.text)
         for (address in (values.keys + activations.keys).distinct()) {
             val copy = ref.node.regexOutputCopy
-            val modelOwnResult = executionVersion >= 4 && address == ownAddress && ref.action?.descriptor?.usesModel == true
-            val record = executionVersion < 3 || modelOwnResult || if (copy.enabled && address == "result.${copy.outputKey}")
+            val modelOwnResult = semantics.retainModelResults && address == ownAddress && ref.action?.descriptor?.usesModel == true
+            val record = !semantics.currentOnlyMacros || modelOwnResult || if (copy.enabled && address == "result.${copy.outputKey}")
                 copy.recordTrajectory else ref.node.recordTrajectory
             val head = heads[address]
             if (record && head == null && address !in history && address.startsWith("result.")) {
@@ -74,7 +76,7 @@ internal class OutcomePublisher(
                     version = 0, text = old, origin = origins[key] ?: origin)) }
             }
             // Producer masks govern reads by a new invocation, not the accepted target's enabled flag.
-            val snapshot = readSession(includeMasked = executionVersion >= 3)
+            val snapshot = readSession(includeMasked = semantics.currentOnlyMacros)
             val previous = MacroReferences.currentVersion(library, snapshot, address)
             val value = values[address] ?: (if (address.startsWith("state."))
                 state[address.substring(6)] ?: previous?.text

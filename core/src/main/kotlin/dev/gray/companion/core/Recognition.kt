@@ -35,7 +35,7 @@ object SafePatterns {
 }
 
 object RecognitionEvaluator {
-    fun validate(recognition: Recognition?, path: String = "recognition", executionVersion: Int = 8): List<Issue> {
+    fun validate(recognition: Recognition?, path: String = "recognition", executionVersion: Int = ExecutionSemantics.CURRENT): List<Issue> {
         if (recognition == null) return emptyList()
         val issues = mutableListOf<Issue>()
         var count = 0
@@ -101,7 +101,7 @@ object RecognitionEvaluator {
 }
 
 internal fun checkedRecognition(
-    recognition: Recognition?, path: String, issues: MutableList<Issue>, executionVersion: Int = 8, read: (String) -> String
+    recognition: Recognition?, path: String, issues: MutableList<Issue>, executionVersion: Int = ExecutionSemantics.CURRENT, read: (String) -> String
 ): Boolean {
     val validation = RecognitionEvaluator.validate(recognition, path, executionVersion)
     issues += validation

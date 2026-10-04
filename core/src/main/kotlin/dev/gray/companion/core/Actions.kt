@@ -44,7 +44,7 @@ data class ActionContext(
     val session: Session? = null,
     val library: Library? = null,
     val workflowId: String = "",
-    val executionVersion: Int = 8,
+    val executionVersion: Int = ExecutionSemantics.CURRENT,
     val macroTarget: MacroTargetSnapshot? = null
 )
 
@@ -118,7 +118,7 @@ class ActionRegistry {
                 ActionFieldDescriptor("event", "事件名称", required = true)
             ))) { context ->
                 val event = context.arguments.getValue("event").trim()
-                require(!(if (context.executionVersion == 1) event in RuntimeEvents.reserved else RuntimeEvents.isReserved(event))) { "此事件由运行时派发" }
+                require(!ExecutionSemantics(context.executionVersion).isReservedEvent(event)) { "此事件由运行时派发" }
                 ActionOutcome(context.input, emittedEvents = listOf(event))
             }
             .register(ActionDescriptor("macro.write", "更新宏", "发布宏的新版本", listOf(
@@ -146,7 +146,7 @@ class ActionRegistry {
                 val session = requireNotNull(context.session)
                 val library = requireNotNull(context.library)
                 val current = MacroReferences.currentVersion(library, session, address)
-                val capturedTarget = context.macroTarget?.takeIf { context.executionVersion >= 3 }
+                val capturedTarget = context.macroTarget?.takeIf { ExecutionSemantics(context.executionVersion).capturedMacroTargets }
                 require(capturedTarget == null || capturedTarget.address == address) { "捕获的宏目标与当前配置不一致" }
                 val existing = when {
                     capturedTarget != null -> capturedTarget.text
@@ -179,7 +179,7 @@ class ActionRegistry {
                     ActionChoice("EXTRACT", "提取"), ActionChoice("REPLACE", "替换"))),
                 ActionFieldDescriptor("replacement", "替换内容")
             ))) { context ->
-                if (context.executionVersion == 1) return@register ActionOutcome(SafePatterns.extract(
+                if (ExecutionSemantics(context.executionVersion).legacyProcessing) return@register ActionOutcome(SafePatterns.extract(
                     context.arguments.getValue("pattern"), context.input, context.arguments.getValue("captureGroup").toInt()).orEmpty())
                 ActionOutcome(RegexOutputCopies.transform(RegexOutputCopy(pattern = context.arguments.getValue("pattern"),
                     captureGroup = context.arguments.getValue("captureGroup").toInt(),
@@ -194,7 +194,7 @@ class ActionRegistry {
                 ActionFieldDescriptor("count", "选择数量（0 为全部）", ActionFieldType.NUMBER, defaultValue = "0", integer = true),
                 ActionFieldDescriptor("requireCount", "不足数量时不选择", ActionFieldType.BOOLEAN, defaultValue = "false")
             ))) { context ->
-                require(context.executionVersion >= 7) { "此恢复版本不支持层级记忆选择" }
+                require(ExecutionSemantics(context.executionVersion).hierarchicalMemory) { "此恢复版本不支持层级记忆选择" }
                 val session = requireNotNull(context.session)
                 val main = requireNotNull(context.library).mainCalls.first { it.id == session.mainCallId }
                 val selection = HistoryViews.selection(context.arguments.getValue("source"), context.executionVersion) ?: error("History 来源引用无效")
@@ -205,7 +205,7 @@ class ActionRegistry {
             .register(ActionDescriptor("history.memory.read", "读取分段记忆", "读取指定记忆 ID 对应的摘要与来源标识", listOf(
                 ActionFieldDescriptor("ids", "记忆 ID", ActionFieldType.TEMPLATE)
             ))) { context ->
-                require(context.executionVersion >= 7) { "此恢复版本不支持层级记忆读取" }
+                require(ExecutionSemantics(context.executionVersion).hierarchicalMemory) { "此恢复版本不支持层级记忆读取" }
                 val session = requireNotNull(context.session)
                 val main = requireNotNull(context.library).mainCalls.first { it.id == session.mainCallId }
                 ActionOutcome(HistoryActions.read(session, main, HistoryActions.selectedIds(context.arguments["ids"].orEmpty(), "", 0)))
@@ -218,7 +218,7 @@ class ActionRegistry {
                 val session = requireNotNull(context.session)
                 val selection = HistoryViews.selection(context.arguments.getValue("source"), context.executionVersion) ?: error("History 来源引用无效")
                 val main = requireNotNull(context.library).mainCalls.first { it.id == session.mainCallId }
-                val children = if (context.executionVersion >= 7) HistoryActions.selectedIds(
+                val children = if (ExecutionSemantics(context.executionVersion).hierarchicalMemory) HistoryActions.selectedIds(
                     context.arguments["childrenIds"].orEmpty(), "", 0, distinct = false) else emptyList()
                 val patch = if (children.isNotEmpty()) HistoryActions.parent(session, main, selection, children,
                     context.arguments["title"].orEmpty(), context.input, context.workflowId) else HistoryMemoryPatch(segments = listOf(

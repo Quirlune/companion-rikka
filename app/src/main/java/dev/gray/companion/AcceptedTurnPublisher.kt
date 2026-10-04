@@ -8,6 +8,8 @@ import dev.gray.companion.core.OutputSlot
 import dev.gray.companion.core.RunResult
 import dev.gray.companion.core.RunStatus
 import dev.gray.companion.core.Session
+import dev.gray.companion.core.runtimeSnapshot
+import dev.gray.companion.core.withRuntime
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.sync.Mutex
@@ -67,12 +69,8 @@ internal class AcceptedTurnPublisher(
             library.value = next
             lastPersistedResult = result
             if (regenerationBase != null && result.status != RunStatus.SUCCESS && journal != null) {
-                state.value = state.value.copy(generationPreview = session.copy(
-                    messages = session.messages + journal.replies, state = journal.state, results = journal.results,
-                    resultOrigins = journal.resultOrigins, macroHistory = journal.macroHistory,
-                    promptInjections = journal.promptInjections, historyDigests = journal.historyDigests,
-                    historyMemory = journal.historyMemory, currentOnlyMacros = journal.currentOnlyMacros,
-                    unavailableResultKeys = journal.unavailableKeys))
+                state.value = state.value.copy(generationPreview = session.withRuntime(journal.runtimeSnapshot()).copy(
+                    messages = session.messages + journal.replies, macroHistory = journal.macroHistory))
             }
             val acceptedNodes = journal?.accepted.orEmpty().map { it.reply?.let { reply -> reply.workflowId to reply.nodeId } }.toSet()
             val pending = state.value.pendingOutputs.filterNot { (it.workflowId to it.nodeId) in acceptedNodes }

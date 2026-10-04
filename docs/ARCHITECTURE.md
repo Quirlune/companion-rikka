@@ -1,6 +1,18 @@
 # Companion architecture
 
-Active baseline: revision 33, 2026-10-03. Add per-reference History formatting to the existing native macro editor. Preserve revision32 memory/source identity, earlier complete branch/recovery worlds and original frontend defaults. Dynamic result-target migration remains unimplemented.
+Active baseline: revision 34, 2026-10-04. Behavior-preserving maintainability work on frequently changed Companion modules. Preserve revision33 local History formatting, revision32 memory/source identity, complete branch/recovery worlds and original frontend defaults. Dynamic result-target migration remains unimplemented.
+
+## Revision 34 decisions
+
+The user confirms improving maintainability broadly while leaving stable rarely changed modules alone. [MAINTAINABILITY.md](MAINTAINABILITY.md) is the implementation handoff and file-ownership record. No feature semantics, serialized data shape or compatibility version changes are authorized by this refactor: wire10, SQLite1, recovery1 and execution8 remain.
+
+- Name existing compatibility decisions in nonserialized ExecutionSemantics; all public executionVersion Int arguments and persisted legacy default1 remain. Saved validation and rendered runtime validation retain their distinct acceptance and severity.
+- Centralize pure transfers between Session, RunResult, RunRecovery and RuntimeSnapshot. Snapshot contains runtime fields only; macroHistory remains explicit because branch checkpoints also retain version-prefix identity. Preserve message/session/variant/recovery identities.
+- Extract the candidate executor from WorkflowEngine: request capture, reasoning, bounded retries and provisional-output cleanup form one boundary. Engine keeps replay/manual admission, scheduling, accepted mutable state, receipts and updateMutex. Executor returns a candidate or failure and reports through existing callbacks; it creates no independent publication authority.
+- Extract immutable import preparation/apply logic from AppController. Controller retains its admission mutex, preview identity, StateFlow publication, repository transaction/cancellation and credentials. Isolate built-in action configuration rules from the library graph validator without changing diagnostics or adding a general plugin framework.
+- Root performs one concentrated set of affected checks and an offline native assembly after integration. No worker builds, duplicate passing checks, real API, new samples, phone install, reset or native UI automation. Native experience remains user acceptance; evidence is recorded after actual completion.
+
+Revision34 acceptance: all69 unique affected checks passed (64 core and five app). Initial63/64 exposed one stale pre-revision31 no-stream assertion; prior HEAD already streamed provisional body under execution6+, so updated that method to check provisional body/final processed correction/raw archive and reran only it. Five app boundary checks then passed, and native assembly succeeded in1m37s. No production behavior was relaxed to satisfy a test. APK0.34-preview/code193 verifies the same v2 certificate as0.33; SHA256 `e69e033604d850505df2820fbe4d4943e98afdcd3517d0f94602a73deb2d5f21`. Initial/final evidence and APK are in the2026-10-04 companion-continuation task's work/outputs directories. No API, installation, UI/lifecycle or performance measurement; dedicated preview remains0.33. Existing compiler warnings remain recorded. Root diff review and whitespace check passed.
 
 ## Revision 33 decisions
 

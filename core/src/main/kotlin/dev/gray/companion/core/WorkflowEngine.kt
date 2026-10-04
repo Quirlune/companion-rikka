@@ -12,7 +12,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.sync.withPermit
 
 class WorkflowEngine(
     private val actions: ActionRegistry = ActionRegistry.defaults(),
@@ -41,7 +40,7 @@ class WorkflowEngine(
         decision: RecoveryDecision,
         onUpdate: suspend (RunUpdate) -> Unit = {}
     ): RunResult {
-        if (recovery.formatVersion != 1 || recovery.executionVersion !in 1..8)
+        if (recovery.formatVersion != 1 || !ExecutionSemantics.supports(recovery.executionVersion))
             return conflict(recovery, "恢复断点版本不受支持；已接受的数据可保留，请结束此断点后开始新一轮")
         if (decision.nodeKey !in recovery.failures.map { it.nodeKey } ||
             currentSession.pendingRun?.id != recovery.id ||
@@ -167,8 +166,9 @@ class WorkflowEngine(
         onUpdate: suspend (RunUpdate) -> Unit
     ): RunResult {
         val traces = mutableListOf<RunTrace>()
-        val executionVersion = previous?.executionVersion ?: 8
-        val legacy = executionVersion == 1
+        val executionVersion = previous?.executionVersion ?: ExecutionSemantics.CURRENT
+        val semantics = ExecutionSemantics(executionVersion)
+        val legacy = semantics.legacyProcessing
         val updateMutex = Mutex()
         suspend fun trace(ref: PlannedNode?, status: String, detail: String) {
             val item = RunTrace(ref?.workflow?.id.orEmpty(), ref?.node?.id.orEmpty(), ref?.node?.title.orEmpty(), status, detail.take(160))
@@ -206,7 +206,7 @@ class WorkflowEngine(
         val processingCandidate = initialHistory.pendingCandidate()
         initialHistory.issues.forEach { trace(null, "history", it.message) }
         val workflows = main.configuredWorkflows().filter {
-            executionVersion >= 7 || it.id != processor.aggregationWorkflow?.id
+            semantics.hierarchicalMemory || it.id != processor.aggregationWorkflow?.id
         } + groups.flatMap { it.workflows }
         val availableActions = actions.snapshot()
         val (plan, planningIssue) = RunPlan.create(workflows, availableActions, executionVersion)
@@ -300,7 +300,7 @@ class WorkflowEngine(
         val recoveryBase = previous ?: RunRecovery(
             id = newId(), sessionId = session.id, turnId = currentUserMessageId.orEmpty(), input = input,
             checkpoint = MessageOperations.captureCheckpoint(session), initialSession = session.copy(pendingRun = null),
-            frozenResources = freezeResources(library, session), executionVersion = 8
+            frozenResources = freezeResources(library, session), executionVersion = ExecutionSemantics.CURRENT
         )
         fun replayIncomplete(): Boolean = previous != null && !replayedOldKeys.containsAll(oldAcceptedKeys)
         fun recoverySnapshot(): RunRecovery = recoveryBase.copy(
@@ -332,7 +332,8 @@ class WorkflowEngine(
         suspend fun progress() { updateMutex.withLock { onUpdate(RunUpdate(progress = partialResult())) } }
         val executedOutput = mutableMapOf<String, String>()
         val compiledModelTargets = mutableSetOf<String>()
-        val semaphore = Semaphore(maxConcurrentNodes)
+        val candidateExecutor = NodeCandidateExecutor(library, gateway, outcomeValidator,
+            Semaphore(maxConcurrentNodes), semantics)
         val visited = mutableSetOf<String>()
         var eventCount = 0
         val emittedEvents = ArrayDeque<String>()
@@ -350,123 +351,19 @@ class WorkflowEngine(
                     throw NodeExecutionFailure(ref, "此调用不能手动提供候选文本", RecoveryFailureKind.CONFIGURATION, retryable = false)
                 return Completed(ref, ValidatedCandidate(outcomeValidator.validate(ref, item.context, ActionOutcome(decision.manualText))))
             }
-            suspend fun executeCandidate(context: ActionContext,
-                                         onReasoning: suspend (ReasoningSnapshot) -> Unit = {}): ValidatedCandidate {
-                val model = ref.action?.descriptor?.usesModel == true
-                if (executionVersion < 6 || !model) {
-                    val outcome = semaphore.withPermit { ref.action!!.handler.execute(context) }
-                    return ValidatedCandidate(outcomeValidator.validate(ref, item.context, outcome),
-                        outcome.text.takeIf { model && (executionVersion >= 4 || pureModel && ref.node.outputSlot == OutputSlot.BODY) })
-                }
-                val parsing = ref.node.reasoningParsing ?: library.reasoningParsing
-                val captured = CandidateModelGateway(context.gateway, parsing, onReasoning)
-                try {
-                    val outcome = semaphore.withPermit { ref.action!!.handler.execute(context.copy(gateway = captured)) }
-                    fun requireCanonicalBody(text: String) {
-                        if (pureModel && text.isBlank()) throw ReasoningFormatFailure("模型响应缺少正文内容")
-                    }
-                    val capture = captured.singleCapture
-                    if (capture != null) {
-                        requireCanonicalBody(capture.body)
-                        return ValidatedCandidate(outcomeValidator.validate(ref, item.context, outcome),
-                            capture.body, capture.fullText, capture.reasoning)
-                    }
-                    if (captured.requestCount == 0) {
-                        val parsed = ReasoningTextParser.parse(outcome.text, parsing)
-                        requireCanonicalBody(parsed.text)
-                        return ValidatedCandidate(outcomeValidator.validate(ref, item.context, outcome.copy(text = parsed.text)),
-                            parsed.text, reasoningSnapshot = parsed.reasoning,
-                            provenanceNote = "动作声明模型结果，但未经过模型网关；完整响应来源未经核验")
-                    }
-                    requireCanonicalBody(outcome.text)
-                    return ValidatedCandidate(outcomeValidator.validate(ref, item.context, outcome),
-                        provenanceNote = if (captured.requestCount > 1) "动作组合了多个模型请求；不推定单一原文和思考来源"
-                            else "动作未返回完整模型响应；不推定原文和思考来源")
-                } catch (failure: ReasoningFormatFailure) {
-                    throw NodeExecutionFailure(ref, failure.message.orEmpty(), RecoveryFailureKind.OUTPUT_FORMAT)
-                }
-            }
-            if (!pureModel) return Completed(ref, executeCandidate(
-                if (executionVersion >= 6) item.context.copy(onDelta = {}) else item.context))
-            val profile = item.context.profile ?: throw NodeExecutionFailure(ref, "未选择模型", RecoveryFailureKind.CONFIGURATION, retryable = false)
-            val capacity = gateway.maxParallelCandidates(profile).coerceIn(1, 2)
-            val sourceAddress = "result.${ref.node.outputKey}"
-            val hasDirectContract = outcomeValidator.hasDirectContract(sourceAddress)
-            val streamFirst = ref.node.visible && !hasDirectContract &&
-                (executionVersion >= 6 || ref.node.outputProcessing.isEmpty() &&
-                    !(ref.node.regexOutputCopy.enabled && ref.node.regexOutputCopy.display && ref.node.outputSlot == OutputSlot.BODY))
-            var serialFallback = false
-            var lastFailure = NodeExecutionFailure(ref, "模型调用失败", RecoveryFailureKind.MODEL_REQUEST)
-            for (round in 0..2) {
-                val width = if (round == 0 || serialFallback) 1 else capacity
-                var streamed = false
-                val received = Channel<Pair<ValidatedCandidate?, NodeExecutionFailure?>>(width)
-                val winner = supervisorScope {
-                    val tasks = (0 until width).map { async {
-                        val candidate = try {
-                            val correctionMessages = buildList {
-                                if (ref.key == decision?.nodeKey && !decision?.correction.isNullOrBlank())
-                                    add(ChatMessage(role = Role.SYSTEM, text = decision.correction))
-                                if (round > 0 && lastFailure.kind == RecoveryFailureKind.OUTPUT_FORMAT)
-                                    add(ChatMessage(role = Role.SYSTEM,
-                                        text = "上次结果未通过格式校验：${lastFailure.detail.take(120)}。按既定要求重新生成。"))
-                            }
-                            val requestContext = item.context.copy(
-                                messages = item.context.messages + correctionMessages,
-                                onDelta = { delta ->
-                                    if (round == 0 && streamFirst) {
-                                        streamed = true
-                                        item.context.onDelta(delta)
-                                    }
-                                }
-                            )
-                            executeCandidate(requestContext) { reasoning ->
-                                if (round == 0 && streamFirst && ref.workflow.effectiveTrigger() != RuntimeEvents.HISTORY_PROCESS) {
-                                    streamed = true
-                                    updateMutex.withLock { onUpdate(RunUpdate(nodeId = ref.node.id, visible = true,
-                                        workflowId = ref.workflow.id, outputSlot = ref.node.outputSlot,
-                                        turnId = currentUserMessageId, reasoningSnapshot = reasoning)) }
-                                }
-                            } to null
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (failure: NodeExecutionFailure) {
-                            null to failure
-                        } catch (failure: ModelRequestFailure) {
-                            null to NodeExecutionFailure(ref, failure.message.orEmpty(), RecoveryFailureKind.MODEL_REQUEST,
-                                retryable = failure.retryable).also { if (failure.serialFallback) serialFallback = true }
-                        } catch (_: Exception) {
-                            null to NodeExecutionFailure(ref, "纯模型动作执行失败", RecoveryFailureKind.ACTION, retryable = false)
-                        }
-                        received.send(candidate)
-                    } }
-                    var valid: ValidatedCandidate? = null
-                    for (candidateIndex in 0 until width) {
-                        val (outcome, failure) = received.receive()
-                        if (outcome != null) {
-                            valid = outcome
-                            tasks.forEach { it.cancel() }
-                            break
-                        }
-                        if (failure != null) {
-                            lastFailure = failure
-                            if (!failure.retryable) {
-                                tasks.forEach { it.cancel() }
-                                break
-                            }
-                        }
-                    }
-                    valid
-                }
-                received.close()
-                if (winner != null) return Completed(ref, winner)
-                if (streamed) updateMutex.withLock { onUpdate(RunUpdate(nodeId = ref.node.id,
-                    text = "", visible = true, workflowId = ref.workflow.id,
-                    outputSlot = ref.node.outputSlot, turnId = currentUserMessageId, replace = true)) }
-                if (!lastFailure.retryable || lastFailure.kind !in
-                    setOf(RecoveryFailureKind.MODEL_REQUEST, RecoveryFailureKind.OUTPUT_FORMAT)) break
-            }
-            throw lastFailure
+            val candidate = candidateExecutor.execute(ref, item.context,
+                correction = decision?.takeIf { it.nodeKey == ref.key }?.correction,
+                onReasoningUpdate = { reasoning ->
+                    updateMutex.withLock { onUpdate(RunUpdate(nodeId = ref.node.id, visible = true,
+                        workflowId = ref.workflow.id, outputSlot = ref.node.outputSlot,
+                        turnId = currentUserMessageId, reasoningSnapshot = reasoning)) }
+                },
+                onClearStream = {
+                    updateMutex.withLock { onUpdate(RunUpdate(nodeId = ref.node.id,
+                        text = "", visible = true, workflowId = ref.workflow.id,
+                        outputSlot = ref.node.outputSlot, turnId = currentUserMessageId, replace = true)) }
+                })
+            return Completed(ref, candidate)
         }
 
         suspend fun executeEvent(event: String): Boolean {
@@ -494,7 +391,7 @@ class WorkflowEngine(
                 val waveOrigins = stagedOrigins.filterKeys { it in waveResults }
                 val waveSession = snapshot(waveState, waveResults).copy(messages = session.messages + replies)
                 // An UPDATE edits its own prior accepted value; other pending producers stay masked.
-                val targetWorld = if (executionVersion >= 3) snapshot(waveState, stagedResults.toMap())
+                val targetWorld = if (semantics.capturedMacroTargets) snapshot(waveState, stagedResults.toMap())
                     .copy(unavailableResultKeys = emptySet(), pendingRun = null) else null
                 fun captureMacroTarget(ref: PlannedNode): MacroTargetSnapshot? {
                     if (targetWorld == null || ref.node.actionId != "macro.process") return null
@@ -665,7 +562,7 @@ class WorkflowEngine(
                     val context = ActionContext(
                         node, preparation.input, preparation.messages, preparation.arguments, contextState, contextResults,
                         preparation.profile, gateway, { delta ->
-                            if (node.visible && !processingEvent && (executionVersion >= 6 || node.outputProcessing.isEmpty() &&
+                            if (node.visible && !processingEvent && (semantics.provisionalProcessedOutput || node.outputProcessing.isEmpty() &&
                                 !(node.regexOutputCopy.enabled && node.regexOutputCopy.display && node.outputSlot == OutputSlot.BODY))) updateMutex.withLock {
                                 onUpdate(RunUpdate(nodeId = node.id, text = delta, visible = true,
                                     workflowId = ref.workflow.id, outputSlot = node.outputSlot, turnId = currentUserMessageId))
@@ -799,7 +696,7 @@ class WorkflowEngine(
                                     RecoveryFailureKind.ACTION, "已接受，正在恢复后续步骤", provisional = true)
                                 if (!replayIncomplete()) priorFailures.keys.removeAll(acceptedReceipts.keys)
                                 progress()
-                                if (executionVersion >= 6) receipt.reply?.let { reply ->
+                                if (semantics.provisionalProcessedOutput) receipt.reply?.let { reply ->
                                     updateMutex.withLock { onUpdate(RunUpdate(nodeId = item.ref.node.id, text = reply.text,
                                         visible = true, workflowId = item.ref.workflow.id, outputSlot = reply.outputSlot,
                                         turnId = currentUserMessageId, replace = true, reasoningSnapshot = reply.reasoningSnapshot)) }
@@ -900,7 +797,7 @@ class WorkflowEngine(
             progress()
             return paused
         }
-        if (executionVersion >= 4 && main.bodySourceTileId != null && bodyDisplayReceipt == null) {
+        if (semantics.bodyDisplayTemplates && main.bodySourceTileId != null && bodyDisplayReceipt == null) {
             val primaryWorkflowId = main.primaryWorkflowId ?: main.workflows.firstOrNull()?.id
             val target = replies.lastOrNull { it.workflowId == primaryWorkflowId &&
                 it.outputSlot == OutputSlot.BODY && !it.deleted && it.text.isNotBlank() }

@@ -1,12 +1,14 @@
 # Companion 新窗口接续交接
 
-更新：2026-10-04。当前完成到 revision33 / 0.33-preview。本文用于新任务定位现状；技术约束以本仓库 `AGENTS.md` 和 `docs/ARCHITECTURE.md` 的最新修订为准。不要沿用早期网页原型或旧交接中的完成判断。
+更新：2026-10-04。当前完成到 revision34 / 0.34-preview。本文用于新任务定位现状；技术约束以本仓库 `AGENTS.md` 和 `docs/ARCHITECTURE.md` 的最新修订为准。不要沿用早期网页原型或旧交接中的完成判断。
 
 ## 现在应该做什么
 
-用户本轮要求整理文档、打开新的接续任务。上一轮 History 局部设置已经实现、验收、交付，没有未完成的实现任务需要自动重跑。新任务先阅读交接和当前基线，确认源码位置，简短告知准备好接续，随后接收用户试用反馈或新需求。不自行开始大范围重构、回归、模型请求或重新导入示例。
+接续任务中，用户确认改善经常改动模块的可维护性、保留现有行为与数据格式，稳定冷门模块先不动。revision34 已完成执行兼容规则集中、运行快照转换、候选执行器拆分、动作配置校验归位，以及 Android 导入准备与配置编辑纯规则抽取。维护/扩展入口及文件职责见 `docs/MAINTAINABILITY.md`。没有待自动续跑的实现任务；继续接收试用反馈或新需求，不自行扩大重构、回归、模型请求或重导示例。
 
-源码实现对应提交 `741b76145e5d5b451e5db18836437d6c970aa1cc`，已推送既有私有仓库 `Quirlune/companion-rikka` 的 main。本轮交接和 README 修订另作纯文档提交；读取时用 Git 判断实际 HEAD 和是否有新改动，不能回滚到交付提交覆盖用户后续工作。
+当前源码以实际仓库 Git HEAD 和工作区为准，版本为0.34-preview；读取时先核对 Git，不回滚覆盖后续修改。前一版0.33实现提交为 `741b76145e5d5b451e5db18836437d6c970aa1cc`、文档提交为 `f90691597acf918973505e2519282aae99d56bc3`，它们不是当前源码。既有私有远端为 `Quirlune/companion-rikka` main。
+
+本次新交付目录：`C:/Users/34601/Documents/Codex/2026-10-04/companion-continuation/outputs`，包含 `Companion-0.34-preview.apk`、`.sha256`、`验收记录.json` 和 `可维护性说明.txt`；验收日志和初次/最终 XML 保存在同一任务的 `work/maintainability-v34-*`。原来的教程、配置和启动器仍在下面的旧工作区。电脑专用预览仍安装0.33，本轮只构建交付，不安装或启动设备。
 
 ## 文件和环境
 
@@ -17,10 +19,10 @@
 | 项目 | 位置（相对上述根目录） |
 | --- | --- |
 | 实际 Git 仓库 | `work/companion-rikka` |
-| 当前架构及决策/验收记录 | `work/companion-rikka/docs/ARCHITECTURE.md`，revision33 |
+| 当前架构及决策/验收记录 | `work/companion-rikka/docs/ARCHITECTURE.md`，revision34 |
 | 语言已实现/未实现边界 | `work/companion-rikka/docs/PROMPT_LANGUAGE.md` |
 | 配置包导入/撤回契约 | `work/companion-rikka/docs/CONFIGURATION_PACKAGES.md` |
-| 当前 APK | `outputs/Companion-0.33-preview.apk` 和 `.sha256` |
+| 前一版 APK／电脑已安装版 | `outputs/Companion-0.33-preview.apk` 和 `.sha256`；当前0.34在上面的新交付目录 |
 | 使用教程 | `outputs/使用教程.md` |
 | 导入及分层记忆/磁贴教程 | `outputs/分层记忆与磁贴说明.md` |
 | 已整理的日常版配置 | `outputs/沐瑶-Gray-G11-分层记忆配置.json` |
@@ -109,6 +111,10 @@ revision33 新增每一处引用的“历史上下文”编辑：可设每楼前
 core路径前缀为 `core/src/main/kotlin/dev/gray/companion/core/`；ui简写路径前缀为 `app/src/main/java/dev/gray/companion/`。新增通用动作按现有 registry、参数和写入声明扩展，不增加另一套执行器或隐藏状态。
 
 ## 已有验收，别重复跑
+
+revision34：69项独立定向检查最终全部通过（64 core、5 app）。初次64项中一条旧流式断言失败；核对旧HEAD及revision31已交付契约后，仅修正并重跑该方法，保留其余63项通过证据。后续5项app检查和原生构建成功，1分37秒。校验APK同包名、同v2证书、versionCode193及Android26+、arm64/x86_64。SHA256：`e69e033604d850505df2820fbe4d4943e98afdcd3517d0f94602a73deb2d5f21`。没有改变wire10／SQLite1／recovery1／execution8；旧1–7语义保留。没有执行真实API、设备安装、启动、UI或性能验收；现有编译警告保留在日志。
+
+### revision33 的既有验收
 
 本轮8项定向检查全部通过：5个History局部格式测试、1个旧资源/冻结世界兼容、1个未知journal保留数据、1个原生宏补全边界。原生构建5分17秒成功；同签名APK已保留安装并启动电脑预览，11条旧记录/两个聊天/一条消息内容及首次安装时间不变，SQLite完整性ok。新应用崩溃/启动错误为0；两条Android ashmem弃用诊断保留在原日志，不声称原日志没有任何E行。
 

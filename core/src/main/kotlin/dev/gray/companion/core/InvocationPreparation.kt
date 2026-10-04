@@ -6,7 +6,7 @@ internal data class InvocationEnvironment(
     val input: String,
     val history: HistoryContext,
     val currentUserMessageId: String?,
-    val executionVersion: Int = 8
+    val executionVersion: Int = ExecutionSemantics.CURRENT
 )
 
 internal data class RenderedInvocationInput(
@@ -77,8 +77,7 @@ internal class InvocationPreparer(private val library: Library) {
             throw NodeExecutionFailure(ref, it.message, RecoveryFailureKind.PROMPT, retryable = false)
         }
         val emittedEvent = inputs.arguments["event"].orEmpty().trim()
-        if (ref.node.actionId == "event.emit" && (if (environment.executionVersion == 1)
-            emittedEvent in RuntimeEvents.reserved else RuntimeEvents.isReserved(emittedEvent))) {
+        if (ref.node.actionId == "event.emit" && ExecutionSemantics(environment.executionVersion).isReservedEvent(emittedEvent)) {
             throw NodeExecutionFailure(ref, "此事件由运行时派发", RecoveryFailureKind.PROMPT, retryable = false)
         }
         val profile = if (descriptor.usesModel) {

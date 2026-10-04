@@ -7,8 +7,8 @@ object MacroTemplateTokens {
     data class Scan(val tokens: List<Token>, val diagnostics: List<Diagnostic>)
     private val legacyToken = Regex("\\{\\{([^{}]*)\\}\\}")
 
-    fun scan(source: String, executionVersion: Int = 8): Scan {
-        if (executionVersion < 8) {
+    fun scan(source: String, executionVersion: Int = ExecutionSemantics.CURRENT): Scan {
+        if (!ExecutionSemantics(executionVersion).quoteAwareTemplates) {
             val tokens = legacyToken.findAll(source).map {
                 Token(it.range.first, it.range.last + 1, it.groupValues[1], true)
             }.toList()
