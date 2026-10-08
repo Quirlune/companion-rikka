@@ -1,6 +1,7 @@
 package dev.gray.companion.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
@@ -72,6 +73,8 @@ internal fun ResourceScreen(
     onManageTags: (() -> Unit)? = null,
     onSelectMainCall: ((String) -> Unit)? = null,
     selectionBusy: Boolean = false,
+    onApplyCommand: (((Library) -> ExtensionEditResult) -> Unit)? = null,
+    onOpenLocation: (ResourceLocation) -> Unit = {},
 ) {
     val activeMainId = library.sessions.firstOrNull { it.id == library.selectedSessionId }?.mainCallId
     val selectingMain = selected == ResourceKind.MAIN && onSelectMainCall != null
@@ -125,7 +128,22 @@ internal fun ResourceScreen(
     val filtered = remember(rows, query) {
         if (query.isBlank()) rows else rows.filter { it.searchText.contains(query.trim(), ignoreCase = true) }
     }
-    var pendingDelete by remember(selected) { mutableStateOf<ResourceRow?>(null) }
+    var actionRow by remember(selected) { mutableStateOf<ResourceRow?>(null) }
+    var operation by remember(selected) { mutableStateOf<ResourceOperationPreview?>(null) }
+
+    fun location(row: ResourceRow) = ResourceLocation(ExtensionResourceRef(when (selected) {
+        ResourceKind.CHARACTER -> ExtensionResourceKind.CHARACTER
+        ResourceKind.MAIN -> ExtensionResourceKind.MAIN
+        ResourceKind.PACKAGE -> ExtensionResourceKind.PACKAGE
+        ResourceKind.GROUP -> ExtensionResourceKind.GROUP
+    }, row.id))
+    fun preview(row: ResourceRow, delete: Boolean) {
+        val target = location(row)
+        operation = ResourceOperationPreview(target, row.name, delete,
+            if (delete) ResourceEditCommands.previewDelete(library, target)
+            else ResourceEditCommands.previewCopy(library, target))
+        actionRow = null
+    }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -151,6 +169,10 @@ internal fun ResourceScreen(
                     shape = MaterialTheme.shapes.large,
                 )
             }
+            if (rows.isNotEmpty()) item {
+                Text(if (selectingMain) "轻点选择当前主调用，长按查看资源操作。" else "轻点编辑，长按查看复制、删除等操作。",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             if (filtered.isEmpty()) {
                 item {
                     Text(
@@ -164,12 +186,12 @@ internal fun ResourceScreen(
                 items(filtered, key = { it.id }) { row ->
                     CardGroup {
                         item(
-                            onClick = {
+                            modifier = Modifier.combinedClickable(enabled = !selectionBusy, onLongClick = { actionRow = row }, onClick = {
                                 if (!selectionBusy) {
                                     if (selectingMain) onSelectMainCall?.invoke(row.id)
                                     else onEdit(Editing(selected.editor, row.id))
                                 }
-                            },
+                            }),
                             headlineContent = {
                                 Text(row.name.ifBlank { "未命名" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             },
@@ -181,10 +203,12 @@ internal fun ResourceScreen(
                             },
                             trailingContent = {
                                 Row {
-                                    if (selectingMain) IconButton(onClick = { onEdit(Editing(selected.editor, row.id)) }, enabled = !selectionBusy) {
+                                    if (selectingMain && row.id == activeMainId) IconButton(onClick = { onEdit(Editing(selected.editor, row.id)) }, enabled = !selectionBusy) {
                                         Icon(HugeIcons.PencilEdit01, contentDescription = "编辑${row.name.ifBlank { "主调用" }}")
                                     }
-                                    ResourceRowMenu(onDelete = { pendingDelete = row }, enabled = !selectionBusy)
+                                    if (selectingMain && row.id == activeMainId) IconButton(onClick = { actionRow = row }, enabled = !selectionBusy) {
+                                        Icon(HugeIcons.MoreVertical, contentDescription = "当前主调用操作")
+                                    }
                                 }
                             },
                         )
@@ -193,44 +217,22 @@ internal fun ResourceScreen(
             }
         }
 
-    pendingDelete?.let { row ->
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text("删除${selected.title}？") },
-            text = {
-                Text("确定删除“${row.name.ifBlank { "未命名" }}”吗？仍被对话或其他资源引用的项目，需要先解除关联。")
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    onUpdate { lib ->
-                        when (selected) {
-                            ResourceKind.CHARACTER -> lib.copy(characters = lib.characters.filterNot { it.id == row.id })
-                            ResourceKind.MAIN -> lib.copy(mainCalls = lib.mainCalls.filterNot { it.id == row.id })
-                            ResourceKind.PACKAGE -> lib.copy(packages = lib.packages.filterNot { it.id == row.id })
-                            ResourceKind.GROUP -> lib.copy(groups = lib.groups.filterNot { it.id == row.id })
-                        }
-                    }
-                    pendingDelete = null
-                }) { Text("删除") }
-            },
-            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
-        )
+    actionRow?.let { row ->
+        ModalBottomSheet(onDismissRequest = { actionRow = null }) {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(row.name.ifBlank { "未命名" }, style = MaterialTheme.typography.titleLarge)
+                CardGroup {
+                    item(onClick = { actionRow = null; onEdit(Editing(selected.editor, row.id)) }, headlineContent = { Text("编辑") })
+                    item(onClick = { if (!selectionBusy) preview(row, false) }, headlineContent = { Text("复制…") })
+                    item(onClick = { if (!selectionBusy) preview(row, true) }, headlineContent = { Text("删除…") })
+                }
+                Spacer(Modifier.height(16.dp))
+            }
+        }
     }
-}
-
-@Composable
-private fun ResourceRowMenu(onDelete: () -> Unit, enabled: Boolean = true) {
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        IconButton(onClick = { expanded = true }, enabled = enabled) {
-            Icon(HugeIcons.MoreVertical, contentDescription = "更多操作")
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            DropdownMenuItem(
-                text = { Text("删除") },
-                onClick = { expanded = false; onDelete() },
-            )
-        }
+    operation?.let { current ->
+        ResourceOperationSheet(library, current, selectionBusy, onApplyCommand,
+            onOpenLocation = onOpenLocation, onChange = { operation = it }, onDismiss = { operation = null })
     }
 }
 

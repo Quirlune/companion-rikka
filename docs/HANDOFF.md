@@ -1,14 +1,16 @@
 # Companion 新窗口接续交接
 
-更新：2026-10-08。当前 revision36 / 0.38-preview 已在实际 main 完成；实验分支不作为基座。21 项定向检查、离线原生构建和 APK 身份/签名核对通过，设备体验未验收。本文用于新任务定位现状；技术约束以本仓库 `AGENTS.md` 和 `docs/ARCHITECTURE.md` 的最新修订为准。不要沿用早期网页原型或旧交接中的完成判断。
+更新：2026-10-08。revision37 / 0.39-preview已在实际 main 的407a3039／0.38-preview上实现，18项定向检查、原生构建及APK签名核对通过；实验分支不作为基座。电脑预览安装与活动启动成功，但窗口空白／后续模拟器恢复卡住，完整可视交互未验收。本文用于新任务定位现状；技术约束以本仓库 `AGENTS.md` 和 `docs/ARCHITECTURE.md` 的最新修订为准。不要沿用早期网页原型或旧交接中的完成判断。
 
 ## 现在应该做什么
 
-用户确认沿用原四类资源与运行方式，主线局部优化就地编辑、共享影响、错误定位，并增加最小配置扩展入口。revision36 在主调用编辑器增加“扩展”：从现有资源创建组成、选择公开字段、安装默认停用、开关/解除安装、编辑实际字段与打开完整原编辑器。账本区分手动及多个扩展来源；禁用只撤回自己的关联，不删除资源或回滚参数。引用芯片按原模板逐处编辑，复用原 History，错误可定位原文。保持完整运行/记忆/分支/恢复底层，未引入实验调度或文档模型。详细边界见 ARCHITECTURE revision36；维护入口见 MAINTAINABILITY。
+用户要求六项优化实际迁移到原架构：可点来源、就地配置、共享影响／当前使用处独立、复制删除维护引用、错误定位、按选择展开操作。revision37采用ResourceLocations／ResourceUsageIndex／ResourceEditCommands共享纯配置契约，SourceNavigation合并实际资源／工作流／提示块／记忆草稿，Controller仍为唯一保存入口。来源修改经真正保存后才跨资源离开，返回刷新编辑基线。独立仅支持静态唯一角色／组件包词条的一次引用；复制改写内部标识，文本宏／输出地址保留共享并提示，动态使用无法穷尽。四类资源及完整运行／History／记忆／分支／恢复保持。
 
-当前源码以实际仓库 Git HEAD 和工作区为准，版本为0.38-preview/code197，基座 main `9e27ff10` / 0.35-preview。读取时先核对 Git，不回滚覆盖后续修改。既有私有远端为 `Quirlune/companion-rikka` main。两个实验版本保持原样；本轮没有合并实验提交。wire11 增量读取旧版本，SQLite1/recovery1/execution8 保持。
+导航按用户指定：设置原“记忆”改为“扩展”，里面第一项“记忆”，其后自建扩展和 +。移除主调用独占扩展入口。扩展页面的主调用选择只改变安装编辑上下文，不切换聊天。扩展账本仍区分手动及多个来源；禁用只撤回自己的关联，完整高级配置走原编辑器。
 
-交付目录：`C:/Users/34601/Documents/Codex/2026-10-04/companion-continuation/outputs`。本轮已交付 `Companion-0.38-preview.apk`、`.sha256`、`主线扩展说明.txt`、`主线扩展验收记录.json`；集中检查初次及后续日志在同一任务 `work/mainline-extension-build.log`、`mainline-extension-followup.log`。完成证据见 ARCHITECTURE revision36 验收记录；此前 APK/日志保留。电脑专用预览仍安装0.33，本轮只构建交付，不安装或启动设备。实际设备体验由用户验收；链接扩展不提供深复制或自动升级管理，首批公开字段有限，其余完整配置走原编辑器。
+当前源码以实际仓库 Git HEAD 和工作区为准，版本为0.39-preview/code198，基座 main `407a3039` / 0.38-preview。读取时先核对 Git，不回滚覆盖后续修改。既有私有远端为 `Quirlune/companion-rikka` main。两个实验版本保持原样；本轮没有合并实验提交。wire11 增量读取旧版本，SQLite1/recovery1/execution8 保持。
+
+交付目录：`C:/Users/34601/Documents/Codex/2026-10-04/companion-continuation/outputs`。本轮产物为 `Companion-0.39-preview.apk`、`.sha256`、`操作优化说明.txt`、`操作优化验收记录.json`；集中检查日志在同一任务 `work/operations-v39-build.log`，此前 APK／日志保留。电脑专用预览之前已按用户要求保留数据更新至0.38；本轮使用同一入口保留数据更新，不安装实体手机、不重置、不加示例、不请求真实模型。验收状态见ARCHITECTURE最新记录及交付JSON；完整交互体验由用户验收。
 
 ## 文件和环境
 
@@ -19,17 +21,17 @@
 | 项目 | 位置（相对上述根目录） |
 | --- | --- |
 | 实际 Git 仓库 | `work/companion-rikka` |
-| 当前架构及决策/验收记录 | `work/companion-rikka/docs/ARCHITECTURE.md`，revision36 |
+| 当前架构及决策/验收记录 | `work/companion-rikka/docs/ARCHITECTURE.md`，revision37 |
 | 语言已实现/未实现边界 | `work/companion-rikka/docs/PROMPT_LANGUAGE.md` |
 | 配置包导入/撤回契约 | `work/companion-rikka/docs/CONFIGURATION_PACKAGES.md` |
-| 前一版 APK／电脑已安装版 | `outputs/Companion-0.33-preview.apk` 和 `.sha256`；当前0.34在上面的新交付目录 |
+| 当前 APK／电脑预览 | 当前0.39在上面的新交付目录；旧版本保留，实际安装状态见本轮验收JSON |
 | 使用教程 | `outputs/使用教程.md` |
 | 导入及分层记忆/磁贴教程 | `outputs/分层记忆与磁贴说明.md` |
 | 已整理的日常版配置 | `outputs/沐瑶-Gray-G11-分层记忆配置.json` |
 | 交付进度记录 | `outputs/开发预览说明.md`，最新 revision33 |
 | 电脑原生预览入口 | `outputs/打开安卓预览.cmd` |
 | 预览环境/启动器 | `work/companion/desktop-preview/Environment.ps1`、`Start.ps1` |
-| 本轮验收证据 | `work/history-local-v33-result.json`、`history-local-v33-*` |
+| 本轮验收证据 | 新交付任务的 `outputs/操作优化验收记录.json`、`work/operations-v39-*` |
 | 前一轮分层记忆证据 | `work/memory-v32-result.json`、`memory-v32-*` |
 
 只读原版源码：`C:/Users/34601/Documents/Codex/2026-09-22/ni-q/work/rikkahub`。

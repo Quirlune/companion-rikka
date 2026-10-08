@@ -130,6 +130,15 @@ object ConfigurationCommands {
         current, plan.changes, plan.settings, forward = true, label = plan.label
     )
 
+    /** Typed editor candidate, with the same normalization, excluded-state guard and validation as imports. */
+    fun previewEdit(before: Library, candidate: Library, label: String = "配置编辑"): ConfigurationPreview = try {
+        finishPreview(before, candidate, label)
+    } catch (failure: ConfigProblem) {
+        ConfigurationPreview(null, listOf(Issue(failure.path, failure.message ?: "配置编辑无效")))
+    } catch (_: Exception) {
+        ConfigurationPreview(null, listOf(Issue("config", "配置编辑无法形成预览")))
+    }
+
     /** Only values this receipt installed may be restored; unrelated later changes are retained. */
     fun undo(receipt: ConfigurationEditReceipt, current: Library): ConfigurationApplyResult = transform(
         current, receipt.changes, receipt.settings, forward = false, label = receipt.label

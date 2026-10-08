@@ -17,8 +17,10 @@ internal fun MemorySettingsPage(
     onBack: () -> Unit,
     saving: Boolean,
 ) {
+    val sourceFocus = LocalSourceNavigation.current?.focus
+    val focusedOwner = sourceFocus?.resource?.takeIf { it.kind == ExtensionResourceKind.MAIN }?.id
     val currentSession = library.sessions.firstOrNull { it.id == library.selectedSessionId }
-    var ownerId by remember { mutableStateOf(currentSession?.mainCallId?.takeIf { id -> library.mainCalls.any { it.id == id } }
+    var ownerId by remember { mutableStateOf(focusedOwner?.takeIf { id -> library.mainCalls.any { it.id == id } } ?: currentSession?.mainCallId?.takeIf { id -> library.mainCalls.any { it.id == id } }
         ?: library.mainCalls.firstOrNull()?.id) }
     val owner = library.mainCalls.firstOrNull { it.id == ownerId }
     if (owner == null) {
@@ -40,6 +42,15 @@ internal fun MemorySettingsPage(
         if (dirty) pendingOwner = id else ownerId = id
     }
 
+    val sourceResource = ExtensionResourceRef(ExtensionResourceKind.MAIN, owner.id)
+    SourceDraftBoundary(sourceResource,
+        overlay = { base -> base.copy(mainCalls = base.mainCalls.map { main -> if (main.id == owner.id) main.copy(history = main.history.copy(processor = processor)) else main }) },
+        restore = { candidate, parent ->
+            val original = parent.mainCalls.first { it.id == owner.id }.history.processor
+            candidate.copy(mainCalls = candidate.mainCalls.map { main -> if (main.id == owner.id) main.copy(history = main.history.copy(processor = original)) else main })
+        },
+        accept = { candidate -> candidate.mainCalls.firstOrNull { it.id == owner.id }?.let { processor = it.history.processor } },
+        ownedLocation = { target -> target.resource == sourceResource && target.workflowId in listOfNotNull(processor.workflow.id, processor.aggregationWorkflow?.id) }) {
     CallEditorPage("记忆", dirty, onBack, { onSave(owner.id, normalized, onBack) }, saving) {
         val choices = library.mainCalls.map { it.id to it.name.ifBlank { "未命名主调用" } }
         Text("所属主调用", style = MaterialTheme.typography.titleSmall)
@@ -131,6 +142,7 @@ internal fun MemorySettingsPage(
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         HistoryMemoryInspector(currentSession?.takeIf { it.mainCallId == owner.id })
+    }
     }
     pendingOwner?.let { target ->
         AlertDialog(onDismissRequest = { pendingOwner = null }, title = { Text("切换主调用？") },

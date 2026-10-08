@@ -37,6 +37,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import dev.gray.companion.core.*
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import dev.gray.companion.core.HistorySelection
 import dev.gray.companion.core.HistoryViews
 import dev.gray.companion.core.MacroTemplateTokens
@@ -81,7 +86,11 @@ internal fun PromptTemplateField(
     onChange: (String) -> Unit,
     minLines: Int = 3,
     transformMacro: (String) -> String = { it },
+    owner: ExtensionFieldRef? = null,
 ) {
+    val navigation = LocalSourceNavigation.current
+    var sourceChoices by remember { mutableStateOf<List<ResourceLocation>?>(null) }
+    var separateTarget by remember { mutableStateOf<PromptReferenceOccurrence?>(null) }
     var draft by remember { mutableStateOf(TextFieldValue(value)) }
     var focused by remember { mutableStateOf(false) }
     var explicitlyOpen by remember { mutableStateOf(false) }
@@ -102,7 +111,12 @@ internal fun PromptTemplateField(
         macroCompletionToken(draft.text, draft.selection.start, draft.selection.end)
     }
     val scan = remember(draft.text) { MacroTemplateTokens.scan(draft.text) }
-    val occurrences = remember(draft.text, scan, references) { promptReferenceOccurrences(draft.text, scan, references) }
+    val occurrences = remember(draft.text, scan, references, navigation?.library, owner) {
+        promptReferenceOccurrences(draft.text, scan, references).map { occurrence ->
+            val resolved = navigation?.library?.let { ResourceLocations.resolveReference(it, owner, occurrence.text) }.orEmpty()
+            occurrence.copy(locations = (occurrence.locations + resolved).distinctBy { it.copy(section = null) })
+        }
+    }
     val problems = remember(draft.text, scan) { promptReferenceProblems(draft.text, scan) }
     val popupOpen = !browserOpen && historyEdit == null && referenceEdit == null &&
         (explicitlyOpen || (focused && token != null && dismissedAt != (draft.text to draft.selection)))
@@ -124,6 +138,18 @@ internal fun PromptTemplateField(
         if (draft.text != value) {
             draft = TextFieldValue(value, TextRange(draft.selection.end.coerceIn(0, value.length)))
             explicitlyOpen = false
+        }
+    }
+    val requestedFocus = LocalSourceFieldFocus.current ?: navigation?.focus
+    LaunchedEffect(requestedFocus, owner) {
+        if (owner != null && requestedFocus != null && requestedFocus.field == owner) {
+            val start = requestedFocus.spanStart
+            val end = requestedFocus.spanEndExclusive
+            if (start != null && end != null && start in 0..draft.text.length && end in start..draft.text.length) {
+                draft = draft.copy(selection = TextRange(start, end))
+                dismissedAt = draft.text to draft.selection
+                focusRequester.requestFocus()
+            }
         }
     }
     fun dismissCompletion() {
@@ -181,6 +207,10 @@ internal fun PromptTemplateField(
             onValueChange = { changed ->
                 draft = changed
                 referenceNotice = null
+                if (changed.text == value && !changed.selection.collapsed) {
+                    val selected = occurrences.filter { it.start == changed.selection.min && it.endExclusive == changed.selection.max }.singleOrNull()
+                    if (selected != null) { referenceEdit = selected; explicitlyOpen = false }
+                }
                 if (changed.text != value) onChange(changed.text)
             },
             label = { Text(label) },
@@ -245,6 +275,15 @@ internal fun PromptTemplateField(
     referenceNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
     referenceEdit?.let { target ->
         PromptReferenceActions(target,
+            onSource = if (navigation != null && target.locations.isNotEmpty()) ({
+                if (targetIsCurrent(target)) {
+                    referenceEdit = null
+                    if (target.locations.size == 1) navigation.edit(target.locations.single()) else sourceChoices = target.locations
+                }
+            }) else null,
+            onSeparate = if (navigation != null && owner != null && target.history == null) ({
+                if (targetIsCurrent(target)) { referenceEdit = null; separateTarget = target }
+            }) else null,
             onReplace = {
                 if (targetIsCurrent(target)) { referenceEdit = null; browserTarget = target; browserOpen = true }
             },
@@ -294,4 +333,50 @@ internal fun PromptTemplateField(
             },
             onDismiss = { historyEdit = null; focusRequester.requestFocus() })
     }
+    sourceChoices?.let { choices ->
+        ModalBottomSheet(onDismissRequest = { sourceChoices = null }) {
+            Column(Modifier.fillMaxWidth().heightIn(max = 480.dp).verticalScroll(rememberScrollState()).padding(16.dp)) {
+                Text("选择实际来源", style = MaterialTheme.typography.titleLarge)
+                Text("这个地址有多个来源；请选择要编辑的那一项。", style = MaterialTheme.typography.bodySmall)
+                choices.forEach { location ->
+                    TextButton(onClick = { sourceChoices = null; navigation?.edit(location) }) {
+                        val call = location.workflowId?.let { navigation?.library?.sourceWorkflow(location.resource, it) }
+                        Text(listOfNotNull(navigation?.library?.let { sourceResourceTitle(it, location.resource) }, call?.title,
+                            call?.nodes?.firstOrNull { it.id == location.nodeId }?.title).joinToString(" · "))
+                    }
+                }
+            }
+        }
+    }
+    separateTarget?.let { occurrence ->
+        val source = occurrence.locations.singleOrNull()?.field?.takeIf { it.field == ExtensionField.ENTRY_TEXT }
+        val plan = remember(navigation?.library, owner, source, occurrence) { if (navigation != null && owner != null && source != null)
+            if (source.kind == owner.kind && source.resourceId == owner.resourceId)
+                ResourceEditCommands.previewSeparateDraft(navigation.library, owner, occurrence.source, occurrence.start, occurrence.endExclusive, source)
+            else ResourceEditCommands.previewSeparate(navigation.library, owner, occurrence.source, occurrence.start, occurrence.endExclusive, source) else null }
+        val issues = plan?.issues.orEmpty()
+        AlertDialog(onDismissRequest = { separateTarget = null }, title = { Text("仅这一处独立使用") }, text = {
+            Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("复制所选词条，并且只替换这一处引用。其他引用仍读取原词条。")
+                if (source == null) Text("当前引用没有唯一的静态词条来源；历史、动态结果及多来源引用不能在此独立。", color = MaterialTheme.colorScheme.error)
+                issues.forEach { Text(it.message, color = MaterialTheme.colorScheme.error) }
+                plan?.changes.orEmpty().forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+            }
+        }, confirmButton = { TextButton(enabled = plan?.canApply == true || plan?.draftLibrary != null, onClick = {
+            if (plan != null && navigation != null && targetIsCurrent(occurrence)) {
+                val result = if (plan.draftLibrary == null) ResourceEditCommands.apply(plan, navigation.library) else null
+                val candidate = plan.draftLibrary ?: result?.library
+                if (candidate == null) referenceNotice = result?.issues.orEmpty().joinToString("\n") { it.message }
+                else plan.destination?.let { destination ->
+                    // Foreign source + owner are committed together through the full draft leave chain.
+                    if (source?.resourceId == owner?.resourceId && source?.kind == owner?.kind && navigation.canMerge(destination)) {
+                        navigation.merge(candidate)
+                        navigation.edit(destination)
+                    } else navigation.leaveAtomic(candidate, destination) { ok -> if (!ok) referenceNotice = "尚未独立使用；草稿已保留。" }
+                }
+                separateTarget = null
+            }
+        }) { Text("创建独立词条") } }, dismissButton = { TextButton(onClick = { separateTarget = null }) { Text("取消") } })
+    }
+
 }

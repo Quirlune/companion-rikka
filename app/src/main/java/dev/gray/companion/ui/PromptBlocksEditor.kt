@@ -34,6 +34,7 @@ internal fun PromptBlocksEditor(
     onRegisterBack: ((() -> Unit) -> Unit)? = null,
     title: String = "提示词", saving: Boolean = false,
     tags: List<PromptTag> = emptyList(),
+    owner: ResourceLocation? = null,
 ) {
     val baseline = remember(initial) {
         val used = initial.map { it.slug }.filter { it.isNotEmpty() }.toMutableSet()
@@ -67,11 +68,23 @@ internal fun PromptBlocksEditor(
         val toIndex = blocks.indexOfFirst { it.id == to.key }
         if (fromIndex >= 0 && toIndex >= 0 && fromIndex != toIndex) edit(blocks.moved(fromIndex, toIndex))
     }
+    BlocksSourceBoundary(owner, blocks, { edit(it) }) {
+    val sourceNavigation = LocalSourceNavigation.current
+    val sourceIssues = LocalSourceIssues.current
+    val sourceFocus = sourceNavigation?.focus
+    LaunchedEffect(sourceFocus) {
+        val id = sourceFocus?.blockId
+        val index = blocks.indexOfFirst { it.id == id }
+        if (index >= 0) { expanded[blocks[index].id] = true; listState.scrollToItem(index) }
+    }
+    var showIssues by remember { mutableStateOf(false) }
+    if (showIssues && sourceNavigation != null) SourceIssuesSheet(sourceNavigation.library, sourceIssues, { location -> if (location.field == null) sourceNavigation.open(location) else sourceNavigation.edit(location) }, { showIssues = false })
     Scaffold(
         topBar = {
             LargeFlexibleTopAppBar(
                 title = { Text(title) }, navigationIcon = { CompanionBackButton(::requestBack) },
                 actions = {
+                    if (sourceIssues.isNotEmpty()) TextButton(onClick = { showIssues = true }) { Text("问题 ${sourceIssues.size}") }
                     if (blocks != baseline) Text("未保存", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     IconButton(onClick = { focus.clearFocus(); onSave(blocks) }, enabled = !saving) { Icon(HugeIcons.FloppyDisk, "保存提示词") }
                 }, scrollBehavior = scrollBehavior, colors = CustomColors.topBarColors,
@@ -110,7 +123,7 @@ internal fun PromptBlocksEditor(
                                 if (expanded[block.id] == true) Column(Modifier.padding(horizontal = 12.dp).padding(bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     fun update(value: PromptBlock, group: String? = null) = edit(blocks.map { if (it.id == block.id) value else it }, group)
                                     PromptTagSelector(tags, block.tagIds) { update(block.copy(tagIds = it)) }
-                                    PromptTemplateField("内容", block.template, references, { update(block.copy(template = it), "template:${block.id}") }, minLines = 3)
+                                    PromptTemplateField("内容", block.template, references, { update(block.copy(template = it), "template:${block.id}") }, minLines = 3, owner = owner?.let { ExtensionFieldRef(it.resource.kind, it.resource.id, ExtensionField.BLOCK_TEMPLATE, workflowId = it.workflowId, nodeId = it.nodeId, blockId = block.id) })
                                     TextProcessingEditor("内容处理", block.processing, references) { update(block.copy(processing = it)) }
                                     EditorSection("插入位置与触发", promptPositionLabel(block)) {
                                         ChoiceLine("插入位置", block.position, listOf(PromptPosition.BEFORE_HISTORY to "历史之前", PromptPosition.IN_HISTORY to "历史中", PromptPosition.AFTER_HISTORY to "历史之后")) { update(block.copy(position = it)) }
@@ -133,6 +146,7 @@ internal fun PromptBlocksEditor(
                 }
             }
         }
+    }
     }
     renameId?.let { id -> blocks.firstOrNull { it.id == id }?.let { block ->
         NamingDialog("提示词名称", block.title, block.slug,

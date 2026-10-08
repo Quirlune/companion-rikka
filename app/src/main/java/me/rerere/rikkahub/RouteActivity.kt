@@ -553,11 +553,11 @@ class RouteActivity : ComponentActivity(), VolumeKeyScrollOwner {
 
 sealed interface Screen : NavKey {
     @Serializable data class CompanionResources(val kind: Int) : Screen
-    @Serializable data class CompanionEditor(val kind: String, val id: String) : Screen
-    @Serializable data class CompanionExtensions(val mainCallId: String) : Screen
+    @Serializable data class CompanionEditor(val kind: String, val id: String, val focus: dev.gray.companion.core.ResourceLocation? = null, val visitId: String = "") : Screen
+    @Serializable data class CompanionExtensions(val mainCallId: String = "") : Screen
     @Serializable data class CompanionRecoveryPrompt(val sessionId: String, val runId: String, val nodeKey: String) : Screen
     @Serializable data object CompanionSession : Screen
-    @Serializable data object CompanionMemory : Screen
+    @Serializable data class CompanionMemory(val visitId: String = "", val focus: dev.gray.companion.core.ResourceLocation? = null) : Screen
     @Serializable data object CompanionReasoning : Screen
     @Serializable data object CompanionImportHistory : Screen
     @Serializable data object CompanionPersonas : Screen

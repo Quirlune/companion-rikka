@@ -164,6 +164,9 @@ class AppController internal constructor(
     /** Extension edits share the original admission, validation and durable publication boundary. */
     suspend fun updateExtensions(command: (Library) -> ExtensionEditResult): List<Issue> = updateConfiguration(command)
 
+    /** Resource plans and source-field edits use the same admission and publication path. */
+    suspend fun updateResources(command: (Library) -> ExtensionEditResult): List<Issue> = updateConfiguration(command)
+
     private suspend fun updateConfiguration(prepare: (Library) -> ExtensionEditResult): List<Issue> {
         mutex.withLock { editingCount++ }
         try {
@@ -174,7 +177,10 @@ class AppController internal constructor(
             val proposal = try { prepare(before) } catch (_: Exception) {
                 return@withLock listOf(Issue("library", "编辑操作失败"))
             }
-            val edited = proposal.library
+            val edited = proposal.library?.let { candidate ->
+                proposal.receipt?.let { receipt -> candidate.copy(configurationEdits = before.configurationEdits + receipt) }
+                    ?: candidate
+            }
             if (edited == null || proposal.issues.any { it.error }) {
                 val failures = proposal.issues.ifEmpty { listOf(Issue("library", "配置修改未应用")) }
                 _state.value = _state.value.copy(issues = failures)

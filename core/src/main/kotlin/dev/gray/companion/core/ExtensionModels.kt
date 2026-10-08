@@ -24,7 +24,7 @@ import kotlinx.serialization.Serializable
     val kind: ExtensionResourceKind, val resourceId: String, val manual: Boolean = false,
     val ownerBindingIds: List<String> = emptyList()
 )
-data class ExtensionEditResult(val library: Library?, val issues: List<Issue> = emptyList(), val changes: List<String> = emptyList())
+data class ExtensionEditResult(val library: Library?, val issues: List<Issue> = emptyList(), val changes: List<String> = emptyList(), val receipt: ConfigurationEditReceipt? = null)
 data class ExtensionImpact(val mainCallIds: List<String> = emptyList(), val extensionIds: List<String> = emptyList())
 data class ExtensionFieldDescriptor(
     val target: ExtensionFieldRef, val title: String, val type: ActionFieldType = ActionFieldType.STRING,

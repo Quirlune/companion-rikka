@@ -67,14 +67,44 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
     var saving by remember { mutableStateOf(false) }
     var importBusy by remember { mutableStateOf(false) }
     var consumedSearchTarget by remember { mutableStateOf<String?>(null) }
+    var configurationIssues by remember { mutableStateOf<List<Issue>>(emptyList()) }
 
     suspend fun report(issues: List<Issue>): Boolean {
+        if (issues.any { it.error } && stack.lastOrNull() !is Screen.CompanionEditor && stack.lastOrNull() !is Screen.CompanionMemory) configurationIssues = issues
         issues.firstOrNull()?.let { snackbar.showSnackbar(it.message) }
         return issues.none { it.error }
     }
     fun update(transform: (Library) -> Library) { scope.launch { report(controller.updateLibrary(transform)) } }
     fun open(screen: Screen) { scope.launch { drawer.close(); navigator.navigate(screen) } }
     fun edit(target: Editing) { open(Screen.CompanionEditor(target.kind.route, target.id)) }
+    fun openLocation(location: ResourceLocation) { open(sourceEditorScreen(location, library)) }
+    fun applyCommand(command: (Library) -> ExtensionEditResult) {
+        if (saving) return
+        saving = true
+        scope.launch {
+            try { report(controller.updateResources(command)) }
+            finally { saving = false }
+        }
+    }
+    fun applySourceEdit(before: Library, candidate: Library, onResult: (Boolean) -> Unit) {
+        if (saving) { onResult(false); return }
+        saving = true
+        scope.launch {
+            var accepted = false
+            try {
+                val preview = ConfigurationCommands.previewEdit(before, candidate, "来源编辑")
+                val plan = preview.plan
+                accepted = if (plan == null) {
+                    report(preview.issues.ifEmpty { listOf(Issue("configuration", "来源修改未应用")) })
+                    false
+                }
+                else report(controller.updateResources { current ->
+                    val result = ConfigurationCommands.apply(plan, current)
+                    ExtensionEditResult(result.library, result.issues, preview.changes.map { it.id }, receipt = result.receipt)
+                })
+            } finally { saving = false; onResult(accepted) }
+        }
+    }
     fun save(transform: (Library) -> Library) {
         if (saving) return
         saving = true
@@ -202,8 +232,17 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                             }
                             entry<Screen.CompanionSession> { SessionConfigScreen(library, { navigator.popBackStack() }, ::save, saving,
                                 onManagePersonas = { navigator.navigate(Screen.CompanionPersonas) }) }
-                            entry<Screen.CompanionMemory> {
+                            entry<Screen.CompanionMemory> { memoryKey ->
+                                SourceNavigationProvider(library, onOpenLocation = { location ->
+                                    val destination = sourceEditorScreen(location, library)
+                                    if (destination is Screen.CompanionMemory) navigator.navigate(destination) { popUpTo(memoryKey) { inclusive = true } }
+                                    else {
+                                        navigator.navigate(Screen.CompanionMemory(visitId = newId(), focus = memoryKey.focus?.let { ResourceLocation(it.resource) })) { popUpTo(memoryKey) { inclusive = true } }
+                                        navigator.navigate(destination)
+                                    }
+                                }, onApplyExternal = ::applySourceEdit, focus = memoryKey.focus, issues = state.issues) {
                                 MemorySettingsPage(library, controller.actionDescriptors, ::saveMemory, { navigator.popBackStack() }, saving)
+                                }
                             }
                             entry<Screen.CompanionReasoning> {
                                 ReasoningParsingSettingsPage(library.reasoningParsing,
@@ -243,7 +282,7 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                                 if (latest.id == session.id) latest.copy(mainCallId = id, updatedAt = System.currentTimeMillis()) else latest
                                             }) }
                                         }) else null,
-                                        selectionBusy = saving)
+                                        selectionBusy = saving, onApplyCommand = ::applyCommand, onOpenLocation = ::openLocation)
                                 }
                             }
                             entry<Screen.SettingProvider> {
@@ -264,15 +303,7 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                             entry<Screen.WebView> { WebViewPage(it.url, it.contentId) }
                             entry<Screen.CompanionExtensions> { key ->
                                 ConfigurationExtensionsPage(library, key.mainCallId, saving,
-                                    onApply = { command ->
-                                        if (!saving) {
-                                            saving = true
-                                            scope.launch {
-                                                try { report(controller.updateExtensions(command)) }
-                                                finally { saving = false }
-                                            }
-                                        }
-                                    },
+                                    onApply = ::applyCommand,
                                     onOpenResource = { resource ->
                                         val kind = when (resource.kind) {
                                             ExtensionResourceKind.CHARACTER -> EditorKind.CHARACTER
@@ -282,9 +313,8 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                         }
                                         edit(Editing(kind, resource.id))
                                     },
-                                    onBack = { navigator.navigate(Screen.CompanionEditor(EditorKind.MAIN.route, key.mainCallId)) {
-                                        popUpTo(key) { inclusive = true }
-                                    } })
+                                    onBack = { navigator.popBackStack() },
+                                    onOpenMemory = { navigator.navigate(Screen.CompanionMemory()) }, onOpenLocation = ::openLocation)
                             }
                             entry<Screen.CompanionRecoveryPrompt> { key ->
                                 val node = controller.recoveryNode(key.sessionId, key.runId, key.nodeKey)
@@ -315,6 +345,17 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                             entry<Screen.CompanionEditor> { key ->
                                 val kind = EditorKind.fromRoute(key.kind)
                                 val back: () -> Unit = { navigator.popBackStack() }
+                                SourceNavigationProvider(library, onOpenLocation = { location ->
+                                    val destination = sourceEditorScreen(location, library)
+                                    val sameResource = destination is Screen.CompanionEditor && destination.kind == key.kind && destination.id == key.id
+                                    if (sameResource) navigator.navigate(destination) { popUpTo(key) { inclusive = true } }
+                                    else {
+                                        navigator.navigate(Screen.CompanionEditor(key.kind, key.id, visitId = newId())) {
+                                            popUpTo(key) { inclusive = true }
+                                        }
+                                        navigator.navigate(destination)
+                                    }
+                                }, onApplyExternal = ::applySourceEdit, focus = key.focus, issues = state.issues) {
                                 when (kind) {
                                     EditorKind.CHARACTER -> {
                                         val initial = remember(key) { library.characters.firstOrNull { it.id == key.id } ?: CharacterCard(id = key.id, name = "新角色", namespace = "character_${key.id.take(8)}") }
@@ -338,20 +379,6 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                                     try {
                                                         val accepted = draft == null || report(controller.updateLibrary { current -> current.copy(mainCalls = current.mainCalls.replaceOrAdd(draft) { it.id }) })
                                                         if (accepted) navigator.navigate(Screen.CompanionEditor(EditorKind.MAIN.route, targetId ?: newId())) { popUpTo(key) { inclusive = true } }
-                                                    } finally { saving = false }
-                                                }
-                                            }
-                                         }, onOpenExtensions = { draft, mainId ->
-                                            if (!saving) {
-                                                saving = true
-                                                scope.launch {
-                                                    try {
-                                                        val accepted = draft == null || report(controller.updateLibrary { current ->
-                                                            current.copy(mainCalls = current.mainCalls.replaceOrAdd(draft) { it.id })
-                                                        })
-                                                        if (accepted) navigator.navigate(Screen.CompanionExtensions(mainId)) {
-                                                            popUpTo(key) { inclusive = true }
-                                                        }
                                                     } finally { saving = false }
                                                 }
                                             }
@@ -385,12 +412,14 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                     }
                                     null -> Text("此编辑页不可用")
                                 }
+                                }
                             }
                         }
                 )
                 SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
             }
             saveSessionId?.let { id -> SaveChatDialog(library, id, { session, folder -> scope.launch { report(controller.saveChat(session, folder)) } }, { open(Screen.History) }, { saveSessionId = null }) }
+            if (configurationIssues.isNotEmpty()) SourceIssuesSheet(library, configurationIssues, ::openLocation) { configurationIssues = emptyList() }
             importPreview?.let { preview ->
                 ConfigurationImportSheet(preview, importBusy,
                     onApply = {
@@ -411,6 +440,22 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
 private fun <T> List<T>.replaceOrAdd(value: T, id: (T) -> String): List<T> =
     if (any { id(it) == id(value) }) map { if (id(it) == id(value)) value else it } else this + value
 
+private fun sourceEditorScreen(location: ResourceLocation, library: Library): Screen {
+    if (location.resource.kind == ExtensionResourceKind.MAIN) {
+        val main = library.mainCalls.firstOrNull { it.id == location.resource.id }
+        val processors = listOfNotNull(main?.history?.processor?.workflow?.id, main?.history?.processor?.aggregationWorkflow?.id)
+        if (location.workflowId in processors || location.section?.startsWith("history.processor") == true || location.section == "processor")
+            return Screen.CompanionMemory(visitId = newId(), focus = location)
+    }
+    val kind = when (location.resource.kind) {
+        ExtensionResourceKind.CHARACTER -> EditorKind.CHARACTER
+        ExtensionResourceKind.MAIN -> EditorKind.MAIN
+        ExtensionResourceKind.PACKAGE -> EditorKind.PACKAGE
+        ExtensionResourceKind.GROUP -> EditorKind.GROUP
+    }
+    return Screen.CompanionEditor(kind.route, location.resource.id, focus = location, visitId = newId())
+}
+
 @Composable
 private fun CompanionSettingsPage(onExport: () -> Unit, onImport: () -> Unit, undoCount: Int, onOpenMainCall: () -> Unit) {
     val navigator = LocalNavController.current
@@ -421,7 +466,7 @@ private fun CompanionSettingsPage(onExport: () -> Unit, onImport: () -> Unit, un
                 item(onClick = onOpenMainCall, headlineContent = { Text("主调用") }, leadingContent = { Icon(HugeIcons.Brain02, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionResources(ResourceKind.PACKAGE.routeIndex)) }, headlineContent = { Text("提示词包") }, leadingContent = { Icon(HugeIcons.Book03, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionResources(ResourceKind.GROUP.routeIndex)) }, headlineContent = { Text("调用组") }, leadingContent = { Icon(HugeIcons.Package, null) })
-                item(onClick = { navigator.navigate(Screen.CompanionMemory) }, headlineContent = { Text("记忆") }, leadingContent = { Icon(HugeIcons.Brain02, null) })
+                item(onClick = { navigator.navigate(Screen.CompanionExtensions()) }, headlineContent = { Text("扩展") }, leadingContent = { Icon(HugeIcons.Package, null) })
             } }
             item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("连接与界面") }) {
                 item(onClick = { navigator.navigate(Screen.SettingProvider) }, headlineContent = { Text("模型与 API") }, leadingContent = { Icon(HugeIcons.ServerStack01, null) })

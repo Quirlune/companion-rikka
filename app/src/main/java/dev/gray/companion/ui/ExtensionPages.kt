@@ -30,28 +30,38 @@ private sealed interface ExtensionPage {
 @Composable
 internal fun ConfigurationExtensionsPage(
     library: Library,
-    mainCallId: String,
+    mainCallId: String = "",
     busy: Boolean,
     onApply: ((Library) -> ExtensionEditResult) -> Unit,
     onOpenResource: (ExtensionResourceRef) -> Unit,
     onBack: () -> Unit,
+    onOpenMemory: () -> Unit = {},
+    onOpenLocation: (ResourceLocation) -> Unit = {},
 ) {
+    var editingMainId by remember(mainCallId) { mutableStateOf(mainCallId.ifBlank {
+        library.sessions.firstOrNull { it.id == library.selectedSessionId }?.mainCallId
+            ?.takeIf { id -> library.mainCalls.any { it.id == id } }
+            ?: library.mainCalls.firstOrNull()?.id.orEmpty()
+    }) }
+    val selectedMainId = editingMainId.takeIf { id -> library.mainCalls.any { it.id == id } }
+        ?: library.mainCalls.firstOrNull()?.id.orEmpty()
     val pages = remember(mainCallId) { mutableStateListOf<ExtensionPage>(ExtensionPage.ListPage) }
     // Approval is scoped to this visit and the actual set of declared users of each resource.
-    val approvedImpacts = remember(mainCallId) { mutableStateMapOf<ExtensionResourceRef, ExtensionImpact>() }
+    val approvedImpacts = remember(mainCallId) { mutableStateMapOf<ExtensionResourceRef, List<ResourceUse>>() }
     fun back() { if (pages.size > 1) pages.removeAt(pages.lastIndex) else onBack() }
     fun editDefinition(definition: ConfigurationExtension?) {
         pages.add(ExtensionPage.Definition(definition, definition ?: ConfigurationExtension(name = "新扩展")))
     }
     when (val page = pages.last()) {
         ExtensionPage.ListPage -> {
-            val main = library.mainCalls.firstOrNull { it.id == mainCallId }
+            val main = library.mainCalls.firstOrNull { it.id == selectedMainId }
             ExtensionPageFrame("扩展", ::back, busy, actions = {
                 IconButton(onClick = { editDefinition(null) }, enabled = !busy) { Icon(HugeIcons.Add01, "创建扩展") }
             }) {
-                if (main == null) Text("主调用已不可用。", color = MaterialTheme.colorScheme.error)
+                ExtensionDefinitionRow("记忆", "分段摘要、记忆处理与历史视图", busy, onClick = onOpenMemory)
+                if (main == null) Text("先创建主调用，即可安装扩展。已有扩展仍可编辑。", style = MaterialTheme.typography.bodySmall)
                 else {
-                    Text(main.name, style = MaterialTheme.typography.titleMedium)
+                    ChoiceLine("配置主调用", selectedMainId, library.mainCalls.map { it.id to it.name }) { editingMainId = it }
                     Text("启用后关联组成中的提示词包与调用组。参数会修改组成资源的实际字段。",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (main.extensionBindings.isNotEmpty()) {
@@ -61,26 +71,26 @@ internal fun ConfigurationExtensionsPage(
                             ExtensionDefinitionRow(definition?.name ?: "扩展已不可用", if (binding.enabled) "已启用" else "未启用",
                                 busy, onClick = { pages.add(ExtensionPage.Detail(binding.extensionId)) }, trailing = {
                                     Switch(binding.enabled, onCheckedChange = { enabled ->
-                                        onApply { ExtensionCommands.setEnabled(it, mainCallId, binding.id, enabled) }
+                                        onApply { ExtensionCommands.setEnabled(it, selectedMainId, binding.id, enabled) }
                                     }, enabled = !busy && definition != null)
                                 })
                         } }
                     }
-                    val available = library.extensions.filter { definition -> main.extensionBindings.none { it.extensionId == definition.id } }
-                    if (available.isNotEmpty()) {
-                        Text("可安装", style = MaterialTheme.typography.titleSmall)
-                        available.forEach { definition -> ExtensionDefinitionRow(definition.name,
-                            "${definition.resources.size} 个组成资源 · ${definition.parameters.size} 个公开参数", busy,
-                            onClick = { pages.add(ExtensionPage.Detail(definition.id)) }) }
-                    }
-                    if (library.extensions.isEmpty()) Text("还没有扩展。点 + 从已有资源创建。", style = MaterialTheme.typography.bodyMedium)
                 }
+                val available = library.extensions.filter { definition -> main?.extensionBindings.orEmpty().none { it.extensionId == definition.id } }
+                if (available.isNotEmpty()) {
+                    Text("可安装", style = MaterialTheme.typography.titleSmall)
+                    available.forEach { definition -> ExtensionDefinitionRow(definition.name,
+                        "${definition.resources.size} 个组成资源 · ${definition.parameters.size} 个公开参数", busy,
+                        onClick = { pages.add(ExtensionPage.Detail(definition.id)) }) }
+                }
+                if (library.extensions.isEmpty()) Text("还没有扩展。点 + 从已有资源创建。", style = MaterialTheme.typography.bodyMedium)
             }
         }
         is ExtensionPage.Detail -> {
             val definition = library.extensions.firstOrNull { it.id == page.id }
             if (definition == null) ExtensionPageFrame("扩展不可用", ::back, busy) { Text("此扩展定义已不存在。") }
-            else ExtensionDetailPage(library, mainCallId, definition, busy, onApply, ::back,
+            else ExtensionDetailPage(library, selectedMainId, definition, busy, onApply, ::back,
                 onEdit = { editDefinition(definition) }, onOpenResource = onOpenResource,
                 onParameter = { parameter, descriptor -> pages.add(ExtensionPage.Parameter(definition.id, parameter,
                     descriptor, ExtensionFieldRegistry.read(library, parameter.target))) })
@@ -89,7 +99,7 @@ internal fun ConfigurationExtensionsPage(
             ExtensionDefinitionEditor(library, page.baseline, page.initial, busy, onApply, ::back)
         }
         is ExtensionPage.Parameter -> key(page.extensionId, page.parameter.id) {
-            ExtensionParameterEditor(library, mainCallId, page, busy, approvedImpacts, onApply, ::back)
+            ExtensionParameterEditor(library, selectedMainId, page, busy, approvedImpacts, onApply, ::back, onOpenLocation)
         }
     }
 }
@@ -134,7 +144,7 @@ private fun ExtensionDetailPage(library: Library, mainId: String, definition: Co
             }
         }
     }) {
-        if (binding == null) Button(enabled = !busy, onClick = { onApply { ExtensionCommands.install(it, mainId, definition.id) } }) { Text("安装 · 默认停用") }
+        if (binding == null) Button(enabled = !busy && library.mainCalls.any { it.id == mainId }, onClick = { onApply { ExtensionCommands.install(it, mainId, definition.id) } }) { Text("安装 · 默认停用") }
         else ListItem(headlineContent = { Text("启用扩展关联") }, trailingContent = {
             Switch(binding.enabled, onCheckedChange = { enabled -> onApply { ExtensionCommands.setEnabled(it, mainId, binding.id, enabled) } }, enabled = !busy)
         }, colors = CustomColors.listItemColors)
@@ -274,11 +284,15 @@ private fun ExtensionMappingEditor(library: Library, resources: List<ExtensionRe
 
 @Composable
 private fun ExtensionParameterEditor(library: Library, mainId: String, page: ExtensionPage.Parameter, busy: Boolean,
-    approvedImpacts: MutableMap<ExtensionResourceRef, ExtensionImpact>, onApply: ((Library) -> ExtensionEditResult) -> Unit, onBack: () -> Unit) {
+    approvedImpacts: MutableMap<ExtensionResourceRef, List<ResourceUse>>, onApply: ((Library) -> ExtensionEditResult) -> Unit,
+    onBack: () -> Unit, onOpenLocation: (ResourceLocation) -> Unit) {
     var draft by remember { mutableStateOf(page.initialValue) }
     var submitted by remember { mutableStateOf(false) }
     var submittedValue by remember { mutableStateOf<String?>(null) }
-    var pendingImpact by remember { mutableStateOf<ExtensionImpact?>(null) }
+    var pendingImpact by remember { mutableStateOf<List<ResourceUse>?>(null) }
+    var pendingLocation by remember { mutableStateOf<ResourceLocation?>(null) }
+    var navigationPrompt by remember { mutableStateOf(false) }
+    var sourceNotice by remember { mutableStateOf<String?>(null) }
     val target = page.parameter.target
     val ref = ExtensionResourceRef(target.kind, target.resourceId)
     val definition = library.extensions.firstOrNull { it.id == page.extensionId }
@@ -287,9 +301,18 @@ private fun ExtensionParameterEditor(library: Library, mainId: String, page: Ext
     val currentValue = ExtensionFieldRegistry.read(library, target)
     val stale = currentParameter?.target != target || descriptor != page.descriptor || currentValue != page.initialValue
     LaunchedEffect(currentParameter, descriptor, currentValue, submitted, busy) {
-        if (submitted && !busy && currentParameter?.target == target && descriptor == page.descriptor && currentValue == submittedValue) onBack()
+        if (submitted && !busy && currentParameter?.target == target && descriptor == page.descriptor && currentValue == submittedValue) {
+            onBack()
+            pendingLocation?.let(onOpenLocation)
+        }
     }
-    fun apply(impact: ExtensionImpact) {
+    val location = ResourceLocations.fromField(target)
+    fun openLocation(next: ResourceLocation) {
+        pendingImpact = null
+        if (draft != page.initialValue) { pendingLocation = next; navigationPrompt = true }
+        else { onBack(); onOpenLocation(next) }
+    }
+    fun apply(impact: List<ResourceUse>) {
         val candidate = draft
         submittedValue = candidate; submitted = true
         onApply { latest ->
@@ -297,7 +320,7 @@ private fun ExtensionParameterEditor(library: Library, mainId: String, page: Ext
             when {
                 parameter?.target != target || ExtensionFieldRegistry.describe(latest, target) != page.descriptor ->
                     extensionUiFailure("extension.${page.extensionId}", "参数映射或字段类型已改变，请重新打开后保存")
-                ExtensionCommands.impact(latest, target) != impact ->
+                ResourceUsageIndex.usages(latest, location) != impact ->
                     extensionUiFailure("extension.${page.extensionId}", "共享范围已改变，请重新查看影响后保存")
                 else -> ExtensionCommands.setParameter(latest, page.extensionId, page.parameter.id, candidate, page.initialValue)
             }
@@ -305,54 +328,50 @@ private fun ExtensionParameterEditor(library: Library, mainId: String, page: Ext
     }
     fun save() {
         if (draft == page.initialValue) { onBack(); return }
-        val impact = ExtensionCommands.impact(library, target)
-        if (approvedImpacts[ref] != impact && (impact.mainCallIds.isNotEmpty() || impact.extensionIds.isNotEmpty())) pendingImpact = impact
+        val impact = ResourceUsageIndex.usages(library, location)
+        if (approvedImpacts[ref] != impact && impact.isNotEmpty()) pendingImpact = impact
         else apply(impact)
     }
     val main = library.mainCalls.firstOrNull { it.id == if (target.kind == ExtensionResourceKind.MAIN) target.resourceId else mainId }
     val group = library.groups.firstOrNull { target.kind == ExtensionResourceKind.GROUP && it.id == target.resourceId }
     val references = remember(library, main, group) { promptReferenceChoices(group?.workflows ?: main?.workflows.orEmpty(), library, main, group) }
+    // This editor owns one mapped scalar, so source operations must pass its mapping/value guard.
+    val parameterNavigation = SourceNavigation(library,
+        merge = { sourceNotice = "请保存当前参数，再打开实际字段进行来源修改。" },
+        leave = { candidate, destination, done ->
+            if (candidate == library) openLocation(destination)
+            else sourceNotice = "请先保存当前参数，再在实际字段中独立使用。"
+            done(false)
+        },
+        publish = { _, done -> sourceNotice = "请保存当前参数，再打开实际字段进行来源修改。"; done(false) },
+        edit = ::openLocation)
     EditorPage(page.parameter.title, onBack, ::save, dirty = draft != page.initialValue, saving = busy) {
-        Text(extensionResourceName(library, ref), style = MaterialTheme.typography.titleSmall)
-        Text(page.descriptor.title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        TextButton(enabled = !busy, onClick = { openLocation(location) }, contentPadding = PaddingValues(0.dp)) {
+            Text("${extensionResourceName(library, ref)} · ${page.descriptor.title}")
+        }
         if (stale) Text("实际字段或映射已改变。当前输入保留；请返回并重新打开读取最新值。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-        ExtensionParameterField(page.descriptor, draft, references) { draft = it; submitted = false }
+        sourceNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+        CompositionLocalProvider(LocalSourceNavigation provides parameterNavigation) {
+            ConfigurationFieldEditor(page.descriptor, draft, references) { draft = it; submitted = false; pendingLocation = null }
+        }
     }
     pendingImpact?.let { impact ->
-        AlertDialog(onDismissRequest = { pendingImpact = null }, title = { Text("修改共享资源字段") }, text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("这次修改会写入「${extensionResourceName(library, ref)}」。以下配置使用这一资源：")
-                if (impact.mainCallIds.isNotEmpty()) Text("主调用：" + impact.mainCallIds.joinToString("、") { id -> library.mainCalls.firstOrNull { it.id == id }?.name ?: id })
-                if (impact.extensionIds.isNotEmpty()) Text("扩展：" + impact.extensionIds.joinToString("、") { id -> library.extensions.firstOrNull { it.id == id }?.name ?: id })
+        AlertDialog(onDismissRequest = { pendingImpact = null; pendingLocation = null }, title = { Text("修改共享资源字段") }, text = {
+            Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("这次修改会写入「${extensionResourceName(library, ref)}」。已声明的使用位置：")
+                ResourceUsageRows(impact, ::openLocation)
+                Text("已保存的对话与恢复快照保留原内容；后续读取取决于各自配置。动态宏地址可能有额外使用方。", style = MaterialTheme.typography.bodySmall)
             }
         }, confirmButton = { TextButton(onClick = { approvedImpacts[ref] = impact; pendingImpact = null; apply(impact) }) { Text("保存共享修改") } },
-            dismissButton = { TextButton(onClick = { pendingImpact = null }) { Text("继续编辑") } })
+            dismissButton = { TextButton(onClick = { pendingImpact = null; pendingLocation = null }) { Text("继续编辑") } })
     }
-}
-
-@Composable
-private fun ExtensionParameterField(field: ExtensionFieldDescriptor, value: String?, references: List<PromptReferenceChoice>, onChange: (String?) -> Unit) {
-    var lastDefined by remember { mutableStateOf(value ?: field.choices.firstOrNull()?.value ?: when (field.type) {
-        ActionFieldType.BOOLEAN -> "false"
-        ActionFieldType.NUMBER -> field.min?.let { if (field.integer) it.toInt().toString() else it.toString() } ?: "0"
-        else -> ""
-    }) }
-    fun update(next: String) { lastDefined = next; onChange(next) }
-    if (field.nullable) ToggleLine("使用默认值", value == null) { useDefault -> onChange(if (useDefault) null else lastDefined) }
-    if (value == null && field.nullable) return
-    val selected = value.orEmpty()
-    if (field.choices.isNotEmpty() || field.target.field in setOf(ExtensionField.WORKFLOW_MODEL, ExtensionField.NODE_MODEL)) {
-        ChoiceLine("值", selected, field.choices.map { it.value to it.title }) { update(it) }
-    } else when (field.type) {
-        ActionFieldType.BOOLEAN -> ToggleLine("值", selected == "true") { update(it.toString()) }
-        ActionFieldType.TEMPLATE -> PromptTemplateField("内容", selected, references, { update(it) })
-        ActionFieldType.NUMBER -> {
-            TextFieldLine(if (field.integer) "整数" else "数值", selected, { update(it) })
-            if (field.min != null || field.max != null) Text("范围：${field.min ?: "不限"} ～ ${field.max ?: "不限"}", style = MaterialTheme.typography.bodySmall)
-        }
-        ActionFieldType.MACRO -> TextFieldLine("宏地址", selected, { update(it) })
-        ActionFieldType.STRING -> TextFieldLine("值", selected, { update(it) }, minLines = if (field.target.field == ExtensionField.CHARACTER_DESCRIPTION) 3 else 1)
-    }
+    if (navigationPrompt) AlertDialog(onDismissRequest = { navigationPrompt = false; pendingLocation = null },
+        title = { Text("先处理当前参数修改") }, text = { Text("保存成功后再打开来源，或放弃当前输入。") },
+        confirmButton = { TextButton(enabled = !busy, onClick = { navigationPrompt = false; save() }) { Text("保存并打开") } },
+        dismissButton = {
+            TextButton(enabled = !busy, onClick = { val next = pendingLocation; pendingLocation = null; navigationPrompt = false; onBack(); next?.let(onOpenLocation) }) { Text("放弃并打开") }
+            TextButton(onClick = { navigationPrompt = false; pendingLocation = null }) { Text("继续编辑") }
+        })
 }
 
 @Composable

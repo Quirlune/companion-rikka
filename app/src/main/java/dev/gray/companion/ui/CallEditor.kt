@@ -14,7 +14,7 @@ import me.rerere.hugeicons.stroke.ArrowRight01
 import me.rerere.hugeicons.stroke.PencilEdit01
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 
-internal data class PromptEditRequest(val blocks: List<PromptBlock>, val references: List<PromptReferenceChoice>, val save: (List<PromptBlock>) -> Unit)
+internal data class PromptEditRequest(val blocks: List<PromptBlock>, val references: List<PromptReferenceChoice>, val location: ResourceLocation? = null, val workflowDraft: Boolean = false, val save: (List<PromptBlock>) -> Unit)
 internal data class CallDetailDraft(val baseline: Workflow, val value: Workflow)
 
 @Composable
@@ -104,6 +104,7 @@ internal fun CallDetailsEditor(
     var rename by remember { mutableStateOf(false) }
     var delete by remember { mutableStateOf(false) }
     val references = referenceChoices(workflow)
+    WorkflowSourceBoundary(workflow, onDraftChange) {
     CallEditorPage("调用", workflow != initial, onBack, { onSave(workflow) }, onRegisterBack = onRegisterBack) {
         EditorTitleRow(workflow.title, { rename = true }) { Switch(workflow.enabled, { onDraftChange(workflow.copy(enabled = it)) }) }
         WorkflowEditorContent(workflow, actions, profiles, usedOutputKeys, references, onDraftChange, onPrompt, tags = tags, triggerTargets = triggerTargets)
@@ -111,6 +112,7 @@ internal fun CallDetailsEditor(
             HorizontalDivider()
             TextButton(onClick = { delete = true }) { Text("删除调用", color = MaterialTheme.colorScheme.error) }
         }
+    }
     }
     if (rename) NamingDialog("调用名称", workflow.title, workflow.slug,
         siblings.filterNot { it.id == workflow.id }.map { it.title }, siblings.filterNot { it.id == workflow.id }.map { it.slug },
@@ -127,6 +129,10 @@ internal fun WorkflowEditorContent(
     onChange: (Workflow) -> Unit, onPrompt: (PromptEditRequest) -> Unit,
     fixedTrigger: Boolean = false, tags: List<PromptTag> = emptyList(), triggerTargets: List<Workflow> = emptyList(),
 ) {
+    val sourceNavigation = LocalSourceNavigation.current
+    val promptWithOwner: (PromptEditRequest) -> Unit = { request ->
+        onPrompt(request.copy(location = request.location?.copy(workflowId = workflow.id) ?: sourceNavigation?.resource?.let { ResourceLocation(it, workflowId = workflow.id) }))
+    }
     Text("触发", style = MaterialTheme.typography.titleSmall)
     if (fixedTrigger) Text(if (workflow.afterWorkflowId != null) "小摘要完成后" else "历史处理",
         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -139,9 +145,9 @@ internal fun WorkflowEditorContent(
     }
     workflow.nodes.forEachIndexed { index, node -> key(node.id) {
         val change: (WorkflowNode) -> Unit = { changed -> onChange(workflow.copy(nodes = workflow.nodes.map { if (it.id == node.id) changed else it })) }
-        if (workflow.nodes.size == 1) CallNodeActions(node, workflow.nodes, actions, profiles, references, change, onPrompt, !fixedTrigger, tags, usedOutputKeys)
-        else EditorSection(node.title.ifBlank { "节点 ${index + 1}" }, actions.firstOrNull { it.id == node.actionId }?.title ?: node.actionId, initiallyExpanded = index == 0) {
-            CallNodeActions(node, workflow.nodes, actions, profiles, references, change, onPrompt, !fixedTrigger, tags, usedOutputKeys)
+        if (workflow.nodes.size == 1) CallNodeActions(node, workflow.nodes, actions, profiles, references, change, promptWithOwner, !fixedTrigger, tags, usedOutputKeys)
+        else EditorSection(node.title.ifBlank { "节点 ${index + 1}" }, actions.firstOrNull { it.id == node.actionId }?.title ?: node.actionId, initiallyExpanded = index == 0 || sourceNavigation?.focus?.nodeId == node.id) {
+            CallNodeActions(node, workflow.nodes, actions, profiles, references, change, promptWithOwner, !fixedTrigger, tags, usedOutputKeys)
             MoveButtons(index, workflow.nodes.size,
                 { onChange(workflow.copy(nodes = workflow.nodes.moved(index, index - 1))) },
                 { onChange(workflow.copy(nodes = workflow.nodes.moved(index, index + 1))) },
@@ -206,10 +212,13 @@ private fun CallNodeActions(
     node: WorkflowNode, nodes: List<WorkflowNode>, actions: List<ActionDescriptor>, profiles: List<ModelProfile>, references: List<PromptReferenceChoice>,
     onChange: (WorkflowNode) -> Unit, onPrompt: (PromptEditRequest) -> Unit, allowChatOutput: Boolean, tags: List<PromptTag>, usedOutputKeys: Set<String>,
 ) {
+    val sourceNavigation = LocalSourceNavigation.current
+    val sourceLocation = sourceNavigation?.resource?.let { ResourceLocation(it, workflowId = sourceNavigation.workflowId, nodeId = node.id) }
     var rename by remember(node.id) { mutableStateOf(false) }
     val action = actions.firstOrNull { it.id == node.actionId }
     val nodeReferences = referencesForWritingNode(references, node.id)
     val usesModel = action?.usesModel == true
+    if (sourceNavigation?.focus?.let { it.nodeId == node.id && it.field == null } == true) Text("已定位到此节点；下方保留该节点的完整设置。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
     EditorTitleRow(node.title, { rename = true }) { Switch(node.enabled, { onChange(node.copy(enabled = it)) }) }
     NodeTrajectoryControl(node, onChange, usesModel)
     PromptTagSelector(tags, node.tagIds) { onChange(node.copy(tagIds = it)) }
@@ -221,7 +230,7 @@ private fun CallNodeActions(
         onChange(node.copy(actionId = selected, arguments = args))
     }
     if (usesModel) EditorDestinationRow("提示词", "${node.blocks.size} 个提示词块") {
-        onPrompt(PromptEditRequest(node.blocks, nodeReferences) { onChange(node.copy(blocks = it)) })
+        onPrompt(PromptEditRequest(node.blocks, nodeReferences, sourceLocation) { onChange(node.copy(blocks = it)) })
     }
     Text(action?.description ?: "此动作未注册；原有参数已保留，运行前需要恢复相应动作。", style = MaterialTheme.typography.bodySmall, color = if (action == null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
     if (usesModel && node.actionId != "model.generate")
@@ -255,14 +264,14 @@ private fun CallNodeActions(
         ToggleLine("显示到聊天", node.visible) { onChange(node.copy(visible = it)) }
         if (node.visible) ChoiceLine("显示位置", node.outputSlot, listOf(OutputSlot.BEFORE_BODY to "正文之前", OutputSlot.BODY to "正文", OutputSlot.AFTER_BODY to "正文之后")) { onChange(node.copy(outputSlot = it)) }
     }
-    EditorSection("可选设置", "节点触发、输入、依赖与结果宏") {
+    EditorSection("可选设置", "节点触发、输入、依赖与结果宏", initiallyExpanded = sourceNavigation?.focus?.nodeId == node.id) {
         TriggerEditor(node.recognition, node.condition, nodeReferences) { recognition, condition -> onChange(node.copy(recognition = recognition, condition = condition)) }
         HorizontalDivider()
         if (usesModel) {
             ToggleLine("包含对话历史", node.includeHistory) { onChange(node.copy(includeHistory = it)) }
             ToggleLine("由模板插入历史", node.explicitHistory) { onChange(node.copy(explicitHistory = it)) }
         } else if (node.blocks.isNotEmpty()) EditorDestinationRow("保留的提示词", "${node.blocks.size} 个提示词块") {
-            onPrompt(PromptEditRequest(node.blocks, nodeReferences) { onChange(node.copy(blocks = it)) })
+            onPrompt(PromptEditRequest(node.blocks, nodeReferences, sourceLocation) { onChange(node.copy(blocks = it)) })
         }
         if (node.actionId !in setOf("model.generate", "prompt.inject", "macro.process", "text.render", "text.extract", "history.view.copy", "history.memory.write"))
             PromptTemplateField("输入模板", node.inputTemplate, nodeReferences, { onChange(node.copy(inputTemplate = it)) }, minLines = 2)

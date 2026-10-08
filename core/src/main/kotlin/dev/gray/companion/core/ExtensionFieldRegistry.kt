@@ -22,7 +22,10 @@ object ExtensionFieldRegistry {
         }.orEmpty()
         entries.forEach { entry ->
             addField(ExtensionField.ENTRY_TEXT, "${entry.title.ifBlank { entry.key }} · 正文", ActionFieldType.TEMPLATE, entryId = entry.id)
-            addField(ExtensionField.ENTRY_ENABLED, "${entry.title.ifBlank { entry.key }} · 启用", ActionFieldType.BOOLEAN, entryId = entry.id)
+            val fixedEnabled = resource.kind == ExtensionResourceKind.CHARACTER && CharacterFields.isBasic(CharacterFields.canonicalKey(entry.key))
+            addField(ExtensionField.ENTRY_ENABLED, "${entry.title.ifBlank { entry.key }} · ${if (fixedEnabled) "固定启用" else "启用"}",
+                ActionFieldType.BOOLEAN, entryId = entry.id,
+                choices = if (fixedEnabled) listOf(ActionChoice("true", "固定启用")) else emptyList())
         }
         val workflows = when (resource.kind) {
             ExtensionResourceKind.MAIN -> library.mainCalls.firstOrNull { it.id == resource.id }?.workflows
@@ -103,7 +106,14 @@ object ExtensionFieldRegistry {
         }
     }
 
-    fun write(library: Library, target: ExtensionFieldRef, value: String?, expectedValue: String?): ExtensionEditResult {
+    fun write(library: Library, target: ExtensionFieldRef, value: String?, expectedValue: String?): ExtensionEditResult =
+        writeChecked(library, target, value, expectedValue, validateLibrary = true)
+
+    /** Type/identity checked edit for an unfinished owning draft. Never publish without full validation. */
+    fun writeDraft(library: Library, target: ExtensionFieldRef, value: String?, expectedValue: String?): ExtensionEditResult =
+        writeChecked(library, target, value, expectedValue, validateLibrary = false)
+
+    private fun writeChecked(library: Library, target: ExtensionFieldRef, value: String?, expectedValue: String?, validateLibrary: Boolean): ExtensionEditResult {
         val descriptor = describe(library, target) ?: return failure(target, "公开字段目标不存在或动作描述符已改变")
         if (read(library, target) != expectedValue) return failure(target, "字段已被其他编辑修改，请重新读取后再保存")
         valueIssue(descriptor, value)?.let { return failure(target, it) }
@@ -142,13 +152,15 @@ object ExtensionFieldRegistry {
             ExtensionResourceKind.MAIN -> library.copy(mainCalls = library.mainCalls.map { if (it.id != target.resourceId) it else it.copy(workflows = it.workflows.map(::workflow)) })
             ExtensionResourceKind.GROUP -> library.copy(groups = library.groups.map { if (it.id != target.resourceId) it else it.copy(workflows = it.workflows.map(::workflow)) })
         }
-        val issues = LibraryValidator.validate(candidate).filter { it.error }
+        val issues = if (validateLibrary) LibraryValidator.validate(candidate).filter { it.error } else emptyList()
         return ExtensionEditResult(candidate.takeIf { issues.isEmpty() }, issues, listOf("更新实际字段：${descriptor.title}"))
     }
 
     private fun valueIssue(field: ExtensionFieldDescriptor, value: String?): String? {
         if (value == null) return if (field.nullable) null else "此字段不允许继承或空值"
         if (field.required && value.isBlank()) return "必填字段不能为空"
+        if (field.target.field == ExtensionField.ENTRY_ENABLED && field.choices.map { it.value } == listOf("true") && value == "false")
+            return "基础角色字段固定启用，不能停用；可在原编辑器清空正文"
         if ((field.choices.isNotEmpty() || field.target.field in setOf(ExtensionField.WORKFLOW_MODEL, ExtensionField.NODE_MODEL)) && field.choices.none { it.value == value }) return "请选择现有的字段选项"
         return when (field.type) {
             ActionFieldType.BOOLEAN -> if (value !in setOf("true", "false")) "字段必须为 true 或 false" else null
@@ -167,5 +179,5 @@ object ExtensionFieldRegistry {
         }
     }
     private fun failure(target: ExtensionFieldRef, message: String) = ExtensionEditResult(null,
-        listOf(Issue("extension.field.${target.resourceId}.${target.field}", message)))
+        listOf(Issue(ResourceLocations.path(ResourceLocations.fromField(target)), message)))
 }

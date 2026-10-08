@@ -29,7 +29,9 @@ import me.rerere.rikkahub.ui.pages.assistant.detail.CustomBodies
 import me.rerere.rikkahub.ui.pages.assistant.detail.CustomHeaders
 
 @Composable
-private fun EntryForm(entry: PromptEntry, index: Int, count: Int, onChange: (PromptEntry) -> Unit, onUp: () -> Unit, onDown: () -> Unit, onRemove: () -> Unit, onDuplicate: () -> Unit, canMove: Boolean = true, initiallyExpanded: Boolean = false, macro: String? = null, siblings: List<PromptEntry> = emptyList(), tags: List<PromptTag> = emptyList()) {
+private fun EntryForm(entry: PromptEntry, index: Int, count: Int, onChange: (PromptEntry) -> Unit, onUp: () -> Unit, onDown: () -> Unit, onRemove: () -> Unit, onDuplicate: () -> Unit, canMove: Boolean = true, initiallyExpanded: Boolean = false, macro: String? = null, siblings: List<PromptEntry> = emptyList(), tags: List<PromptTag> = emptyList(), owner: ExtensionFieldRef? = null) {
+    val sourceNavigation = LocalSourceNavigation.current
+    val references = sourceNavigation?.library?.let { promptReferenceChoices(emptyList(), it) }.orEmpty()
     var confirmDelete by remember(entry.id) { mutableStateOf(false) }
     var rename by remember(entry.id) { mutableStateOf(false) }
     val summary = listOfNotNull(
@@ -40,12 +42,12 @@ private fun EntryForm(entry: PromptEntry, index: Int, count: Int, onChange: (Pro
         if (!entry.enabled) "已停用" else null,
         if (entry.condition != null) "有条件" else null
     ).joinToString(" · ").ifBlank { "尚未填写内容" }
-    EditorSection("条目 ${index + 1} · ${entry.title.ifBlank { entry.key.ifBlank { "新条目" } }}", summary, initiallyExpanded) {
+    EditorSection("条目 ${index + 1} · ${entry.title.ifBlank { entry.key.ifBlank { "新条目" } }}", summary, initiallyExpanded || sourceNavigation?.focus?.entryId == entry.id) {
         EditorTitleRow("${entry.title} / ${entry.slug}", { rename = true })
         LegacyAddressLine(macro ?: "character.${entry.key}")
         PromptTagSelector(tags, entry.tagIds) { onChange(entry.copy(tagIds = it)) }
         TextFieldLine("分类（可选）", entry.category, { onChange(entry.copy(category = it)) })
-        TextFieldLine("内容", entry.text, { onChange(entry.copy(text = it)) }, minLines = 3)
+        PromptTemplateField("内容", entry.text, references, { onChange(entry.copy(text = it)) }, minLines = 3, owner = owner)
         var advanced by remember(entry.id) { mutableStateOf(false) }
         if (macro != null) TextButton(onClick = { advanced = !advanced }) {
             Text("${if (advanced) "收起可选设置" else "可选设置"}${if (!entry.enabled) " · 已停用" else if (entry.condition != null) " · 有激活条件" else ""}")
@@ -61,25 +63,29 @@ private fun EntryForm(entry: PromptEntry, index: Int, count: Int, onChange: (Pro
     if (rename) NamingDialog("词条名称", entry.title, entry.slug,
         siblings.filterNot { it.id == entry.id }.map { it.title }, siblings.filterNot { it.id == entry.id }.map { it.slug },
         { rename = false }) { title, slug -> onChange(entry.copy(title = title, slug = slug)); rename = false }
-    if (confirmDelete) AlertDialog(
-        onDismissRequest = { confirmDelete = false },
-        title = { Text("删除词条？") },
-        text = { Text("「${entry.key.ifBlank { "未命名词条" }}」将从当前草稿移除。") },
-        confirmButton = { TextButton(onClick = { confirmDelete = false; onRemove() }) { Text("删除") } },
-        dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("保留") } }
-    )
+    if (confirmDelete) {
+        val location = owner?.let { ResourceLocations.fromField(it).copy(field = null) }
+        val plan = if (sourceNavigation != null && location != null) ResourceEditCommands.previewDelete(sourceNavigation.library, location) else null
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false }, title = { Text("删除词条？") }, text = {
+                Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("「${entry.title.ifBlank { entry.key }}」将从当前草稿移除。已有引用须先处理。")
+                    plan?.issues.orEmpty().forEach { Text(it.message, color = MaterialTheme.colorScheme.error) }
+                    plan?.usages.orEmpty().forEach { use ->
+                        val target = use.location
+                        if (target != null) TextButton(onClick = { confirmDelete = false; sourceNavigation?.edit(target) }) { Text(use.label) }
+                        else Text(use.label, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = { TextButton(enabled = plan?.canApply ?: true, onClick = { confirmDelete = false; onRemove() }) { Text("删除词条") } },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("保留") } })
+    }
+
 }
 
-private val macroEntryKey = Regex("[\\p{L}_][\\p{L}\\p{N}_-]*")
-
 private fun duplicateEntry(entry: PromptEntry, existing: List<PromptEntry>, character: Boolean = false): PromptEntry {
-    val stem = entry.key.takeIf { macroEntryKey.matches(it) && (!character || it != "name") } ?: "entry"
-    val used = existing.map { it.key }.toSet() + if (character) setOf("name") else emptySet()
-    val base = "${stem}_copy"
-    val key = generateSequence(1) { it + 1 }.map { if (it == 1) base else "${base}_${it}" }.first { it !in used }
-    return entry.copy(id = newId(), key = key,
-        title = nextDisplayName(existing.map { it.title }, entry.title.ifBlank { "词条" }),
-        slug = nextEditorSlug(existing.map { it.slug }, "entry"))
+    return ResourceEditCommands.duplicateEntry(entry, existing, character)
 }
 
 private fun entryMatches(entry: PromptEntry, query: String, tags: List<PromptTag>): Boolean =
@@ -115,6 +121,19 @@ internal fun CharacterEditor(initial: CharacterCard, packages: List<PromptPackag
         val main = sources.mainCalls.firstOrNull { it.id == context.mainCallId }
         promptReferenceChoices(main?.workflows.orEmpty(), sources)
     }
+    val sourceResource = ExtensionResourceRef(ExtensionResourceKind.CHARACTER, card.id)
+    val sourceFocus = LocalSourceNavigation.current?.focus
+    LaunchedEffect(sourceFocus) {
+        if (sourceFocus != null && sourceFocus.resource == sourceResource && sourceFocus.entryId != null) {
+            extraSearch = ""
+            sourceFocus.entryId?.let { newlyExpandedEntries.add(it) }
+            extrasRevealKey++
+        }
+    }
+    SourceDraftBoundary(sourceResource,
+        overlay = { base -> base.withSourceResource(base.copy(characters = listOf(card)), sourceResource) },
+        restore = { candidate, parent -> candidate.withSourceResource(parent, sourceResource) },
+        accept = { candidate -> candidate.characters.firstOrNull { it.id == card.id }?.let { card = it } }) {
     EditorPage("角色卡", onBack, { onSave(card.copy(name = card.name.trim())) }, dirty = card != cardBaseline, saving = saving || avatarProcessing) {
         CardGroup {
             item(
@@ -151,19 +170,10 @@ internal fun CharacterEditor(initial: CharacterCard, packages: List<PromptPackag
             PromptTagSelector(library?.promptTags.orEmpty(), entry.tagIds) { selected ->
                 card = card.copy(entries = card.entries.map { if (it.id == entry.id) it.copy(tagIds = selected) else it })
             }
-            OutlinedTextField(
-                value = entry.text,
-                onValueChange = { text ->
-                    card = card.copy(entries = card.entries.map {
-                        if (it.key == field.key) it.copy(text = text) else it
-                    })
-                },
-                label = { Text(field.title) },
-                placeholder = { Text(field.hint) },
-                modifier = Modifier.fillMaxWidth(),
-                minLines = 3,
-                shape = MaterialTheme.shapes.large
-            )
+            PromptTemplateField(field.title, entry.text, greetingReferences, { text ->
+                card = card.copy(entries = card.entries.map { if (it.id == entry.id) it.copy(text = text) else it })
+            }, minLines = 3, owner = ExtensionFieldRef(ExtensionResourceKind.CHARACTER, card.id, ExtensionField.ENTRY_TEXT, entryId = entry.id))
+            Text(field.hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             SelectionContainer { Text("{{character.${field.key}}}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
             if (field.key == "profile") {
                 PromptTemplateField("首选开场消息（仅新对话）", card.greeting, greetingReferences,
@@ -208,7 +218,8 @@ internal fun CharacterEditor(initial: CharacterCard, packages: List<PromptPackag
                             newlyExpandedEntries += duplicate.id
                         },
                         canMove = extraSearch.isBlank(), initiallyExpanded = entry.id in newlyExpandedEntries,
-                        siblings = card.entries, tags = library?.promptTags.orEmpty())
+                        siblings = card.entries, tags = library?.promptTags.orEmpty(),
+                        owner = ExtensionFieldRef(ExtensionResourceKind.CHARACTER, card.id, ExtensionField.ENTRY_TEXT, entryId = entry.id))
                 } }
             }
         }
@@ -221,6 +232,7 @@ internal fun CharacterEditor(initial: CharacterCard, packages: List<PromptPackag
             newlyExpandedEntries += entry.id
             extrasRevealKey++
         }) { Text("添加附加条目") }
+    }
     }
     if (renameCard) NamingDialog("角色卡名称", card.name, card.slug,
         library?.characters.orEmpty().filterNot { it.id == card.id }.map { it.name },
@@ -252,6 +264,27 @@ internal fun PackageEditor(initial: PromptPackage, library: Library, onSave: (Pr
     var bindingsExpanded by remember(initial.id) { mutableStateOf(false) }
     var entrySearch by remember(initial.id) { mutableStateOf("") }
     val newlyExpandedEntries = remember(initial.id) { mutableStateListOf<String>() }
+    val sourceResource = ExtensionResourceRef(ExtensionResourceKind.PACKAGE, pack.id)
+    val sourceFocus = LocalSourceNavigation.current?.focus
+    LaunchedEffect(sourceFocus) {
+        if (sourceFocus != null && sourceFocus.resource == sourceResource && sourceFocus.entryId != null) {
+            entrySearch = ""
+            sourceFocus.entryId?.let { newlyExpandedEntries.add(it) }
+        }
+    }
+    fun bind(ids: List<String>, selected: Boolean) = if (selected) (ids + pack.id).distinct() else ids - pack.id
+    SourceDraftBoundary(sourceResource,
+        overlay = { base -> base.withSourceResource(base.copy(packages = listOf(pack)), sourceResource).copy(
+            characters = base.characters.map { it.copy(boundPackageIds = bind(it.boundPackageIds, it.id in characterIds)) },
+            mainCalls = base.mainCalls.map { it.copy(boundPackageIds = bind(it.boundPackageIds, it.id in mainCallIds)) }) },
+        restore = { candidate, parent -> candidate.withSourceResource(parent, sourceResource).copy(
+            characters = candidate.characters.map { character -> character.copy(boundPackageIds = bind(character.boundPackageIds, parent.characters.firstOrNull { it.id == character.id }?.boundPackageIds?.contains(pack.id) == true)) },
+            mainCalls = candidate.mainCalls.map { main -> main.copy(boundPackageIds = bind(main.boundPackageIds, parent.mainCalls.firstOrNull { it.id == main.id }?.boundPackageIds?.contains(pack.id) == true)) }) },
+        accept = { candidate ->
+            candidate.packages.firstOrNull { it.id == pack.id }?.let { pack = it }
+            characterIds = candidate.characters.filter { pack.id in it.boundPackageIds }.map { it.id }.toSet()
+            mainCallIds = candidate.mainCalls.filter { pack.id in it.boundPackageIds }.map { it.id }.toSet()
+        }) {
     EditorPage("提示词包", onBack, { onSave(pack.copy(entries = pack.entries.mapIndexed { index, entry -> entry.copy(order = index) }), characterIds, mainCallIds) }, dirty = pack != baseline || characterIds != initialCharacters || mainCallIds != initialMainCalls, saving = saving) {
         EditorTitleRow("${pack.name} / ${pack.slug}", { renamePack = true })
         EditorSection("引用地址", "pack.${pack.namespace}.*") { LegacyAddressLine("pack.${pack.namespace}.*") }
@@ -285,7 +318,8 @@ internal fun PackageEditor(initial: PromptPackage, library: Library, onSave: (Pr
                 },
                 canMove = entrySearch.isBlank(), initiallyExpanded = entry.id in newlyExpandedEntries,
                 macro = "{{pack.${pack.namespace.ifBlank { "namespace" }}.${entry.key.ifBlank { "键" }}}}",
-                siblings = pack.entries, tags = library.promptTags)
+                siblings = pack.entries, tags = library.promptTags,
+                owner = ExtensionFieldRef(ExtensionResourceKind.PACKAGE, pack.id, ExtensionField.ENTRY_TEXT, entryId = entry.id))
         } }
         OutlinedButton(onClick = {
             val entry = PromptEntry(key = nextEditorSlug(pack.entries.map { it.key }, "entry"),
@@ -295,6 +329,7 @@ internal fun PackageEditor(initial: PromptPackage, library: Library, onSave: (Pr
             entrySearch = ""
             newlyExpandedEntries += entry.id
         }) { Text("添加条目") }
+    }
     }
     if (renamePack) NamingDialog("提示词包名称", pack.name, pack.slug,
         library.packages.filterNot { it.id == pack.id }.map { it.name },
@@ -306,6 +341,7 @@ internal fun PackageEditor(initial: PromptPackage, library: Library, onSave: (Pr
 internal fun WorkflowForm(workflow: Workflow, index: Int, count: Int, actions: List<ActionDescriptor>, profiles: List<ModelProfile>, usedOutputKeys: Set<String>, references: List<PromptReferenceChoice>, onChange: (Workflow) -> Unit, onUp: () -> Unit, onDown: () -> Unit, onRemove: () -> Unit, fixedTrigger: Boolean = false, compactSettings: Boolean = false, tags: List<PromptTag> = emptyList(), siblings: List<Workflow> = emptyList()) {
     var promptRequest by remember(workflow.id) { mutableStateOf<PromptEditRequest?>(null) }
     var rename by remember(workflow.id) { mutableStateOf(false) }
+    WorkflowSourceBoundary(workflow, onChange) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         EditorTitleRow(workflow.title, { rename = true }) { Switch(workflow.enabled, { onChange(workflow.copy(enabled = it)) }) }
         WorkflowEditorContent(workflow, actions, profiles, usedOutputKeys, references, onChange, { promptRequest = it }, fixedTrigger, tags)
@@ -316,8 +352,14 @@ internal fun WorkflowForm(workflow: Workflow, index: Int, count: Int, actions: L
         { rename = false }) { title, slug -> onChange(workflow.copy(title = title, slug = slug)); rename = false }
     promptRequest?.let { request ->
         androidx.compose.ui.window.Dialog(onDismissRequest = {}, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = false, dismissOnClickOutside = false)) {
-            PromptBlocksEditor(request.blocks, request.references, { request.save(it); promptRequest = null }, { promptRequest = null }, tags = tags)
+            PromptBlocksEditor(request.blocks, request.references, { changed ->
+                val nodeId = request.location?.nodeId
+                if (nodeId != null) onChange(workflow.copy(nodes = workflow.nodes.map { if (it.id == nodeId) it.copy(blocks = changed) else it }))
+                else request.save(changed)
+                promptRequest = null
+            }, { promptRequest = null }, tags = tags, owner = request.location)
         }
+    }
     }
 }
 @Composable

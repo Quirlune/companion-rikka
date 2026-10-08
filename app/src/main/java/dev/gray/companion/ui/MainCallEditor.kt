@@ -48,7 +48,6 @@ internal fun MainCallEditor(
     actions: List<ActionDescriptor> = ActionRegistry.defaults().descriptors(),
     profiles: List<ModelProfile> = emptyList(), library: Library? = null,
     onSwitchResource: ((MainCall?, String?) -> Unit)? = null,
-    onOpenExtensions: ((MainCall?, String) -> Unit)? = null,
 ) {
     val baseline = remember(initial.id) { MacroNaming.normalize(initial,
         library?.mainCalls.orEmpty().filterNot { it.id == initial.id }.map { it.slug }).let { main ->
@@ -64,11 +63,10 @@ internal fun MainCallEditor(
     var rename by remember(initial.id) { mutableStateOf(false) }
     var switchMenuOpen by remember(initial.id) { mutableStateOf(false) }
     var pendingSwitch by remember(initial.id) { mutableStateOf<PendingMainSwitch?>(null) }
-    var pendingExtensions by remember(initial.id) { mutableStateOf(false) }
     fun pop() { if (stack.size > 1) stack.removeAt(stack.lastIndex) else onBack() }
     fun open(route: CallEditorRoute) { stack.add(route) }
     fun openDetails(workflow: Workflow) { callDrafts[workflow.id] = CallDetailDraft(workflow, workflow); open(CallEditorRoute.Details(workflow.id)) }
-    fun requestPrompt(request: PromptEditRequest) { promptRequest = request; open(CallEditorRoute.Prompt(newId())) }
+    fun requestPrompt(request: PromptEditRequest) { promptRequest = request.copy(workflowDraft = stack.last() is CallEditorRoute.Details); open(CallEditorRoute.Prompt(newId())) }
     fun updateWorkflow(changed: Workflow) { item = item.copy(workflows = item.workflows.map { if (it.id == changed.id) changed else it }) }
     fun mergeWorkflow(changed: Workflow) = if (item.workflows.any { it.id == changed.id }) item.workflows.map { if (it.id == changed.id) changed else it } else item.workflows + changed
     fun referenceChoices(draft: MainCall = item) = promptReferenceChoices(draft.workflows, library, mainCall = draft)
@@ -93,6 +91,31 @@ internal fun MainCallEditor(
     }
     // Legacy resources without an explicit primary keep their original runtime/output contract.
     val default = item.workflows.firstOrNull { it.id == item.primaryWorkflowId } ?: item.workflows.firstOrNull()
+    val sourceResource = ExtensionResourceRef(ExtensionResourceKind.MAIN, item.id)
+    val sourceFocus = LocalSourceNavigation.current?.focus
+    LaunchedEffect(sourceFocus) {
+        if (sourceFocus != null && sourceFocus.resource == sourceResource && sourceFocus.field == null) {
+            when {
+                sourceFocus.workflowId == item.history.processor.workflow.id || (sourceFocus.workflowId != null && sourceFocus.workflowId == item.history.processor.aggregationWorkflow?.id) -> open(CallEditorRoute.History)
+                sourceFocus.workflowId != null -> item.workflows.firstOrNull { it.id == sourceFocus.workflowId }?.let { workflow ->
+                    openDetails(workflow)
+                    val node = workflow.nodes.firstOrNull { it.id == sourceFocus.nodeId }
+                    if (sourceFocus.blockId != null && node != null) requestPrompt(PromptEditRequest(node.blocks,
+                        referencesForWritingNode(referenceChoices(), node.id), sourceFocus) { changedBlocks ->
+                        callDrafts[workflow.id]?.let { current ->
+                            callDrafts[workflow.id] = current.copy(value = current.value.copy(nodes = current.value.nodes.map { if (it.id == node.id) it.copy(blocks = changedBlocks) else it }))
+                        }
+                    })
+                }
+                sourceFocus.section?.startsWith("tiles") == true || sourceFocus.section == "bodyTextTemplate" || sourceFocus.section == "bodySourceTileId" -> open(CallEditorRoute.BodyDisplay)
+                sourceFocus.section?.startsWith("history") == true -> open(CallEditorRoute.History)
+            }
+        }
+    }
+    SourceDraftBoundary(sourceResource,
+        overlay = { base -> base.withSourceResource(base.copy(mainCalls = listOf(item)), sourceResource) },
+        restore = { candidate, parent -> candidate.withSourceResource(parent, sourceResource) },
+        accept = { candidate -> candidate.mainCalls.firstOrNull { it.id == item.id }?.let { item = it } }) {
     RikkaNavDisplay(stack, { backs[stack.last()]?.invoke() ?: pop() }, entryProvider {
         entry<CallEditorRoute.Home> { route ->
             CallEditorPage("主调用", item != baseline, onBack, { onSave(item.copy(name = item.name.trim())) }, saving, { backs[route] = it },
@@ -133,7 +156,7 @@ internal fun MainCallEditor(
                         Text("当前正文节点使用：$label（在默认调用设置中调整）", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     if (modelNode != null) EditorDestinationRow("提示词", "${modelNode.blocks.size} 个提示词块") {
-                        requestPrompt(PromptEditRequest(modelNode.blocks, referencesForWritingNode(referenceChoices(), modelNode.id)) { blocks ->
+                        requestPrompt(PromptEditRequest(modelNode.blocks, referencesForWritingNode(referenceChoices(), modelNode.id), ResourceLocation(sourceResource, workflowId = default.id, nodeId = modelNode.id)) { blocks ->
                             val current = item.workflows.first { it.id == default.id }
                             updateWorkflow(current.copy(nodes = current.nodes.map { if (it.id == modelNode.id) it.copy(blocks = blocks) else it }))
                         })
@@ -157,12 +180,6 @@ internal fun MainCallEditor(
                 } ?: "原模型正文") { open(CallEditorRoute.BodyDisplay) }
                 EditorDestinationRow("历史配置", "范围、角色、包装与插入项") { open(CallEditorRoute.History) }
                 EditorDestinationRow("关联资源", "${item.boundPackageIds.size} 个提示词包 · ${item.boundGroupIds.size} 个调用组") { open(CallEditorRoute.Bindings) }
-                if (onOpenExtensions != null) EditorDestinationRow("扩展", "${item.extensionBindings.count { it.enabled }} 项启用 · 配置组合与常用参数") {
-                    if (!saving) {
-                        if (item != baseline || library?.mainCalls.orEmpty().none { it.id == item.id }) pendingExtensions = true
-                        else onOpenExtensions(null, item.id)
-                    }
-                }
                 HorizontalDivider()
                 EditorDestinationRow("其他调用", "${item.workflows.count { it.id != default?.id }} 项") { open(CallEditorRoute.Calls) }
             }
@@ -192,13 +209,34 @@ internal fun MainCallEditor(
             }
         }
         entry<CallEditorRoute.Prompt> { route -> promptRequest?.let { request ->
-            PromptBlocksEditor(request.blocks, request.references, { request.save(it); pop() }, ::pop, { backs[route] = it }, tags = library?.promptTags.orEmpty())
+            val workflowDraft = if (request.workflowDraft) request.location?.workflowId?.let { callDrafts[it] } else null
+            val promptContent: @Composable () -> Unit = {
+                PromptBlocksEditor(request.blocks, request.references, { changedBlocks ->
+                    val location = request.location
+                    val currentDraft = if (request.workflowDraft) location?.workflowId?.let { callDrafts[it] } else null
+                    val current = currentDraft?.value ?: item.workflows.firstOrNull { it.id == location?.workflowId }
+                    if (current != null && location?.nodeId != null) {
+                        val changed = current.copy(nodes = current.nodes.map { if (it.id == location.nodeId) it.copy(blocks = changedBlocks) else it })
+                        if (currentDraft != null) callDrafts[current.id] = currentDraft.copy(value = changed) else updateWorkflow(changed)
+                    } else request.save(changedBlocks)
+                    pop()
+                }, ::pop,
+                    { backs[route] = it }, tags = library?.promptTags.orEmpty(), owner = request.location)
+            }
+            if (workflowDraft != null) WorkflowSourceBoundary(workflowDraft.value,
+                { changed -> callDrafts[changed.id] = workflowDraft.copy(value = changed) }, promptContent)
+            else promptContent()
         } }
         entry<CallEditorRoute.History> { route ->
             var history by remember { mutableStateOf(item.history) }
             val baseline = remember { item.history }
+            SourceDraftBoundary(sourceResource,
+                overlay = { base -> base.copy(mainCalls = base.mainCalls.map { if (it.id == item.id) it.copy(history = history) else it }) },
+                restore = { candidate, parent -> candidate.copy(mainCalls = candidate.mainCalls.map { main -> if (main.id == item.id) main.copy(history = parent.mainCalls.first { it.id == item.id }.history) else main }) },
+                accept = { candidate -> candidate.mainCalls.firstOrNull { it.id == item.id }?.let { history = it.history } }) {
             CallEditorPage("历史配置", history != baseline, ::pop, { item = item.copy(history = history); pop() }, onRegisterBack = { backs[route] = it }) {
                 HistoryConfigEditor(history, library, referenceChoices(item.copy(history = history))) { history = it }
+            }
             }
         }
         entry<CallEditorRoute.BodyDisplay> { route ->
@@ -215,6 +253,12 @@ internal fun MainCallEditor(
             }.distinctBy { it.id }
             val chosen = candidates.firstOrNull { it.id == sourceId }
             val choices = listOf<Pair<String?, String>>(null to "原模型正文") + candidates.map { it.id to it.title.ifBlank { "未命名显示模板" } }
+            SourceDraftBoundary(sourceResource,
+                overlay = { base -> base.copy(mainCalls = base.mainCalls.map { if (it.id == item.id) it.copy(tiles = tiles, bodySourceTileId = sourceId, bodyTextTemplate = textTemplate) else it }) },
+                restore = { candidate, parent ->
+                    val old = parent.mainCalls.first { it.id == item.id }
+                    candidate.copy(mainCalls = candidate.mainCalls.map { if (it.id == item.id) it.copy(tiles = old.tiles, bodySourceTileId = old.bodySourceTileId, bodyTextTemplate = old.bodyTextTemplate) else it })
+                }, accept = { candidate -> candidate.mainCalls.firstOrNull { it.id == item.id }?.let { tiles = it.tiles; sourceId = it.bodySourceTileId; textTemplate = it.bodyTextTemplate } }) {
             CallEditorPage("正文显示", tiles != baseline.tiles || sourceId != baseline.bodySourceTileId || textTemplate != baseline.bodyTextTemplate,
                 ::pop, {
                     invalid = sourceId != null && (chosen == null || (chosen.kind == MacroTileKind.HTML && textTemplate.isBlank()))
@@ -237,11 +281,18 @@ internal fun MainCallEditor(
                 if (groups.isNotEmpty()) Text("已关联调用组的可用模板也能作为正文来源；编辑它们请进入对应调用组的显示磁贴设置。",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            }
         }
         entry<CallEditorRoute.Bindings> { route ->
             val baseline = remember { item }
             var packages by remember { mutableStateOf(item.boundPackageIds) }
             var groups by remember { mutableStateOf(item.boundGroupIds) }
+            SourceDraftBoundary(sourceResource,
+                overlay = { base -> base.copy(mainCalls = base.mainCalls.map { if (it.id == item.id) it.copy(boundPackageIds = packages, boundGroupIds = groups) else it }) },
+                restore = { candidate, parent ->
+                    val old = parent.mainCalls.first { it.id == item.id }
+                    candidate.copy(mainCalls = candidate.mainCalls.map { if (it.id == item.id) it.copy(boundPackageIds = old.boundPackageIds, boundGroupIds = old.boundGroupIds) else it })
+                }, accept = { candidate -> candidate.mainCalls.firstOrNull { it.id == item.id }?.let { packages = it.boundPackageIds; groups = it.boundGroupIds } }) {
             CallEditorPage("关联资源", packages != baseline.boundPackageIds || groups != baseline.boundGroupIds, ::pop,
                 { item = item.copy(boundPackageIds = packages, boundGroupIds = groups); pop() }, onRegisterBack = { backs[route] = it }) {
                 Text("提示词包", style = MaterialTheme.typography.titleSmall)
@@ -252,7 +303,9 @@ internal fun MainCallEditor(
                 Text("关联资源随主调用加载；提示词包通过宏引用参与提示词。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+        }
     })
+    }
     if (rename) NamingDialog("主调用名称", item.name, item.slug,
         library?.mainCalls.orEmpty().filterNot { it.id == item.id }.map { it.name },
         library?.mainCalls.orEmpty().filterNot { it.id == item.id }.map { it.slug },
@@ -260,17 +313,7 @@ internal fun MainCallEditor(
     pendingSwitch?.let { pending -> AlertDialog(onDismissRequest = { pendingSwitch = null }, title = { Text("切换主调用？") }, text = { Text("当前主调用有未保存的修改。") },
         confirmButton = { TextButton(onClick = { pendingSwitch = null; onSwitchResource?.invoke(item, pending.targetId) }, enabled = !saving) { Text("保存并切换") } },
         dismissButton = { Row { TextButton(onClick = { pendingSwitch = null }) { Text("取消") }; TextButton(onClick = { pendingSwitch = null; onSwitchResource?.invoke(null, pending.targetId) }, enabled = !saving) { Text("放弃并切换") } } }) }
-    if (pendingExtensions) AlertDialog(onDismissRequest = { pendingExtensions = false }, title = { Text("打开扩展？") },
-        text = { Text("当前主调用有未保存的修改。") },
-        confirmButton = { TextButton(enabled = !saving, onClick = {
-            pendingExtensions = false; onOpenExtensions?.invoke(item, item.id)
-        }) { Text("保存并打开") } },
-        dismissButton = { Row {
-            TextButton(onClick = { pendingExtensions = false }) { Text("取消") }
-            if (library?.mainCalls.orEmpty().any { it.id == item.id }) TextButton(enabled = !saving, onClick = {
-                pendingExtensions = false; onOpenExtensions?.invoke(null, item.id)
-            }) { Text("放弃并打开") }
-        } })
+
 }
 
 @Composable
@@ -294,7 +337,7 @@ internal fun GroupEditor(
     fun pop() { if (stack.size > 1) stack.removeAt(stack.lastIndex) else onBack() }
     fun open(route: CallEditorRoute) { stack.add(route) }
     fun openDetails(workflow: Workflow) { callDrafts[workflow.id] = CallDetailDraft(workflow, workflow); open(CallEditorRoute.Details(workflow.id)) }
-    fun requestPrompt(request: PromptEditRequest) { promptRequest = request; open(CallEditorRoute.Prompt(newId())) }
+    fun requestPrompt(request: PromptEditRequest) { promptRequest = request.copy(workflowDraft = stack.last() is CallEditorRoute.Details); open(CallEditorRoute.Prompt(newId())) }
     fun updateWorkflow(changed: Workflow) { item = item.copy(workflows = item.workflows.map { if (it.id == changed.id) changed else it }) }
     fun mergeWorkflow(changed: Workflow) = if (item.workflows.any { it.id == changed.id }) item.workflows.map { if (it.id == changed.id) changed else it } else item.workflows + changed
     fun referenceChoices(draft: CallGroup = item) = promptReferenceChoices(draft.workflows, library, callGroup = draft)
@@ -312,6 +355,27 @@ internal fun GroupEditor(
             nodes = listOf(WorkflowNode(outputKey = key, slug = key, recordTrajectory = false)))
         openDetails(workflow)
     }
+    val sourceResource = ExtensionResourceRef(ExtensionResourceKind.GROUP, item.id)
+    val sourceFocus = LocalSourceNavigation.current?.focus
+    LaunchedEffect(sourceFocus) {
+        if (sourceFocus != null && sourceFocus.resource == sourceResource && sourceFocus.field == null) {
+            if (sourceFocus.workflowId != null) item.workflows.firstOrNull { it.id == sourceFocus.workflowId }?.let { workflow ->
+                    openDetails(workflow)
+                    val node = workflow.nodes.firstOrNull { it.id == sourceFocus.nodeId }
+                    if (sourceFocus.blockId != null && node != null) requestPrompt(PromptEditRequest(node.blocks,
+                        referencesForWritingNode(referenceChoices(), node.id), sourceFocus) { changedBlocks ->
+                        callDrafts[workflow.id]?.let { current ->
+                            callDrafts[workflow.id] = current.copy(value = current.value.copy(nodes = current.value.nodes.map { if (it.id == node.id) it.copy(blocks = changedBlocks) else it }))
+                        }
+                    })
+                }
+            else if (sourceFocus.section != null) open(CallEditorRoute.Info)
+        }
+    }
+    SourceDraftBoundary(sourceResource,
+        overlay = { base -> base.withSourceResource(base.copy(groups = listOf(item)), sourceResource) },
+        restore = { candidate, parent -> candidate.withSourceResource(parent, sourceResource) },
+        accept = { candidate -> candidate.groups.firstOrNull { it.id == item.id }?.let { item = it } }) {
     RikkaNavDisplay(stack, { backs[stack.last()]?.invoke() ?: pop() }, entryProvider {
         entry<CallEditorRoute.Home> { route ->
             CallEditorPage("调用组", item != baseline, onBack, { onSave(item.copy(name = item.name.trim())) }, saving, { backs[route] = it }) {
@@ -331,18 +395,47 @@ internal fun GroupEditor(
                 { item = item.copy(workflows = mergeWorkflow(it)); pop() }, ::pop, ::requestPrompt, { item = item.copy(workflows = item.workflows.filterNot { it.id == call.id }); pop() }, { backs[route] = it },
                 siblings = item.workflows, tags = library?.promptTags.orEmpty(), triggerTargets = completionSources())
         } }
-        entry<CallEditorRoute.Prompt> { route -> promptRequest?.let { request -> PromptBlocksEditor(request.blocks, request.references, { request.save(it); pop() }, ::pop, { backs[route] = it }, tags = library?.promptTags.orEmpty()) } }
+        entry<CallEditorRoute.Prompt> { route -> promptRequest?.let { request ->
+            val workflowDraft = if (request.workflowDraft) request.location?.workflowId?.let { callDrafts[it] } else null
+            val promptContent: @Composable () -> Unit = {
+                PromptBlocksEditor(request.blocks, request.references, { changedBlocks ->
+                    val location = request.location
+                    val currentDraft = if (request.workflowDraft) location?.workflowId?.let { callDrafts[it] } else null
+                    val current = currentDraft?.value ?: item.workflows.firstOrNull { it.id == location?.workflowId }
+                    if (current != null && location?.nodeId != null) {
+                        val changed = current.copy(nodes = current.nodes.map { if (it.id == location.nodeId) it.copy(blocks = changedBlocks) else it })
+                        if (currentDraft != null) callDrafts[current.id] = currentDraft.copy(value = changed) else updateWorkflow(changed)
+                    } else request.save(changedBlocks)
+                    pop()
+                }, ::pop,
+                    { backs[route] = it }, tags = library?.promptTags.orEmpty(), owner = request.location)
+            }
+            if (workflowDraft != null) WorkflowSourceBoundary(workflowDraft.value,
+                { changed -> callDrafts[changed.id] = workflowDraft.copy(value = changed) }, promptContent)
+            else promptContent()
+        } }
         entry<CallEditorRoute.Bindings> { route ->
             val baseline = remember { item.boundPackageIds }
             var selected by remember { mutableStateOf(item.boundPackageIds) }
+            SourceDraftBoundary(sourceResource,
+                overlay = { base -> base.copy(groups = base.groups.map { if (it.id == item.id) it.copy(boundPackageIds = selected) else it }) },
+                restore = { candidate, parent -> candidate.copy(groups = candidate.groups.map { if (it.id == item.id) it.copy(boundPackageIds = parent.groups.first { old -> old.id == item.id }.boundPackageIds) else it }) },
+                accept = { candidate -> candidate.groups.firstOrNull { it.id == item.id }?.let { selected = it.boundPackageIds } }) {
             CallEditorPage("关联提示词包", selected != baseline, ::pop, { item = item.copy(boundPackageIds = selected); pop() }, onRegisterBack = { backs[route] = it }) {
                 ResourceBindingList(packages.map { it.id to it.name.ifBlank { it.namespace } }, selected) { selected = it }
+            }
             }
         }
         entry<CallEditorRoute.Info> { route ->
             val baseline = remember { item }
             var description by remember { mutableStateOf(item.description) }
             var state by remember { mutableStateOf(item.stateDefaults) }
+            SourceDraftBoundary(sourceResource,
+                overlay = { base -> base.copy(groups = base.groups.map { if (it.id == item.id) it.copy(description = description, stateDefaults = state) else it }) },
+                restore = { candidate, parent ->
+                    val old = parent.groups.first { it.id == item.id }
+                    candidate.copy(groups = candidate.groups.map { if (it.id == item.id) it.copy(description = old.description, stateDefaults = old.stateDefaults) else it })
+                }, accept = { candidate -> candidate.groups.firstOrNull { it.id == item.id }?.let { description = it.description; state = it.stateDefaults } }) {
             CallEditorPage("资源信息与默认状态", description != baseline.description || state != baseline.stateDefaults, ::pop,
                 { item = item.copy(description = description, stateDefaults = state); pop() }, onRegisterBack = { backs[route] = it }) {
                 TextFieldLine("说明", description, { description = it }, minLines = 2)
@@ -358,8 +451,10 @@ internal fun GroupEditor(
                 if (candidate in state) Text("此状态键已存在。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 OutlinedButton(onClick = { state = state + (candidate to ""); newKey = "" }, enabled = candidate.isNotBlank() && candidate !in state) { Text("添加默认状态") }
             }
+            }
         }
     })
+    }
     if (rename) NamingDialog("调用组名称", item.name, item.slug,
         library?.groups.orEmpty().filterNot { it.id == item.id }.map { it.name },
         library?.groups.orEmpty().filterNot { it.id == item.id }.map { it.slug },

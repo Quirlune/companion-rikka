@@ -142,6 +142,9 @@ internal fun MacroHelp(onInsert: (String) -> Unit) {
 internal fun EditorPage(title: String, onBack: () -> Unit, onSave: () -> Unit, dirty: Boolean = false, saving: Boolean = false, contentSpacing: Dp = 16.dp,
     titleContent: (@Composable () -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     var confirmBack by remember { mutableStateOf(false) }
+    var showIssues by remember { mutableStateOf(false) }
+    val sourceNavigation = LocalSourceNavigation.current
+    val sourceIssues = LocalSourceIssues.current
     val focus = LocalFocusManager.current
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     fun requestBack() { if (!saving) { if (dirty) confirmBack = true else onBack() } }
@@ -153,6 +156,7 @@ internal fun EditorPage(title: String, onBack: () -> Unit, onSave: () -> Unit, d
                 title = { if (titleContent != null) titleContent() else Text(title, maxLines = 1) },
                 navigationIcon = { CompanionBackButton(onClick = ::requestBack, enabled = !saving) },
                 actions = {
+                    if (sourceIssues.isNotEmpty() && sourceNavigation != null) TextButton(onClick = { showIssues = true }) { Text("问题 ${sourceIssues.size}") }
                     if (dirty && !saving) Text("未保存", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     IconButton(onClick = onSave, enabled = !saving) {
                         if (saving) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -173,6 +177,7 @@ internal fun EditorPage(title: String, onBack: () -> Unit, onSave: () -> Unit, d
             }) { Box(contentAlignment = androidx.compose.ui.Alignment.Center) { CircularProgressIndicator() } }
         }
     }
+    if (showIssues && sourceNavigation != null) SourceIssuesSheet(sourceNavigation.library, sourceIssues, { location -> if (location.field == null) sourceNavigation.open(location) else sourceNavigation.edit(location) }, { showIssues = false })
     if (confirmBack) AlertDialog(
         onDismissRequest = { confirmBack = false }, title = { Text("有未保存的修改") },
         text = { Text("保存后再返回，或继续编辑。") },

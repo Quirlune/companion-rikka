@@ -16,6 +16,7 @@ internal data class PromptReferenceSource(
     val detail: String = "",
     val inMenu: Boolean = true,
     val menuTitle: String = title,
+    val location: ResourceLocation? = null,
 )
 
 internal data class PromptReferenceChoice(
@@ -25,6 +26,10 @@ internal data class PromptReferenceChoice(
     val sourceTitle: String = section,
     val sourceDetail: String = "",
     val owners: List<PromptReferenceSource> = emptyList(),
+    val locations: List<ResourceLocation> = owners.mapNotNull { it.location }.let { all ->
+        all.filter { candidate -> all.none { other -> other != candidate && other.resource == candidate.resource &&
+            (candidate.workflowId == null || candidate.workflowId == other.workflowId) &&
+            ((candidate.workflowId == null && other.workflowId != null) || (candidate.nodeId == null && other.nodeId != null)) } } }.distinct(),
     val origin: String = owners.joinToString(" · ") { it.title }.ifEmpty { sourceTitle },
 )
 
@@ -62,18 +67,24 @@ internal fun promptReferenceChoices(
     val currentVersions = if (library != null && session != null) MacroReferences.currentVersions(library, session) else emptyMap()
     val emittedDynamicAddresses = mutableSetOf<String>()
     val characterOwner = PromptReferenceSource("character:${card?.id ?: "selected"}", card?.name?.ifBlank { "未命名角色" } ?: "聊天中选定的角色",
-        if (card == null) "尚未选择角色，发送时需有角色来源" else "当前聊天角色")
+        if (card == null) "尚未选择角色，发送时需有角色来源" else "当前聊天角色",
+        location = card?.let { ResourceLocation(ExtensionResourceRef(ExtensionResourceKind.CHARACTER, it.id)) })
     val mainOwner = selectedMain?.let { PromptReferenceSource("main:${it.id}", it.name.ifBlank { "未命名主调用" },
-        if (mainCall != null) "编辑中的主调用配置" else "当前聊天主调用") }
+        if (mainCall != null) "编辑中的主调用配置" else "当前聊天主调用",
+        location = ResourceLocation(ExtensionResourceRef(ExtensionResourceKind.MAIN, it.id))) }
     fun choice(
         title: String, macro: String, sourceId: String, sourceTitle: String, purpose: String,
         owners: List<PromptReferenceSource> = emptyList(), nodeId: String? = null, sourceDetail: String = "",
-    ) = PromptReferenceChoice(title, macro, sourceTitle, purpose, nodeId, sourceId, sourceTitle, sourceDetail, owners)
+        locations: List<ResourceLocation> = owners.mapNotNull { it.location }.let { all ->
+        all.filter { candidate -> all.none { other -> other != candidate && other.resource == candidate.resource &&
+            (candidate.workflowId == null || candidate.workflowId == other.workflowId) &&
+            ((candidate.workflowId == null && other.workflowId != null) || (candidate.nodeId == null && other.nodeId != null)) } } }.distinct(),
+    ) = PromptReferenceChoice(title, macro, sourceTitle, purpose, nodeId, sourceId, sourceTitle, sourceDetail, owners, locations)
     add(choice("本次用户消息", "{{input}}", "builtin", "内置资料", "本次发送的用户输入"))
     add(choice("用户名称", "{{user.name}}", "users", "用户身份", "读取本段对话选定用户身份的名称", listOf(personaOwner)))
     add(choice("用户身份设定", "{{user.prompt}}", "users", "用户身份", "读取身份设定文本；只有被提示词引用时才会发送，未填写时为空", listOf(personaOwner)))
-    add(choice("角色名称", "{{character.name}}", "characters", "角色资料", "聊天角色的显示名称", listOf(characterOwner)))
-    val historyOwners = listOfNotNull(mainOwner)
+    add(choice("角色名称", "{{character.name}}", "characters", "角色资料", "聊天角色的显示名称", listOf(characterOwner), locations = listOfNotNull(characterOwner.location?.copy(section = "name"))))
+    val historyOwners = listOfNotNull(mainOwner?.copy(location = mainOwner.location?.copy(section = "history")))
     add(choice("结构化历史", "{{history}}", "history", "聊天历史", "按主调用的历史规则插入消息", historyOwners))
     add(choice("原始历史", "{{history.raw}}", "history", "聊天历史", "读取原始 BODY 楼层", historyOwners))
     add(choice("最终展示正文历史", "{{history.display}}", "history", "聊天历史", "读取最终语义 BODY 正文；与用户看到的正文一致", historyOwners))
@@ -106,16 +117,19 @@ internal fun promptReferenceChoices(
     entries.forEach { entry ->
         val title = entry.title.ifBlank { CharacterFields.definitions.firstOrNull { it.key == entry.key }?.title ?: entry.key }
         add(choice(title, "{{character.${entry.key}}}", "characters", "角色资料",
-            entryReferencePurpose(entry, library?.promptTags.orEmpty()), listOf(characterOwner)))
+            entryReferencePurpose(entry, library?.promptTags.orEmpty()), listOf(characterOwner),
+            locations = listOf(ResourceLocations.fromField(ExtensionFieldRef(ExtensionResourceKind.CHARACTER, card!!.id, ExtensionField.ENTRY_TEXT, entryId = entry.id)))) )
     }
     val allPackages = (packages + library?.packages.orEmpty()).distinctBy { it.id }
     allPackages.forEach { pack ->
         val loaded = pack.id in loadedPackageIds
         val owner = PromptReferenceSource("pack:${pack.id}", "${pack.name.ifBlank { "未命名提示词包" }} · ${pack.namespace}",
-            if (loaded) "当前聊天或编辑配置中的绑定来源；词条仍受开关与条件控制" else "未加载；需先绑定或在聊天中加载")
+            if (loaded) "当前聊天或编辑配置中的绑定来源；词条仍受开关与条件控制" else "未加载；需先绑定或在聊天中加载",
+            location = ResourceLocation(ExtensionResourceRef(ExtensionResourceKind.PACKAGE, pack.id)))
         pack.entries.forEach { entry ->
             add(choice(entry.title.ifBlank { entry.key }, "{{pack.${pack.namespace}.${entry.key}}}", "packages", "提示词包",
-                (if (loaded) "" else "未加载时引用为空 · ") + entryReferencePurpose(entry, library?.promptTags.orEmpty()), listOf(owner)))
+                (if (loaded) "" else "未加载时引用为空 · ") + entryReferencePurpose(entry, library?.promptTags.orEmpty()), listOf(owner),
+                locations = listOf(ResourceLocations.fromField(ExtensionFieldRef(ExtensionResourceKind.PACKAGE, pack.id, ExtensionField.ENTRY_TEXT, entryId = entry.id)))))
         }
     }
     (entries + packages.flatMap { it.entries }).map { it.category }.filter { it.isNotBlank() }.distinct().forEach { category ->
@@ -131,7 +145,7 @@ internal fun promptReferenceChoices(
         calls.forEach { callOwners[owner.id to it.id] = owner to it }
     }
     if (callGroup != null) {
-        val groupOwner = PromptReferenceSource("group:${callGroup.id}", callGroup.name.ifBlank { "未命名调用组" }, "编辑中的调用组配置")
+        val groupOwner = PromptReferenceSource("group:${callGroup.id}", callGroup.name.ifBlank { "未命名调用组" }, "编辑中的调用组配置", location = ResourceLocation(ExtensionResourceRef(ExtensionResourceKind.GROUP, callGroup.id)))
         selectedMain?.let { collect(mainOwner!!, it.configuredWorkflows()) }
         collect(groupOwner, workflows)
     } else if (mainOwner != null) {
@@ -140,17 +154,18 @@ internal fun promptReferenceChoices(
         collect(PromptReferenceSource("editor", "当前编辑调用", "编辑中的配置"), workflows)
     }
     groups.filterNot { it.id == callGroup?.id }.forEach { group ->
-        collect(PromptReferenceSource("group:${group.id}", group.name.ifBlank { "未命名调用组" }, "聊天或主调用绑定的调用组"), group.workflows)
+        collect(PromptReferenceSource("group:${group.id}", group.name.ifBlank { "未命名调用组" }, "聊天或主调用绑定的调用组", location = ResourceLocation(ExtensionResourceRef(ExtensionResourceKind.GROUP, group.id))), group.workflows)
     }
     selectedMain?.let { collect(mainOwner!!, it.configuredWorkflows()) }
     callOwners.values.forEach { (owner, call) ->
         val callTitle = call.title.ifBlank { "未命名调用" }
         val callOwner = PromptReferenceSource("call:${owner.id}:${call.id}", callTitle,
-            "${owner.detail} · ${call.afterWorkflowId?.let { "指定调用完成后（${it.take(8)}）" } ?: callPhaseLabel(call.trigger)} · ${callScheduleLabel(call)}", menuTitle = "${owner.title} · $callTitle")
+            "${owner.detail} · ${call.afterWorkflowId?.let { "指定调用完成后（${it.take(8)}）" } ?: callPhaseLabel(call.trigger)} · ${callScheduleLabel(call)}", menuTitle = "${owner.title} · $callTitle", location = owner.location?.copy(workflowId = call.id))
         call.nodes.forEach { node ->
             val nodeTitle = node.title.ifBlank { "未命名节点" }
             val owners = listOf(owner.copy(inMenu = false), callOwner,
-                PromptReferenceSource("node:${node.id}", nodeTitle, nodeActionPurpose(node), inMenu = false))
+                PromptReferenceSource("node:${node.id}", nodeTitle, nodeActionPurpose(node), inMenu = false,
+                    location = owner.location?.copy(workflowId = call.id, nodeId = node.id)))
             val inactive = if (!call.enabled || !node.enabled) " · 配置已停用" else ""
             add(choice("$nodeTitle · 本轮结果", "{{result.${node.outputKey}}}", "calls", "调用结果",
                 "${nodeActionPurpose(node)} · 本轮该节点成功完成后可用$inactive", owners, node.id,
@@ -249,6 +264,8 @@ internal fun PromptReferenceSheet(
     includeMacroHelp: Boolean = false,
     onConfigureHistory: (() -> Unit)? = null,
 ) {
+    val sourceNavigation = LocalSourceNavigation.current
+    var selectedSource by remember { mutableStateOf<PromptReferenceChoice?>(null) }
     var search by remember { mutableStateOf("") }
     var versionMode by remember { mutableStateOf("latest") }
     var versionNumber by remember { mutableStateOf("1") }
@@ -310,7 +327,9 @@ internal fun PromptReferenceSheet(
                     ) {
                         Column(Modifier.fillMaxWidth()) {
                             Text(reference.title, style = MaterialTheme.typography.bodyMedium)
-                            Text(reference.origin, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (sourceNavigation != null && reference.locations.isNotEmpty()) TextButton(onClick = { selectedSource = reference }, contentPadding = PaddingValues(0.dp)) {
+                                Text(reference.origin, style = MaterialTheme.typography.labelSmall)
+                            } else Text(reference.origin, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             if (reference.detail.isNotEmpty()) Text(reference.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text(reference.macro, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                         }
@@ -327,6 +346,17 @@ internal fun PromptReferenceSheet(
             }
             item { TextButton(onClick = onDismiss) { Text("关闭") } }
         }
+    }
+    selectedSource?.let { reference ->
+        AlertDialog(onDismissRequest = { selectedSource = null }, title = { Text("实际来源") }, text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                reference.locations.forEach { location ->
+                    TextButton(onClick = { selectedSource = null; onDismiss(); sourceNavigation?.edit(location) }) {
+                        Text(sourceNavigation?.library?.let { sourceLocationTitle(it, location) } ?: reference.origin)
+                    }
+                }
+            }
+        }, confirmButton = { TextButton(onClick = { selectedSource = null }) { Text("关闭") } })
     }
 }
 
@@ -461,4 +491,6 @@ private fun ScheduleCallRow(call: Workflow, primaryId: String?, selectedId: Stri
             if (annotations.isNotBlank()) Text(annotations, style = MaterialTheme.typography.bodySmall)
         }
     }
+
+
 }

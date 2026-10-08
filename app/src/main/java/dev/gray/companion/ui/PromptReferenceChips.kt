@@ -15,6 +15,7 @@ import dev.gray.companion.core.HistorySelection
 import dev.gray.companion.core.HistoryViews
 import dev.gray.companion.core.MacroTemplateTokens
 import dev.gray.companion.core.PromptReferenceLanguage
+import dev.gray.companion.core.ResourceLocation
 
 /** A UI-only occurrence, frozen against the exact template that supplied its UTF-16 span. */
 internal data class PromptReferenceOccurrence(
@@ -23,6 +24,7 @@ internal data class PromptReferenceOccurrence(
     val endExclusive: Int,
     val title: String,
     val history: HistorySelection?,
+    val locations: List<ResourceLocation> = emptyList(),
 ) {
     val text: String get() = source.substring(start, endExclusive)
     fun matches(current: String): Boolean = current == source
@@ -36,11 +38,11 @@ internal fun promptReferenceOccurrences(
     references: List<PromptReferenceChoice>,
 ): List<PromptReferenceOccurrence> = scan.tokens.filter { it.closed }.mapIndexed { index, token ->
     val expression = token.expression.trim()
-    val choice = references.firstOrNull { it.macro.removeSurrounding("{{", "}}").trim() == expression }
+    val choices = references.filter { it.macro.removeSurrounding("{{", "}}").trim() == expression }
     val history = runCatching { HistoryViews.selection(expression) }.getOrNull()
-    val name = choice?.title ?: if (history != null) "历史上下文" else expression.ifBlank { "空引用" }
+    val name = choices.map { it.title }.distinct().singleOrNull() ?: if (history != null) "历史上下文" else expression.ifBlank { "空引用" }
     PromptReferenceOccurrence(source, token.start, token.endExclusive,
-        "${index + 1} · $name", history)
+        "${index + 1} · $name", history, choices.flatMap { it.locations }.distinct())
 }
 
 /** Diagnostic offsets come from the existing scanner/compiler, never a second template grammar. */
@@ -70,6 +72,8 @@ internal fun PromptReferenceChips(
 internal fun PromptReferenceActions(
     occurrence: PromptReferenceOccurrence,
     onReplace: () -> Unit,
+    onSource: (() -> Unit)? = null,
+    onSeparate: (() -> Unit)? = null,
     onHistory: (() -> Unit)?,
     onEditText: () -> Unit,
     onDelete: () -> Unit,
@@ -82,6 +86,8 @@ internal fun PromptReferenceActions(
             SelectionContainer {
                 Text(occurrence.text, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
             }
+            onSource?.let { action -> TextButton(onClick = action) { Text("查看或编辑实际来源…") } }
+            onSeparate?.let { action -> TextButton(onClick = action) { Text("仅这一处独立使用…") } }
             onHistory?.let { action -> TextButton(onClick = action) { Text("编辑这一处历史引用") } }
             TextButton(onClick = onReplace) { Text("替换来源…") }
             TextButton(onClick = onEditText) { Text("在原文中编辑") }
