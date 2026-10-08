@@ -1,14 +1,14 @@
 # Companion 新窗口接续交接
 
-更新：2026-10-04。当前完成到 revision35 / 0.35-preview。本文用于新任务定位现状；技术约束以本仓库 `AGENTS.md` 和 `docs/ARCHITECTURE.md` 的最新修订为准。不要沿用早期网页原型或旧交接中的完成判断。
+更新：2026-10-08。当前 revision36 / 0.38-preview 已在实际 main 完成；实验分支不作为基座。21 项定向检查、离线原生构建和 APK 身份/签名核对通过，设备体验未验收。本文用于新任务定位现状；技术约束以本仓库 `AGENTS.md` 和 `docs/ARCHITECTURE.md` 的最新修订为准。不要沿用早期网页原型或旧交接中的完成判断。
 
 ## 现在应该做什么
 
-接续任务中，用户确认改善经常改动模块的可维护性、保留现有行为与数据格式，稳定冷门模块先不动。revision34 已完成执行兼容规则集中、运行快照转换、候选执行器拆分、动作配置校验归位，以及 Android 导入准备与配置编辑纯规则抽取。维护/扩展入口及文件职责见 `docs/MAINTAINABILITY.md`。revision35 调整抽屉角色行、主调用选择卡片与编辑入口，名称切换/改名合入标题；移除主调用资源信息入口并迁移其他调用，保留默认调用选择与历史/正文显示。没有待自动续跑的实现任务；继续接收试用反馈或新需求，不自行扩大重构、回归、模型请求或重导示例。
+用户确认沿用原四类资源与运行方式，主线局部优化就地编辑、共享影响、错误定位，并增加最小配置扩展入口。revision36 在主调用编辑器增加“扩展”：从现有资源创建组成、选择公开字段、安装默认停用、开关/解除安装、编辑实际字段与打开完整原编辑器。账本区分手动及多个扩展来源；禁用只撤回自己的关联，不删除资源或回滚参数。引用芯片按原模板逐处编辑，复用原 History，错误可定位原文。保持完整运行/记忆/分支/恢复底层，未引入实验调度或文档模型。详细边界见 ARCHITECTURE revision36；维护入口见 MAINTAINABILITY。
 
-当前源码以实际仓库 Git HEAD 和工作区为准，版本为0.35-preview；读取时先核对 Git，不回滚覆盖后续修改。前一版0.33实现提交为 `741b76145e5d5b451e5db18836437d6c970aa1cc`、文档提交为 `f90691597acf918973505e2519282aae99d56bc3`，它们不是当前源码。既有私有远端为 `Quirlune/companion-rikka` main。
+当前源码以实际仓库 Git HEAD 和工作区为准，版本为0.38-preview/code197，基座 main `9e27ff10` / 0.35-preview。读取时先核对 Git，不回滚覆盖后续修改。既有私有远端为 `Quirlune/companion-rikka` main。两个实验版本保持原样；本轮没有合并实验提交。wire11 增量读取旧版本，SQLite1/recovery1/execution8 保持。
 
-本次新交付目录：`C:/Users/34601/Documents/Codex/2026-10-04/companion-continuation/outputs`，最新为 `Companion-0.35-preview.apk`、`.sha256`、`前端验收记录.json` 和 `前端调整说明.txt`，日志为同一任务 `work/frontend-v35-build.log`。原0.34 APK、可维护性说明/验收及 `work/maintainability-v34-*` 证据均保留。原来的教程、配置和启动器仍在下面的旧工作区。电脑专用预览仍安装0.33，本轮只构建交付，不安装或启动设备。
+交付目录：`C:/Users/34601/Documents/Codex/2026-10-04/companion-continuation/outputs`。本轮已交付 `Companion-0.38-preview.apk`、`.sha256`、`主线扩展说明.txt`、`主线扩展验收记录.json`；集中检查初次及后续日志在同一任务 `work/mainline-extension-build.log`、`mainline-extension-followup.log`。完成证据见 ARCHITECTURE revision36 验收记录；此前 APK/日志保留。电脑专用预览仍安装0.33，本轮只构建交付，不安装或启动设备。实际设备体验由用户验收；链接扩展不提供深复制或自动升级管理，首批公开字段有限，其余完整配置走原编辑器。
 
 ## 文件和环境
 
@@ -19,7 +19,7 @@
 | 项目 | 位置（相对上述根目录） |
 | --- | --- |
 | 实际 Git 仓库 | `work/companion-rikka` |
-| 当前架构及决策/验收记录 | `work/companion-rikka/docs/ARCHITECTURE.md`，revision35 |
+| 当前架构及决策/验收记录 | `work/companion-rikka/docs/ARCHITECTURE.md`，revision36 |
 | 语言已实现/未实现边界 | `work/companion-rikka/docs/PROMPT_LANGUAGE.md` |
 | 配置包导入/撤回契约 | `work/companion-rikka/docs/CONFIGURATION_PACKAGES.md` |
 | 前一版 APK／电脑已安装版 | `outputs/Companion-0.33-preview.apk` 和 `.sha256`；当前0.34在上面的新交付目录 |

@@ -110,7 +110,7 @@ object MacroNaming {
 
     internal fun runtimeShape(value: PromptEntry): PromptEntry = value.copy(title = "", slug = "", tagIds = emptyList())
 
-    internal fun runtimeShape(value: MainCall): MainCall = value.copy(
+    internal fun runtimeShape(value: MainCall): MainCall = ExtensionCommands.withoutMetadata(value).copy(
         slug = "", workflows = value.workflows.map { runtimeShape(it) },
         history = value.history.copy(processor = value.history.processor.copy(
             workflow = runtimeShape(value.history.processor.workflow),

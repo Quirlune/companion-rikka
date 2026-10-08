@@ -68,10 +68,10 @@ data class ConfigurationApplyResult(
 object ConfigurationCommands {
     const val FORMAT = "companion.config.v1"
     private val json = LibraryFormat.json
-    private val kinds = listOf("character", "mainCall", "package", "group", "persona", "tag", "profile", "connection")
+    private val kinds = listOf("character", "mainCall", "package", "group", "persona", "tag", "profile", "connection", "extension")
     private val resources = mapOf(
         "characters" to "character", "mainCalls" to "mainCall", "packages" to "package", "groups" to "group",
-        "personas" to "persona", "tags" to "tag", "profiles" to "profile", "connections" to "connection"
+        "personas" to "persona", "tags" to "tag", "profiles" to "profile", "connections" to "connection", "extensions" to "extension"
     )
     private val settingKeys = listOf("selectedProfileId", "selectedPersonaId", "reasoningParsing", "titleConfig")
 
@@ -136,7 +136,11 @@ object ConfigurationCommands {
     )
 
     private fun finishPreview(base: Library, working: Library, label: String): ConfigurationPreview {
-        val normalized = LibraryFormat.upgrade(working.withStandardCharacterFields())
+        val reconciled = if (base.extensions != working.extensions) {
+            val result = ExtensionCommands.reconcile(base, working)
+            result.library ?: return ConfigurationPreview(null, result.issues)
+        } else working
+        val normalized = LibraryFormat.upgrade(reconciled.withStandardCharacterFields())
         excludedChange(base, normalized)?.let { fail(it, "配置包不能修改会话、收藏或运行状态") }
         val issues = LibraryValidator.validate(normalized).filter { it.error }
         if (issues.isNotEmpty()) return ConfigurationPreview(null, issues)
@@ -258,7 +262,7 @@ object ConfigurationCommands {
             if (resourceJson(library, kind, id) == null) fail("$path.id", "资源不存在：$id")
             return id
         }
-        if (kind in setOf("profile", "connection")) fail("$path.slug", "此资源类型没有 slug，请使用 ID")
+        if (kind in setOf("profile", "connection", "extension")) fail("$path.slug", "此资源类型没有 slug，请使用 ID")
         val matches = when (kind) {
             "character" -> library.characters.filter { it.slug == slug }.map { it.id }
             "mainCall" -> library.mainCalls.filter { it.slug == slug }.map { it.id }
@@ -340,6 +344,7 @@ object ConfigurationCommands {
         "tag" -> library.promptTags.map { json.encodeToJsonElement(PromptTag.serializer(), it) }
         "profile" -> library.profiles.map { json.encodeToJsonElement(ModelProfile.serializer(), it) }
         "connection" -> library.connections.map { json.encodeToJsonElement(ApiConnection.serializer(), it) }
+        "extension" -> library.extensions.map { json.encodeToJsonElement(ConfigurationExtension.serializer(), it) }
         else -> fail("config.$kind", "未知资源类型")
     }
 
@@ -352,6 +357,7 @@ object ConfigurationCommands {
         "tag" -> library.promptTags.firstOrNull { it.id == id }?.let { json.encodeToJsonElement(PromptTag.serializer(), it) }
         "profile" -> library.profiles.firstOrNull { it.id == id }?.let { json.encodeToJsonElement(ModelProfile.serializer(), it) }
         "connection" -> library.connections.firstOrNull { it.id == id }?.let { json.encodeToJsonElement(ApiConnection.serializer(), it) }
+        "extension" -> library.extensions.firstOrNull { it.id == id }?.let { json.encodeToJsonElement(ConfigurationExtension.serializer(), it) }
         else -> fail("config.$kind", "未知资源类型")
     }
 
@@ -371,6 +377,7 @@ object ConfigurationCommands {
         "tag" -> library.copy(promptTags = replace(library.promptTags, id, value, index, PromptTag.serializer()) { it.id })
         "profile" -> library.copy(profiles = replace(library.profiles, id, value, index, ModelProfile.serializer()) { it.id })
         "connection" -> library.copy(connections = replace(library.connections, id, value, index, ApiConnection.serializer()) { it.id })
+        "extension" -> library.copy(extensions = replace(library.extensions, id, value, index, ConfigurationExtension.serializer()) { it.id })
         else -> fail("config.$kind", "未知资源类型")
     }
 

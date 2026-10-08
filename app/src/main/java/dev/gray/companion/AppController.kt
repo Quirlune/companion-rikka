@@ -152,14 +152,34 @@ class AppController internal constructor(
     }
 
     /** Invalid edits are reported and never committed or shown as saved state. */
-    suspend fun updateLibrary(transform: (Library) -> Library): List<Issue> {
+    suspend fun updateLibrary(transform: (Library) -> Library): List<Issue> = updateConfiguration { current ->
+        try {
+            val edited = transform(current)
+            val issues = LibraryEditPreparation.extensionMetadataIssues(current, edited)
+            ExtensionEditResult(edited.takeIf { issues.isEmpty() }, issues)
+        }
+        catch (_: Exception) { ExtensionEditResult(null, listOf(Issue("library", "编辑操作失败"))) }
+    }
+
+    /** Extension edits share the original admission, validation and durable publication boundary. */
+    suspend fun updateExtensions(command: (Library) -> ExtensionEditResult): List<Issue> = updateConfiguration(command)
+
+    private suspend fun updateConfiguration(prepare: (Library) -> ExtensionEditResult): List<Issue> {
         mutex.withLock { editingCount++ }
         try {
             stopAndJoin()
             return mutex.withLock {
             if (!storageReady) return@withLock listOf(Issue("library", "资源库尚未就绪；不会覆盖原数据"))
             val before = _library.value
-            val edited = try { transform(before) } catch (_: Exception) { return@withLock listOf(Issue("library", "编辑操作失败")) }
+            val proposal = try { prepare(before) } catch (_: Exception) {
+                return@withLock listOf(Issue("library", "编辑操作失败"))
+            }
+            val edited = proposal.library
+            if (edited == null || proposal.issues.any { it.error }) {
+                val failures = proposal.issues.ifEmpty { listOf(Issue("library", "配置修改未应用")) }
+                _state.value = _state.value.copy(issues = failures)
+                return@withLock failures
+            }
             if (LibraryEditPreparation.changesFrozenSession(before, edited))
                 return@withLock listOf(Issue("recovery", "这一轮仍有断点；请先恢复或跳过，再修改会话环境"))
             val rawIssues = LibraryValidator.validate(edited).filter { it.error }
@@ -186,8 +206,8 @@ class AppController internal constructor(
                 if (cleanupFailed) {
                     val warning = Issue("connection.apiKey", "配置已保存，但旧密钥清理失败", error = false)
                     _state.value = _state.value.copy(issues = listOf(warning))
-                    listOf(warning)
-                } else emptyList()
+                    proposal.issues + warning
+                } else proposal.issues
             } catch (_: Exception) {
                 val failure = listOf(Issue("library", "保存失败；原数据仍保留"))
                 _state.value = _state.value.copy(issues = failure)

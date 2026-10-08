@@ -48,6 +48,7 @@ internal fun MainCallEditor(
     actions: List<ActionDescriptor> = ActionRegistry.defaults().descriptors(),
     profiles: List<ModelProfile> = emptyList(), library: Library? = null,
     onSwitchResource: ((MainCall?, String?) -> Unit)? = null,
+    onOpenExtensions: ((MainCall?, String) -> Unit)? = null,
 ) {
     val baseline = remember(initial.id) { MacroNaming.normalize(initial,
         library?.mainCalls.orEmpty().filterNot { it.id == initial.id }.map { it.slug }).let { main ->
@@ -63,6 +64,7 @@ internal fun MainCallEditor(
     var rename by remember(initial.id) { mutableStateOf(false) }
     var switchMenuOpen by remember(initial.id) { mutableStateOf(false) }
     var pendingSwitch by remember(initial.id) { mutableStateOf<PendingMainSwitch?>(null) }
+    var pendingExtensions by remember(initial.id) { mutableStateOf(false) }
     fun pop() { if (stack.size > 1) stack.removeAt(stack.lastIndex) else onBack() }
     fun open(route: CallEditorRoute) { stack.add(route) }
     fun openDetails(workflow: Workflow) { callDrafts[workflow.id] = CallDetailDraft(workflow, workflow); open(CallEditorRoute.Details(workflow.id)) }
@@ -155,6 +157,12 @@ internal fun MainCallEditor(
                 } ?: "原模型正文") { open(CallEditorRoute.BodyDisplay) }
                 EditorDestinationRow("历史配置", "范围、角色、包装与插入项") { open(CallEditorRoute.History) }
                 EditorDestinationRow("关联资源", "${item.boundPackageIds.size} 个提示词包 · ${item.boundGroupIds.size} 个调用组") { open(CallEditorRoute.Bindings) }
+                if (onOpenExtensions != null) EditorDestinationRow("扩展", "${item.extensionBindings.count { it.enabled }} 项启用 · 配置组合与常用参数") {
+                    if (!saving) {
+                        if (item != baseline || library?.mainCalls.orEmpty().none { it.id == item.id }) pendingExtensions = true
+                        else onOpenExtensions(null, item.id)
+                    }
+                }
                 HorizontalDivider()
                 EditorDestinationRow("其他调用", "${item.workflows.count { it.id != default?.id }} 项") { open(CallEditorRoute.Calls) }
             }
@@ -252,6 +260,17 @@ internal fun MainCallEditor(
     pendingSwitch?.let { pending -> AlertDialog(onDismissRequest = { pendingSwitch = null }, title = { Text("切换主调用？") }, text = { Text("当前主调用有未保存的修改。") },
         confirmButton = { TextButton(onClick = { pendingSwitch = null; onSwitchResource?.invoke(item, pending.targetId) }, enabled = !saving) { Text("保存并切换") } },
         dismissButton = { Row { TextButton(onClick = { pendingSwitch = null }) { Text("取消") }; TextButton(onClick = { pendingSwitch = null; onSwitchResource?.invoke(null, pending.targetId) }, enabled = !saving) { Text("放弃并切换") } } }) }
+    if (pendingExtensions) AlertDialog(onDismissRequest = { pendingExtensions = false }, title = { Text("打开扩展？") },
+        text = { Text("当前主调用有未保存的修改。") },
+        confirmButton = { TextButton(enabled = !saving, onClick = {
+            pendingExtensions = false; onOpenExtensions?.invoke(item, item.id)
+        }) { Text("保存并打开") } },
+        dismissButton = { Row {
+            TextButton(onClick = { pendingExtensions = false }) { Text("取消") }
+            if (library?.mainCalls.orEmpty().any { it.id == item.id }) TextButton(enabled = !saving, onClick = {
+                pendingExtensions = false; onOpenExtensions?.invoke(null, item.id)
+            }) { Text("放弃并打开") }
+        } })
 }
 
 @Composable

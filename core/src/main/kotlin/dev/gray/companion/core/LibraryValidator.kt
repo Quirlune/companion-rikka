@@ -6,6 +6,7 @@ object LibraryValidator {
         val issues = mutableListOf<Issue>()
         if (library.schemaVersion != LibraryFormat.CURRENT_VERSION) issues += Issue("library.schemaVersion", "不支持的资源版本")
         checkMetadata(library, issues)
+        issues += ExtensionCommands.validate(library)
         if (semantics.reasoningArchives)
             library.reasoningParsing.validationError()?.let { issues += Issue("library.reasoningParsing", it) }
         fun unique(values: List<String>, path: String) {
@@ -14,7 +15,7 @@ object LibraryValidator {
                 issues += Issue(path, "重复值：$it")
             }
         }
-        unique(library.characters.map { it.id } + library.packages.map { it.id } + library.mainCalls.map { it.id } + library.groups.map { it.id } + library.profiles.map { it.id } + library.connections.map { it.id } + library.sessions.map { it.id } + library.personas.map { it.id }, "library.ids")
+        unique(library.characters.map { it.id } + library.packages.map { it.id } + library.mainCalls.map { it.id } + library.groups.map { it.id } + library.profiles.map { it.id } + library.connections.map { it.id } + library.sessions.map { it.id } + library.personas.map { it.id } + library.extensions.map { it.id }, "library.ids")
         unique(library.chatFolders.map { it.id }, "library.chatFolderIds")
         unique(library.savedChats.map { it.id }, "library.savedChatIds")
         library.chatFolders.forEach { if (it.name.isBlank()) issues += Issue("chatFolder.${it.id}", "收藏文件夹名称不能为空") }

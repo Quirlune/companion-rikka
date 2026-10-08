@@ -262,6 +262,30 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                             entry<Screen.SettingPreferencesNetwork> { SettingPreferencesNetworkPage() }
                             entry<Screen.QuickMessages> { QuickMessagesPage() }
                             entry<Screen.WebView> { WebViewPage(it.url, it.contentId) }
+                            entry<Screen.CompanionExtensions> { key ->
+                                ConfigurationExtensionsPage(library, key.mainCallId, saving,
+                                    onApply = { command ->
+                                        if (!saving) {
+                                            saving = true
+                                            scope.launch {
+                                                try { report(controller.updateExtensions(command)) }
+                                                finally { saving = false }
+                                            }
+                                        }
+                                    },
+                                    onOpenResource = { resource ->
+                                        val kind = when (resource.kind) {
+                                            ExtensionResourceKind.CHARACTER -> EditorKind.CHARACTER
+                                            ExtensionResourceKind.MAIN -> EditorKind.MAIN
+                                            ExtensionResourceKind.PACKAGE -> EditorKind.PACKAGE
+                                            ExtensionResourceKind.GROUP -> EditorKind.GROUP
+                                        }
+                                        edit(Editing(kind, resource.id))
+                                    },
+                                    onBack = { navigator.navigate(Screen.CompanionEditor(EditorKind.MAIN.route, key.mainCallId)) {
+                                        popUpTo(key) { inclusive = true }
+                                    } })
+                            }
                             entry<Screen.CompanionRecoveryPrompt> { key ->
                                 val node = controller.recoveryNode(key.sessionId, key.runId, key.nodeKey)
                                 if (node == null) {
@@ -314,6 +338,20 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                                     try {
                                                         val accepted = draft == null || report(controller.updateLibrary { current -> current.copy(mainCalls = current.mainCalls.replaceOrAdd(draft) { it.id }) })
                                                         if (accepted) navigator.navigate(Screen.CompanionEditor(EditorKind.MAIN.route, targetId ?: newId())) { popUpTo(key) { inclusive = true } }
+                                                    } finally { saving = false }
+                                                }
+                                            }
+                                         }, onOpenExtensions = { draft, mainId ->
+                                            if (!saving) {
+                                                saving = true
+                                                scope.launch {
+                                                    try {
+                                                        val accepted = draft == null || report(controller.updateLibrary { current ->
+                                                            current.copy(mainCalls = current.mainCalls.replaceOrAdd(draft) { it.id })
+                                                        })
+                                                        if (accepted) navigator.navigate(Screen.CompanionExtensions(mainId)) {
+                                                            popUpTo(key) { inclusive = true }
+                                                        }
                                                     } finally { saving = false }
                                                 }
                                             }

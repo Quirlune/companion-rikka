@@ -29,7 +29,7 @@
 }
 ```
 
-`resources` accepts `characters`, `mainCalls`, `packages`, `groups`, and optionally `personas`, `tags`, `profiles`, `connections`. Each item is the same typed object used by Companion's native resource JSON. An item with an existing ID updates that item; a new ID creates it. Omitted IDs, including nested IDs, are generated when the preview is made and remain fixed in that plan. Give resources explicit stable IDs when another item or command refers to them in the same package. Resource lists are processed before commands.
+`resources` accepts `characters`, `mainCalls`, `packages`, `groups`, and optionally `personas`, `tags`, `profiles`, `connections`, `extensions`. Each item is the same typed object used by Companion's native resource JSON. An item with an existing ID updates that item; a new ID creates it. Omitted IDs, including nested IDs, are generated when the preview is made and remain fixed in that plan. Give resources explicit stable IDs when another item or command refers to them in the same package. Resource lists are processed before commands.
 
 `commands` supports these operations:
 
@@ -41,6 +41,8 @@
 | `bind` | `kind`, `id` or `slug`, `packages` and/or `groups` | Replace package bindings on a character, main call or group; only main calls support `groups`. References in these arrays are IDs. |
 | `select` | `key`, `value` | Set `selectedProfileId`, `selectedPersonaId`, `reasoningParsing` or `titleConfig`. |
 
-The `kind` names are `character`, `mainCall`, `package`, `group`, `persona`, `tag`, `profile`, and `connection`. `slug` locates an existing character, main call, package, group, persona or tag; profiles and connections use IDs. Unknown commands, fields and types are rejected. A package cannot edit sessions, messages, saved chats, runtime state or API keys. Credentials stay in the app's local credential store. Do not place secrets in configurable request headers or custom request bodies.
+The `kind` names are `character`, `mainCall`, `package`, `group`, `persona`, `tag`, `profile`, `connection`, and `extension`. `slug` locates an existing character, main call, package, group, persona or tag; profiles, connections and extensions use IDs. Unknown commands, fields and types are rejected. A package cannot edit sessions, messages, saved chats, runtime state or API keys. Credentials stay in the app's local credential store. Do not place secrets in configurable request headers or custom request bodies.
+
+Extensions are linked configuration compositions over existing resource IDs and typed public fields. Updating a definition recalculates enabled package/group association ownership in the preview, so any affected main calls join that plan and its strict undo receipt. Definition removal is rejected while still installed; removing composition resources is rejected while referenced. Installation metadata travels with main calls; extensions never contain duplicated parameter values, runtime state or credentials. Wire11 adds backward-defaulted metadata; old bundles remain readable.
 
 The preview records full before/after values, changed fields and resource order for each touched item. Apply checks that those items still have the previewed before values, validates the final resource graph once, then saves the library and its local receipt together. Undo requires the touched items still to equal the values this package installed. Later changes to any touched item cause an explicit conflict; unrelated later resources and conversations remain. If a later conversation or binding now uses a resource this undo would remove, undo is refused. Local receipts are excluded from exported resource bundles.

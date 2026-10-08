@@ -32,7 +32,7 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
             while (cursor.moveToNext()) meta[cursor.getString(0)] = cursor.getString(1)
         }
         val schema = meta["schema"]?.toIntOrNull() ?: if (rows.isEmpty()) 1 else error("Library metadata is damaged")
-        val known = setOf("character", "main_call", "package", "group", "profile", "session", "connection", "chat_folder", "saved_chat", "persona", "prompt_tag", "config_edit")
+        val known = setOf("character", "main_call", "package", "group", "profile", "session", "connection", "chat_folder", "saved_chat", "persona", "prompt_tag", "config_edit", "extension")
         require(rows.keys.all { it in known }) { "Unknown resource record type" }
         val decoded = Library(
             schemaVersion = schema,
@@ -52,6 +52,7 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
             selectedPersonaId = meta["selected_persona"],
             reasoningParsing = meta["reasoning_parsing"]?.let { json.decodeFromString(ReasoningParsingConfig.serializer(), it) } ?: ReasoningParsingConfig(),
             configurationEdits = decode(rows["config_edit"], ConfigurationEditReceipt.serializer()),
+            extensions = decode(rows["extension"], ConfigurationExtension.serializer()),
             user = meta["user"]?.let { json.decodeFromString(UserIdentity.serializer(), it) } ?: UserIdentity(),
             titleConfig = meta["title_config"]?.let { json.decodeFromString(ChatTitleConfig.serializer(), it) } ?: ChatTitleConfig()
         )
@@ -76,6 +77,7 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
         remember("persona", decoded.personas) { it.id }
         remember("prompt_tag", decoded.promptTags) { it.id }
         remember("config_edit", decoded.configurationEdits) { it.id }
+        remember("extension", decoded.extensions) { it.id }
         persistedRecords = persisted
         encodedRecords = encoded
         library
@@ -118,6 +120,7 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
             add("persona", library.personas, UserPersona.serializer()) { it.id }
             add("prompt_tag", library.promptTags, PromptTag.serializer()) { it.id }
             add("config_edit", library.configurationEdits, ConfigurationEditReceipt.serializer()) { it.id }
+            add("extension", library.extensions, ConfigurationExtension.serializer()) { it.id }
             for ((key, value) in wanted) if (previous[key] != value) {
                 if (previous[key]?.second == value.second) {
                     check(db.update("records", ContentValues().apply { put("ordinal", value.first) },

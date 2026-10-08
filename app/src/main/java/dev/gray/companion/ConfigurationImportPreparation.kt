@@ -93,6 +93,7 @@ internal object ConfigurationImportPreparer {
             connections = old.connections + imported.connections, chatFolders = old.chatFolders + imported.chatFolders,
             savedChats = old.savedChats + imported.savedChats, personas = old.personas + imported.personas,
             promptTags = old.promptTags + imported.promptTags.filterNot { it in existingTags },
+            extensions = old.extensions + imported.extensions,
             selectedSessionId = if (selectSession) imported.selectedSessionId ?: old.selectedSessionId else old.selectedSessionId)
     }
 }

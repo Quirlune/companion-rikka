@@ -89,7 +89,7 @@ class WorkflowEngine(
         val connectionIds = profiles.mapNotNull { it.apiConnectionId }.toSet()
         return library.copy(
             characters = library.characters.filter { it.id == session.characterId },
-            mainCalls = listOf(main), packages = packages, groups = groups, profiles = profiles,
+            mainCalls = listOf(ExtensionCommands.withoutMetadata(main)), extensions = emptyList(), packages = packages, groups = groups, profiles = profiles,
             connections = library.connections.filter { it.id in connectionIds },
             sessions = emptyList(), selectedSessionId = null,
             chatFolders = emptyList(), savedChats = emptyList(), configurationEdits = emptyList(),
