@@ -9,6 +9,32 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 class CompanionProviderAdapterTest {
+    @Test fun originalBuiltInsArePersistentIdempotentAndPreserveExistingConfiguration() {
+        val preset = me.rerere.rikkahub.data.datastore.DEFAULT_PROVIDERS.first() as ProviderSetting.OpenAI
+        val base = library().copy(connections = library().connections +
+            ApiConnection(id = "my-openai", name = "My connection", baseUrl = preset.baseUrl + "/"))
+        val expanded = CompanionProviderAdapter.withBuiltInProviders(base)
+        assertEquals(base.connections, expanded.connections.take(base.connections.size))
+        assertEquals(base.profiles, expanded.profiles)
+        assertEquals(base.selectedProfileId, expanded.selectedProfileId)
+        assertTrue(expanded.connections.any { it.id == "provider:${preset.id}" })
+        assertEquals(me.rerere.rikkahub.data.datastore.DEFAULT_PROVIDERS.size,
+            expanded.connections.size - base.connections.size)
+        assertSame(expanded, CompanionProviderAdapter.withBuiltInProviders(expanded))
+        assertTrue(LibraryValidator.validate(expanded).none { it.error })
+        val roundTrip = LibraryFormat.decode(LibraryFormat.encode(expanded))
+        val snapshot = CompanionProviderAdapter.capture(roundTrip)
+        val builtin = snapshot.providers.first { it.builtIn }
+        assertTrue(me.rerere.rikkahub.data.datastore.DEFAULT_PROVIDERS.any { it.id == builtin.id })
+        val storedId = snapshot.connectionIds.getValue(builtin.id)
+        val edited = roundTrip.copy(connections = roundTrip.connections.map {
+            if (it.id == storedId) it.copy(name = "Renamed", baseUrl = "https://custom.invalid/v1") else it
+        })
+        assertSame(edited, CompanionProviderAdapter.withBuiltInProviders(edited))
+        assertTrue(snapshot.providers.all { CompanionProviderAdapter.apiKey(it).isEmpty() &&
+            (!it.builtIn || it.models.isEmpty()) })
+    }
+
     private fun library(): Library = LibraryFormat.upgrade(Library(
         connections = listOf(
             ApiConnection(id = "legacy-api:模型/old", name = "Primary", baseUrl = "https://example.invalid/v1",

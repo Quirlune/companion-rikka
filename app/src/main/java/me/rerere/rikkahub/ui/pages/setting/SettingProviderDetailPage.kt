@@ -452,7 +452,9 @@ private fun ModelList(
     onModelLoadError: ((Throwable) -> Unit)?,
     onEditConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)?,
 ) {
-    val providerManager = koinInject<ProviderManager>()
+    // Callback-backed hosts own their transport and need no upstream DI binding.
+    val providerManager = if (loadModels == null &&
+        options.modelLoadPolicy != ProviderModelLoadPolicy.DISABLED) koinInject<ProviderManager>() else null
     var requestCount by remember(providerSetting.id) { mutableStateOf(0) }
     var loading by remember(providerSetting.id) { mutableStateOf(false) }
     val autoKey = providerSetting.takeIf { options.modelLoadPolicy == ProviderModelLoadPolicy.AUTOMATIC }
@@ -461,7 +463,8 @@ private fun ModelList(
             (options.modelLoadPolicy == ProviderModelLoadPolicy.MANUAL && requestCount == 0)) return@produceState
         loading = true
         runCatching {
-            value = (loadModels?.invoke(providerSetting) ?: providerManager.getProviderByType(providerSetting).listModels(providerSetting))
+            value = (loadModels?.invoke(providerSetting) ?: requireNotNull(providerManager)
+                .getProviderByType(providerSetting).listModels(providerSetting))
                 .sortedBy { it.modelId }.toList()
         }.onFailure {
             if (it is kotlinx.coroutines.CancellationException) throw it

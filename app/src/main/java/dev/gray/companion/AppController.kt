@@ -114,7 +114,8 @@ class AppController internal constructor(
         viewModelScope.launch {
             try {
                 val loaded = repository.load()
-                var initial = LibraryFormat.upgrade(ModelCatalog.normalize(if (loaded == Library()) LibraryDefaults.create() else loaded).withStandardCharacterFields())
+                var initial = CompanionProviderAdapter.withBuiltInProviders(
+                    LibraryFormat.upgrade(ModelCatalog.normalize(if (loaded == Library()) LibraryDefaults.create() else loaded).withStandardCharacterFields()))
                 val issues = LibraryValidator.validate(initial)
                 if (issues.any { it.error }) {
                     _library.value = initial

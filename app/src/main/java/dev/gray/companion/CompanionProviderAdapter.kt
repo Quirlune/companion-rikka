@@ -10,6 +10,7 @@ import java.util.UUID
 import kotlin.uuid.Uuid
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.rikkahub.data.datastore.DEFAULT_PROVIDERS
 
 /** Fields which have no counterpart on the original provider presentation model. */
 internal data class CompanionConnectionExtras(
@@ -43,21 +44,36 @@ internal data class CompanionProviderApply(val library: Library?, val issues: Li
 
 /** No SettingsStore, provider requests, credential reads/writes or generated runtime configuration. */
 internal object CompanionProviderAdapter {
+    /** Original built-ins are real connections in the same resource authority, never a second settings store. */
+    fun withBuiltInProviders(library: Library): Library {
+        val connections = library.connections.toMutableList()
+        DEFAULT_PROVIDERS.forEach { preset ->
+            val id = "provider:${preset.id}"
+            // Distinct connections may share an endpoint but use different credentials.
+            if (connections.none { it.id == id }) {
+                connections += ApiConnection(id = id, name = preset.name, protocol = preset.protocol(),
+                    baseUrl = preset.baseUrl(), enabled = preset.enabled,
+                    responseApi = (preset as? ProviderSetting.OpenAI)?.useResponseApi ?: false)
+            }
+        }
+        return if (connections == library.connections) library else library.copy(connections = connections)
+    }
+
     fun capture(library: Library): CompanionProviderSnapshot {
         require(library.connections.map { it.id }.distinct().size == library.connections.size) { "API 连接标识重复" }
         require(library.profiles.map { it.id }.distinct().size == library.profiles.size) { "模型标识重复" }
         require(library.profiles.all { profile -> library.connections.any { it.id == profile.apiConnectionId } }) {
             "模型必须关联实际 API 连接；旧配置应先通过现有 ModelCatalog 迁移"
         }
-        val connectionIds = library.connections.associate { opaqueId("connection", it.id) to it.id }
+        val connectionIds = library.connections.associate { nativeConnectionId(it) to it.id }
         val profileIds = library.profiles.associate { opaqueId("profile", it.id) to it.id }
         require(connectionIds.size == library.connections.size && profileIds.size == library.profiles.size) { "原生界面标识冲突" }
         val providers = library.connections.map { connection ->
-            val id = opaqueId("connection", connection.id)
+            val id = nativeConnectionId(connection)
             val models = library.profiles.filter { it.apiConnectionId == connection.id }.map { profile ->
                 Model(id = opaqueId("profile", profile.id), modelId = profile.model, displayName = profile.name)
             }
-            when (connection.protocol) {
+            val projected = when (connection.protocol) {
                 Protocol.OPENAI -> ProviderSetting.OpenAI(id = id, enabled = connection.enabled, name = connection.name,
                     models = models, baseUrl = connection.baseUrl, useResponseApi = connection.responseApi)
                 Protocol.GOOGLE -> ProviderSetting.Google(id = id, enabled = connection.enabled, name = connection.name,
@@ -65,9 +81,13 @@ internal object CompanionProviderAdapter {
                 Protocol.CLAUDE -> ProviderSetting.Claude(id = id, enabled = connection.enabled, name = connection.name,
                     models = models, baseUrl = connection.baseUrl)
             }
+            // Keep the original descriptions and built-in affordances without importing credentials or models.
+            val preset = DEFAULT_PROVIDERS.firstOrNull { connection.id == "provider:${it.id}" }
+            if (preset == null) projected else projected.copyProvider(builtIn = true,
+                description = preset.description, shortDescription = preset.shortDescription)
         }
         return CompanionProviderSnapshot(library.connections, library.profiles, providers, connectionIds, profileIds,
-            library.connections.associate { opaqueId("connection", it.id) to CompanionConnectionExtras(it.customHeaders, it.maxConcurrentRequests) })
+            library.connections.associate { nativeConnectionId(it) to CompanionConnectionExtras(it.customHeaders, it.maxConcurrentRequests) })
     }
 
     fun plan(
@@ -146,6 +166,10 @@ internal object CompanionProviderAdapter {
 
     private fun opaqueId(kind: String, id: String): Uuid =
         Uuid.parse(UUID.nameUUIDFromBytes("companion-native-provider:$kind:$id".toByteArray(Charsets.UTF_8)).toString())
+
+    private fun nativeConnectionId(connection: ApiConnection): Uuid =
+        DEFAULT_PROVIDERS.firstOrNull { connection.id == "provider:${it.id}" }?.id
+            ?: opaqueId("connection", connection.id)
 
     private fun ProviderSetting.protocol(): Protocol = when (this) {
         is ProviderSetting.OpenAI -> Protocol.OPENAI
