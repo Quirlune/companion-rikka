@@ -34,6 +34,8 @@ class LibraryFormatTest {
         assertEquals(1, resumed.pendingRun!!.formatVersion)
         assertEquals(1, resumed.pendingRun!!.executionVersion)
         assertEquals(recovery.initialSession, resumed.pendingRun!!.initialSession)
+        assertNull(restored.mainCalls.single().avatar)
+        assertNull(resumed.pendingRun!!.frozenResources.mainCalls.single().avatar)
         assertTrue(restored.mainCalls.single().workflows.single().nodes.single().recordTrajectory)
         assertTrue(resumed.pendingRun!!.frozenResources.mainCalls.single().workflows.single().nodes.single().recordTrajectory)
         assertEquals(LibraryFormat.CURRENT_VERSION, resumed.pendingRun!!.frozenResources.schemaVersion)
@@ -120,7 +122,7 @@ class LibraryFormatTest {
                 "recordTrajectory", "currentOnlyMacros", "headWrites", "headRemovals", "precedingGap", "rawText",
                 "bodySourceTileId", "bodyTextTemplate", "bodyDisplay", "bodyDisplayReceipt", "sourceKind",
                 "reasoningParsing", "reasoningSnapshot", "fullResponseText", "alternateGreetings", "authoredOpening",
-                "thresholdBasis", "protectFirstFloors", "maximumBatchFloors", "aggregationWorkflow") &&
+                "thresholdBasis", "protectFirstFloors", "maximumBatchFloors", "aggregationWorkflow", "avatar") &&
                 !(key == "title" && "key" in value && "text" in value && "category" in value)
         }.mapValues { (_, item) -> withoutMetadata(item) })
         else -> value

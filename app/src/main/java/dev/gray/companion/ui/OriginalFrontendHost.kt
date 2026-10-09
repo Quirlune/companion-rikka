@@ -105,6 +105,15 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
             } finally { saving = false; onResult(accepted) }
         }
     }
+    suspend fun commitProviders(plan: dev.gray.companion.CompanionProviderPlan): List<Issue> {
+        if (saving) return listOf(Issue("providers", "正在保存，请稍后操作"))
+        saving = true
+        return try {
+            val issues = controller.updateProviders(plan)
+            report(issues)
+            issues
+        } finally { saving = false }
+    }
     fun save(transform: (Library) -> Library) {
         if (saving) return
         saving = true
@@ -232,6 +241,7 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                             }
                             entry<Screen.CompanionSession> { SessionConfigScreen(library, { navigator.popBackStack() }, ::save, saving,
                                 onManagePersonas = { navigator.navigate(Screen.CompanionPersonas) }) }
+                            entry<Screen.CompanionChatDisplay> { CompanionChatDisplaySettingsPage() }
                             entry<Screen.CompanionMemory> { memoryKey ->
                                 SourceNavigationProvider(library, onOpenLocation = { location ->
                                     val destination = sourceEditorScreen(location, library)
@@ -286,10 +296,15 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                 }
                             }
                             entry<Screen.SettingProvider> {
-                                Column(Modifier.fillMaxSize()) {
-                                    SettingsHeader("模型与 API", { navigator.popBackStack() })
-                                    ModelsScreen(library, ::edit, ::update, Modifier.weight(1f))
-                                }
+                                CompanionProvidersPage(library, saving, ::commitProviders,
+                                    onOpenProvider = { navigator.navigate(Screen.SettingProviderDetail(it.toString())) },
+                                    onBack = { navigator.popBackStack() })
+                            }
+                            entry<Screen.SettingProviderDetail> { key ->
+                                CompanionProviderDetailPage(key.providerId, library, saving, controller::getApiKey, ::commitProviders,
+                                    onEditProfile = { edit(Editing(EditorKind.PROFILE, it)) },
+                                    onSelectDefault = { id -> update { it.copy(selectedProfileId = id) } },
+                                    onBack = { navigator.popBackStack() })
                             }
                             entry<Screen.SettingModels> {
                                 ChatTitleSettingsPage(library, { config -> save { it.copy(titleConfig = config) } }, { navigator.popBackStack() }, saving)
@@ -461,7 +476,7 @@ private fun CompanionSettingsPage(onExport: () -> Unit, onImport: () -> Unit, un
     val navigator = LocalNavController.current
     SettingPageLayout {
             item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("运行方案") }) {
-                item(onClick = { navigator.navigate(Screen.CompanionSession) }, headlineContent = { Text("当前对话配置") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
+                item(onClick = { navigator.navigate(Screen.CompanionSession) }, headlineContent = { Text("当前对话配置") }, supportingContent = { Text("本段对话的身份、额外资源与状态") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionPromptPreview) }, headlineContent = { Text("提示词预览") }, leadingContent = { Icon(HugeIcons.Search01, null) })
                 item(onClick = onOpenMainCall, headlineContent = { Text("主调用") }, leadingContent = { Icon(HugeIcons.Brain02, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionResources(ResourceKind.PACKAGE.routeIndex)) }, headlineContent = { Text("提示词包") }, leadingContent = { Icon(HugeIcons.Book03, null) })
@@ -470,14 +485,7 @@ private fun CompanionSettingsPage(onExport: () -> Unit, onImport: () -> Unit, un
             } }
             item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("连接与界面") }) {
                 item(onClick = { navigator.navigate(Screen.SettingProvider) }, headlineContent = { Text("模型与 API") }, leadingContent = { Icon(HugeIcons.ServerStack01, null) })
-                item(onClick = { navigator.navigate(Screen.SettingModels) }, headlineContent = { Text("自动标题") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
-                item(onClick = { navigator.navigate(Screen.CompanionReasoning) }, headlineContent = { Text("思考解析") }, leadingContent = { Icon(HugeIcons.Brain02, null) })
-                item(onClick = { navigator.navigate(Screen.QuickMessages) }, headlineContent = { Text("快捷输入") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
-                item(onClick = { navigator.navigate(Screen.CompanionTiles) }, headlineContent = { Text("显示磁贴") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
-                item(onClick = { navigator.navigate(Screen.SettingPreferencesGeneral) }, headlineContent = { Text("通用偏好") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
-                item(onClick = { navigator.navigate(Screen.SettingPreferencesNetwork) }, headlineContent = { Text("网络") }, leadingContent = { Icon(HugeIcons.ServerStack01, null) })
-                item(onClick = { navigator.navigate(Screen.SettingPreferencesTheme) }, headlineContent = { Text("主题") }, leadingContent = { Icon(HugeIcons.Sun01, null) })
-                item(onClick = { navigator.navigate(Screen.SettingPreferencesUI) }, headlineContent = { Text("界面显示") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
+                item(onClick = { navigator.navigate(Screen.CompanionChatDisplay) }, headlineContent = { Text("聊天与显示") }, supportingContent = { Text("思考解析、输入、磁贴与界面偏好") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
             } }
             item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("资源备份") }) {
                 item(onClick = onImport, headlineContent = { Text("导入资源") }, leadingContent = { Icon(HugeIcons.ImageUpload, null) })
@@ -485,6 +493,25 @@ private fun CompanionSettingsPage(onExport: () -> Unit, onImport: () -> Unit, un
                     supportingContent = { Text("$undoCount 次可检查的配置导入") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
                 item(onClick = onExport, headlineContent = { Text("导出 JSON") }, leadingContent = { Icon(HugeIcons.Share04, null) })
             } }
+    }
+}
+
+@Composable
+private fun CompanionChatDisplaySettingsPage() {
+    val navigator = LocalNavController.current
+    SettingPageLayout(title = "聊天与显示") {
+        item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("聊天") }) {
+            item(onClick = { navigator.navigate(Screen.CompanionReasoning) }, headlineContent = { Text("思考解析") }, leadingContent = { Icon(HugeIcons.Brain02, null) })
+            item(onClick = { navigator.navigate(Screen.QuickMessages) }, headlineContent = { Text("快捷输入") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
+            item(onClick = { navigator.navigate(Screen.CompanionTiles) }, headlineContent = { Text("显示磁贴") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
+            item(onClick = { navigator.navigate(Screen.SettingModels) }, headlineContent = { Text("自动标题") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
+        } }
+        item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("显示与偏好") }) {
+            item(onClick = { navigator.navigate(Screen.SettingPreferencesGeneral) }, headlineContent = { Text("通用偏好") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
+            item(onClick = { navigator.navigate(Screen.SettingPreferencesUI) }, headlineContent = { Text("界面显示") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
+            item(onClick = { navigator.navigate(Screen.SettingPreferencesTheme) }, headlineContent = { Text("主题") }, leadingContent = { Icon(HugeIcons.Sun01, null) })
+            item(onClick = { navigator.navigate(Screen.SettingPreferencesNetwork) }, headlineContent = { Text("网络") }, leadingContent = { Icon(HugeIcons.ServerStack01, null) })
+        } }
     }
 }
 

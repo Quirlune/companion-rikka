@@ -49,6 +49,8 @@ The preview records full before/after values, changed fields and resource order 
 
 ## Editable ZIP content packages (revision 38)
 
+Revision39 adds optional native `mainCall.avatar`, using the same bounded AvatarImage as characters. Existing `$avatar` file markers work in this field without a new ZIP kind or package format. Resource wire13 reads older versions; absent main-call avatars default to null. Provider UI reuse does not change connection/profile content fields or put API keys into exported resources.
+
 The file import picker accepts JSON, ZIP and character-card PNG. Original native JSON and `companion.config.v1` remain supported. A ZIP is an editable authoring tree: keep resource structure in JSON and long prompts in ordinary UTF-8 files. Import reads the archive once, resolves attachments and generates one fixed preview candidate before any resource is published. Apply and strict touched-resource undo use the same configuration path described above. Import never runs a workflow, executes scripts, calls a model or downloads a URL.
 
 An AI can prepare this tree, then a person can revise either its files or the imported resources in the original graphical editors:

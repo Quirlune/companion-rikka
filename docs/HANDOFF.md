@@ -1,8 +1,10 @@
 # Companion 新窗口接续交接
 
-更新：2026-10-09。revision38 / 0.40-preview已在实际 main 的2d647a21／0.39-preview上实现，36项定向检查、原生构建及APK签名核对通过；实验分支不作为基座。本轮没有安装设备或重试模拟器恢复；旧电脑预览窗口空白／恢复卡住，完整可视交互未验收。本文用于新任务定位现状；技术约束以本仓库 `AGENTS.md` 和 `docs/ARCHITECTURE.md` 的最新修订为准。不要沿用早期网页原型或旧交接中的完成判断。
+更新：2026-10-09。revision39 / 0.41-preview已在实际 main 的d895f48a／0.40-preview上实现，11项定向检查、最终原生构建及APK签名核对通过；实验分支不作为基座。本轮没有安装设备或重试模拟器恢复；旧电脑预览窗口空白／恢复卡住，完整可视交互未验收。本文用于新任务定位现状；技术约束以本仓库 `AGENTS.md` 和 `docs/ARCHITECTURE.md` 的最新修订为准。不要沿用早期网页原型或旧交接中的完成判断。
 
 ## 现在应该做什么
+
+最新前端：辅助设置统一收进“聊天与显示”，复用原偏好页面及存储；“当前对话配置”仍管理本段聊天的身份、额外资源、宏状态等，补充了作用说明。主调用可编辑头像，侧栏显示当前主调用的真实名字／头像并对齐角色，卡片选择与铅笔编辑行为保持。模型与API实际复用原SettingProviderPageContent／SettingProviderDetailContent的提供商列表、配置／模型两页及模型表单。CompanionProviderAdapter只做稳定标识投影与固定计划，AppController.updateProviders仍统一校验／保存，密钥显式差异通过ConfigurationCredentialCommit并在检测到保存失败时恢复；旧setApiKey也取同一mutex。此处不承诺跨存储进程崩溃原子性。高级模型参数与全局默认选择在原模型卡片的操作菜单里；打开页面不自动获取模型／余额，主动获取模型包含已保存连接的请求头。未保存连接草稿保活，创建／编辑弹窗收到成功保存回执才关闭。原Wrapper的默认行为保留；不支持的原生控件不伪装生效。
 
 用户要求六项优化实际迁移到原架构：可点来源、就地配置、共享影响／当前使用处独立、复制删除维护引用、错误定位、按选择展开操作。revision37采用ResourceLocations／ResourceUsageIndex／ResourceEditCommands共享纯配置契约，SourceNavigation合并实际资源／工作流／提示块／记忆草稿，Controller仍为唯一保存入口。来源修改经真正保存后才跨资源离开，返回刷新编辑基线。独立仅支持静态唯一角色／组件包词条的一次引用；复制改写内部标识，文本宏／输出地址保留共享并提示，动态使用无法穷尽。四类资源及完整运行／History／记忆／分支／恢复保持。
 
@@ -10,9 +12,9 @@
 
 ZIP导入通过ResourceArchiveImport／ResourceArchiveIo／CharacterCardImport／CharacterCardPng编译为既有配置文档，支持全部九类原生资源及常见角色卡JSON／PNG。manifest与拆分正文／头像格式见CONFIGURATION_PACKAGES.md。AppController是唯一应用／撤回保存者，异步读取有代次取消保护；正文精确保留，文件类型／预算／路径问题会定位并拒绝。原卡JSON和无法等价执行的规则保留；世界书词条默认关闭等待原生精修。ZIP不增加任意二进制资产存储，也不改变现有String正文／撤回记录的内存方式。
 
-当前源码以实际仓库 Git HEAD 和工作区为准，版本为0.40-preview/code199，基座 main `2d647a21` / 0.39-preview。读取时先核对 Git，不回滚覆盖后续修改。既有私有远端为 `Quirlune/companion-rikka` main。两个实验版本保持原样；本轮没有合并实验提交。wire12读取旧版本，SQLite1/recovery1/execution8 保持。CollectionCompatibility仅清理实时主调用与对应撤回镜像的旧安装元数据，实际关联及冻结运行世界保留；SQLite通过requiresUpgradeSave标记迁移，Controller完整校验后按原事务持久化。
+当前源码以实际仓库 Git HEAD 和工作区为准，版本为0.41-preview/code200，基座 main `d895f48a` / 0.40-preview。读取时先核对 Git，不回滚覆盖后续修改。既有私有远端为 `Quirlune/companion-rikka` main。两个实验版本保持原样；本轮没有合并实验提交。wire13读取旧版本，SQLite1/recovery1/execution8 保持。主调用avatar为可选元数据，冻结世界保留捕获头像，续跑比较仅忽略此显示字段。CollectionCompatibility仅清理实时主调用与对应撤回镜像的旧安装元数据，实际关联及冻结运行世界保留；SQLite通过requiresUpgradeSave标记迁移，Controller完整校验后按原事务持久化。
 
-交付目录：`C:/Users/34601/Documents/Codex/2026-10-04/companion-continuation/outputs`。本轮产物为 `Companion-0.40-preview.apk`、`.sha256`、`集合与ZIP说明.md`、`ZIP资源包格式.md`、`集合与ZIP验收记录.json`；集中检查日志与八组XML在同一任务 `work/collections-archive-v40-*`，此前 APK／日志保留。本轮不安装设备、不重置、不加示例、不请求真实模型；原生构建8m51s通过，SHA256为`d2995cac49b3b9f5272cb426bd8d5fb92cfc53caf46c55a9b9dadc77465cc6a7`。验收状态见ARCHITECTURE最新记录及交付JSON；完整交互体验由用户验收。
+交付目录：`C:/Users/34601/Documents/Codex/2026-10-04/companion-continuation/outputs`。本轮产物为 `Companion-0.41-preview.apk`、`.sha256`、`前端整理与原版模型页说明.md`、`前端整理验收记录.json`；集中检查与最终构建日志／XML在同一任务 `work/native-settings-v41-*`，此前 APK／日志保留。11项定向检查通过；初次新增头像样本未沿用归一化对象，仅修样本并重跑失败方法，未放松实际行为。随后分页／弹窗草稿修复追加仅原生构建，3m22s通过；SHA256为`0d05dd4ac7f090d62e95206ac3bd4d4bcc1f312e0d4e287ca75a426d7a0d1bab`。本轮不安装设备、不重置、不加示例、不请求真实模型；完整交互体验由用户验收。
 
 ## 文件和环境
 
@@ -23,17 +25,17 @@ ZIP导入通过ResourceArchiveImport／ResourceArchiveIo／CharacterCardImport�
 | 项目 | 位置（相对上述根目录） |
 | --- | --- |
 | 实际 Git 仓库 | `work/companion-rikka` |
-| 当前架构及决策/验收记录 | `work/companion-rikka/docs/ARCHITECTURE.md`，revision38 |
+| 当前架构及决策/验收记录 | `work/companion-rikka/docs/ARCHITECTURE.md`，revision39 |
 | 语言已实现/未实现边界 | `work/companion-rikka/docs/PROMPT_LANGUAGE.md` |
 | 配置包导入/撤回契约 | `work/companion-rikka/docs/CONFIGURATION_PACKAGES.md` |
-| 当前 APK／电脑预览 | 当前0.40在上面的新交付目录；旧版本保留，本轮未安装 |
+| 当前 APK／电脑预览 | 当前0.41在上面的新交付目录；旧版本保留，本轮未安装 |
 | 使用教程 | `outputs/使用教程.md` |
 | 导入及分层记忆/磁贴教程 | `outputs/分层记忆与磁贴说明.md` |
 | 已整理的日常版配置 | `outputs/沐瑶-Gray-G11-分层记忆配置.json` |
 | 交付进度记录 | `outputs/开发预览说明.md`，最新 revision33 |
 | 电脑原生预览入口 | `outputs/打开安卓预览.cmd` |
 | 预览环境/启动器 | `work/companion/desktop-preview/Environment.ps1`、`Start.ps1` |
-| 本轮验收证据 | 新交付任务的 `outputs/集合与ZIP验收记录.json`、`work/collections-archive-v40-*` |
+| 本轮验收证据 | 新交付任务的 `outputs/前端整理验收记录.json`、`work/native-settings-v41-*` |
 | 前一轮分层记忆证据 | `work/memory-v32-result.json`、`memory-v32-*` |
 
 只读原版源码：`C:/Users/34601/Documents/Codex/2026-09-22/ni-q/work/rikkahub`。

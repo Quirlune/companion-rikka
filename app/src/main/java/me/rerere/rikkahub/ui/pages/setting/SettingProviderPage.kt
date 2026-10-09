@@ -81,6 +81,7 @@ import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.hooks.useEditState
 import me.rerere.rikkahub.ui.pages.setting.components.ProviderConfigure
+import me.rerere.rikkahub.ui.pages.setting.components.ProviderConfigureOptions
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.ImageUtils
 import me.rerere.rikkahub.utils.plus
@@ -93,21 +94,43 @@ import kotlin.uuid.Uuid
 fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     val navController = LocalNavController.current
+    SettingProviderPageContent(
+        providers = settings.providers,
+        onProvidersChange = { vm.updateSettings(settings.copy(providers = it)) },
+        onOpenProvider = { navController.navigate(Screen.SettingProviderDetail(providerId = it.toString())) },
+    )
+}
+
+/** Original provider list, reusable without acquiring or mutating SettingsStore. */
+@Composable
+fun SettingProviderPageContent(
+    providers: List<ProviderSetting>,
+    onProvidersChange: (List<ProviderSetting>) -> Unit,
+    onOpenProvider: (Uuid) -> Unit,
+    onBack: (() -> Unit)? = null,
+    allowRecommendations: Boolean = true,
+    allowImport: Boolean = true,
+    configureOptions: ProviderConfigureOptions = ProviderConfigureOptions(),
+    enabled: Boolean = true,
+    onProvidersChangeConfirmed: ((List<ProviderSetting>, (Boolean) -> Unit) -> Unit)? = null,
+) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     var searchQuery by remember { mutableStateOf("") }
     val lazyListState = rememberLazyListState()
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        val newProviders = settings.providers.toMutableList().apply {
-            add(to.index, removeAt(from.index))
+        val fromIndex = providers.indexOfFirst { it.id == from.key }
+        val toIndex = providers.indexOfFirst { it.id == to.key }
+        if (enabled && fromIndex >= 0 && toIndex >= 0) {
+            val newProviders = providers.toMutableList().apply { add(toIndex, removeAt(fromIndex)) }
+            onProvidersChange(newProviders)
         }
-        vm.updateSettings(settings.copy(providers = newProviders))
     }
 
-    val filteredProviders = remember(settings.providers, searchQuery) {
+    val filteredProviders = remember(providers, searchQuery) {
         if (searchQuery.isBlank()) {
-            settings.providers
+            providers
         } else {
-            settings.providers.filter { provider ->
+            providers.filter { provider ->
                 provider.name.contains(searchQuery, ignoreCase = true)
             }
         }
@@ -120,29 +143,20 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
                     Text(text = stringResource(R.string.setting_provider_page_title))
                 },
                 navigationIcon = {
-                    BackButton()
+                    BackButton(onBack = onBack)
                 },
                 actions = {
-                    RecommendProviderButton { provider ->
-                        vm.updateSettings(
-                            settings.copy(
-                                providers = listOf(provider.copyProvider(Uuid.random())) + settings.providers
-                            )
-                        )
+                    if (allowRecommendations) RecommendProviderButton { provider ->
+                        if (enabled) onProvidersChange(listOf(provider.copyProvider(Uuid.random())) + providers)
                     }
-                    ImportProviderButton {
-                        vm.updateSettings(
-                            settings.copy(
-                                providers = listOf(it.copyProvider(Uuid.random())) + settings.providers
-                            )
-                        )
+                    if (allowImport) ImportProviderButton {
+                        if (enabled) onProvidersChange(listOf(it.copyProvider(Uuid.random())) + providers)
                     }
-                    AddButton {
-                        vm.updateSettings(
-                            settings.copy(
-                                providers = listOf(it) + settings.providers
-                            )
-                        )
+                    AddButton(configureOptions = configureOptions, enabled = enabled,
+                        onAddConfirmed = onProvidersChangeConfirmed?.let { commit ->
+                            { provider: ProviderSetting, complete: (Boolean) -> Unit -> commit(listOf(provider) + providers, complete) }
+                        }) {
+                        onProvidersChange(listOf(it) + providers)
                     }
                 },
                 scrollBehavior = scrollBehavior,
@@ -204,6 +218,7 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
                                 val haptic = LocalHapticFeedback.current
                                 IconButton(
                                     onClick = {},
+                                    enabled = enabled,
                                     modifier = Modifier
                                         .longPressDraggableHandle(
                                             onDragStarted = {
@@ -221,7 +236,7 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
                                 }
                             },
                             onClick = {
-                                navController.navigate(Screen.SettingProviderDetail(providerId = provider.id.toString()))
+                                if (enabled) onOpenProvider(provider.id)
                             }
                         )
                     }
@@ -534,12 +549,15 @@ private fun handleImageQRCode(
 
 
 @Composable
-private fun AddButton(onAdd: (ProviderSetting) -> Unit) {
+private fun AddButton(configureOptions: ProviderConfigureOptions = ProviderConfigureOptions(), enabled: Boolean = true,
+    onAddConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)? = null, onAdd: (ProviderSetting) -> Unit) {
     val dialogState = useEditState<ProviderSetting> {
         onAdd(it.copyProvider(name = it.name.trim()))
     }
+    var pending by remember { mutableStateOf(false) }
 
     IconButton(
+        enabled = enabled && !pending,
         onClick = {
             dialogState.open(ProviderSetting.OpenAI())
         }
@@ -550,22 +568,30 @@ private fun AddButton(onAdd: (ProviderSetting) -> Unit) {
     if (dialogState.isEditing) {
         AlertDialog(
             onDismissRequest = {
-                dialogState.dismiss()
+                if (!pending) dialogState.dismiss()
             },
             title = {
                 Text(stringResource(R.string.setting_provider_page_add_provider))
             },
             text = {
                 dialogState.currentState?.let {
-                    ProviderConfigure(it) { newState ->
-                        dialogState.currentState = newState
+                    ProviderConfigure(it, options = configureOptions) { newState ->
+                        if (!pending && enabled) dialogState.currentState = newState
                     }
                 }
             },
             confirmButton = {
                 TextButton(
+                    enabled = enabled && !pending,
                     onClick = {
-                        dialogState.confirm()
+                        if (onAddConfirmed == null) dialogState.confirm()
+                        else dialogState.currentState?.let { value ->
+                            pending = true
+                            onAddConfirmed(value.copyProvider(name = value.name.trim())) { accepted ->
+                                pending = false
+                                if (accepted) dialogState.dismiss()
+                            }
+                        }
                     }
                 ) {
                     Text(stringResource(R.string.setting_provider_page_add))
@@ -573,8 +599,9 @@ private fun AddButton(onAdd: (ProviderSetting) -> Unit) {
             },
             dismissButton = {
                 TextButton(
+                    enabled = !pending,
                     onClick = {
-                        dialogState.dismiss()
+                        if (!pending) dialogState.dismiss()
                     }
                 ) {
                     Text(stringResource(R.string.cancel))

@@ -5,6 +5,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
@@ -63,6 +65,9 @@ internal fun MainCallEditor(
     var rename by remember(initial.id) { mutableStateOf(false) }
     var switchMenuOpen by remember(initial.id) { mutableStateOf(false) }
     var pendingSwitch by remember(initial.id) { mutableStateOf<PendingMainSwitch?>(null) }
+    var avatarEditorOpen by remember(initial.id) { mutableStateOf(false) }
+    var avatarProcessing by remember(initial.id) { mutableStateOf(false) }
+    val editingBusy = saving || avatarProcessing
     fun pop() { if (stack.size > 1) stack.removeAt(stack.lastIndex) else onBack() }
     fun open(route: CallEditorRoute) { stack.add(route) }
     fun openDetails(workflow: Workflow) { callDrafts[workflow.id] = CallDetailDraft(workflow, workflow); open(CallEditorRoute.Details(workflow.id)) }
@@ -77,7 +82,7 @@ internal fun MainCallEditor(
         return (item.workflows + loadedGroups.flatMap { it.workflows }).distinctBy { it.id }
     }
     fun requestSwitch(targetId: String?) {
-        if (saving || targetId == item.id) return
+        if (editingBusy || targetId == item.id) return
         if (item != baseline) pendingSwitch = PendingMainSwitch(targetId)
         else onSwitchResource?.invoke(null, targetId)
     }
@@ -96,6 +101,7 @@ internal fun MainCallEditor(
     LaunchedEffect(sourceFocus) {
         if (sourceFocus != null && sourceFocus.resource == sourceResource && sourceFocus.field == null) {
             when {
+                sourceFocus.section == "avatar" -> avatarEditorOpen = true
                 sourceFocus.workflowId == item.history.processor.workflow.id || (sourceFocus.workflowId != null && sourceFocus.workflowId == item.history.processor.aggregationWorkflow?.id) -> open(CallEditorRoute.History)
                 sourceFocus.workflowId != null -> item.workflows.firstOrNull { it.id == sourceFocus.workflowId }?.let { workflow ->
                     openDetails(workflow)
@@ -118,10 +124,15 @@ internal fun MainCallEditor(
         accept = { candidate -> candidate.mainCalls.firstOrNull { it.id == item.id }?.let { item = it } }) {
     RikkaNavDisplay(stack, { backs[stack.last()]?.invoke() ?: pop() }, entryProvider {
         entry<CallEditorRoute.Home> { route ->
-            CallEditorPage("主调用", item != baseline, onBack, { onSave(item.copy(name = item.name.trim())) }, saving, { backs[route] = it },
+            CallEditorPage("主调用", item != baseline, onBack, { if (!editingBusy) onSave(item.copy(name = item.name.trim())) }, editingBusy, { backs[route] = it },
                 titleContent = {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        if (onSwitchResource != null && !saving) {
+                        Box(Modifier.semantics { contentDescription = "编辑主调用头像" }) {
+                            ResourceAvatarBadge(item.name.ifBlank { "主调用" }, item.avatar, 36.dp,
+                                onClick = { if (!editingBusy) avatarEditorOpen = !avatarEditorOpen })
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        if (onSwitchResource != null && !editingBusy) {
                             val resources = (library?.mainCalls.orEmpty() + item).distinctBy { it.id }
                                 .map { it.id to (if (it.id == item.id) item.name else it.name).ifBlank { "未命名主调用" } }
                             val options = resources.map { (id, name) -> (id as String?) to name } + listOf(null to "新建主调用…")
@@ -140,11 +151,13 @@ internal fun MainCallEditor(
                             }
                         } else Text(item.name.ifBlank { "未命名主调用" }, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false))
-                        IconButton(onClick = { rename = true }, enabled = !saving) {
+                        IconButton(onClick = { rename = true }, enabled = !editingBusy) {
                             Icon(HugeIcons.PencilEdit01, "重命名主调用", Modifier.size(20.dp))
                         }
                     }
                 }) {
+                if (avatarEditorOpen) ResourceAvatarEditor(item.name, item.avatar,
+                    onProcessingChange = { avatarProcessing = it }, onChange = { item = item.copy(avatar = it) })
                 if (default != null) {
                     CallModelChoice(default.modelProfileId, profiles) { updateWorkflow(default.copy(modelProfileId = it)) }
                     val modelNodes = default.nodes.filter { node -> actions.firstOrNull { it.id == node.actionId }?.usesModel == true }
@@ -311,8 +324,8 @@ internal fun MainCallEditor(
         library?.mainCalls.orEmpty().filterNot { it.id == item.id }.map { it.slug },
         { rename = false }) { name, slug -> item = item.copy(name = name, slug = slug); rename = false }
     pendingSwitch?.let { pending -> AlertDialog(onDismissRequest = { pendingSwitch = null }, title = { Text("切换主调用？") }, text = { Text("当前主调用有未保存的修改。") },
-        confirmButton = { TextButton(onClick = { pendingSwitch = null; onSwitchResource?.invoke(item, pending.targetId) }, enabled = !saving) { Text("保存并切换") } },
-        dismissButton = { Row { TextButton(onClick = { pendingSwitch = null }) { Text("取消") }; TextButton(onClick = { pendingSwitch = null; onSwitchResource?.invoke(null, pending.targetId) }, enabled = !saving) { Text("放弃并切换") } } }) }
+        confirmButton = { TextButton(onClick = { pendingSwitch = null; onSwitchResource?.invoke(item, pending.targetId) }, enabled = !editingBusy) { Text("保存并切换") } },
+        dismissButton = { Row { TextButton(onClick = { pendingSwitch = null }) { Text("取消") }; TextButton(onClick = { pendingSwitch = null; onSwitchResource?.invoke(null, pending.targetId) }, enabled = !editingBusy) { Text("放弃并切换") } } }) }
 
 }
 

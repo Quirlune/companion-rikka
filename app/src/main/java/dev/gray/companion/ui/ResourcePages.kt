@@ -22,6 +22,7 @@ private data class ResourceRow(
     val name: String,
     val searchText: String,
     val supportingText: String,
+    val avatar: AvatarImage? = null,
 )
 
 private data class ResourceAssociationCounts(
@@ -95,6 +96,7 @@ internal fun ResourceScreen(
             ResourceKind.MAIN -> library.mainCalls.map { main ->
                 ResourceRow(
                     id = main.id, name = main.name,
+                    avatar = main.avatar,
                     searchText = listOf(main.name, main.description).joinToString(" "),
                     supportingText = listOfNotNull(
                         main.description.takeIf { it.isNotBlank() },
@@ -195,6 +197,14 @@ internal fun ResourceScreen(
                             headlineContent = {
                                 Text(row.name.ifBlank { "未命名" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             },
+                            leadingContent = if (selected == ResourceKind.MAIN) ({
+                                ResourceAvatarBadge(row.name.ifBlank { "主调用" }, row.avatar, 40.dp, onClick = {
+                                    if (!selectionBusy) {
+                                        if (selectingMain) onSelectMainCall?.invoke(row.id)
+                                        else onEdit(Editing(selected.editor, row.id))
+                                    }
+                                })
+                            }) else null,
                             supportingContent = {
                                 Column {
                                     if (selectingMain && row.id == activeMainId) Text("当前使用", color = MaterialTheme.colorScheme.primary)

@@ -77,7 +77,9 @@ class RecoveryTest {
                 pattern = "<ok>.*?</ok>", requireMatch = true)))
         val flow = Workflow(id = "flow", nodes = listOf(good, bad))
         val before = session()
-        val base = library(before, listOf(flow))
+        val avatar = AvatarImage("image/png", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aMScAAAAASUVORK5CYII=")
+        val resources = library(before, listOf(flow))
+        val base = resources.copy(mainCalls = resources.mainCalls.map { it.copy(avatar = avatar) })
         var goodCalls = 0
         val seen = mutableListOf<String>()
         val gateway = object : ModelGateway {
@@ -113,7 +115,7 @@ class RecoveryTest {
             card.copy(slug = "new_character_alias", entries = card.entries.map { entry ->
                 entry.copy(title = "显示 ${entry.key}", slug = "new_${entry.key}", tagIds = listOf(tag.id))
             })
-        }, mainCalls = listOf(base.mainCalls.single().copy(slug = "renamed_main",
+        }, mainCalls = listOf(base.mainCalls.single().copy(slug = "renamed_main", avatar = null,
             workflows = listOf(flow.copy(slug = "renamed_call", nodes = listOf(renamedGood, changed))))), sessions = listOf(restored))
         val changedRuntimeName = edited.copy(characters = edited.characters.map { it.copy(name = "Changed") })
         val conflict = engine.resume(changedRuntimeName, restored, gateway, restored.pendingRun!!,
@@ -122,7 +124,10 @@ class RecoveryTest {
         var resuming = restored
         val final = engine.resume(edited, restored, gateway, restored.pendingRun!!,
             RecoveryDecision(RecoveryDecisionKind.RETRY, "flow/bad")) { update ->
-                update.progress?.let { resuming = MessageOperations.continuePartialTurn(resuming, it).session!! }
+                update.progress?.let {
+                    assertEquals(avatar, it.recovery!!.frozenResources.mainCalls.single().avatar)
+                    resuming = MessageOperations.continuePartialTurn(resuming, it).session!!
+                }
             }
         assertEquals(RunStatus.SUCCESS, final.status)
         assertTrue(seen.last().contains("revised Hero"))

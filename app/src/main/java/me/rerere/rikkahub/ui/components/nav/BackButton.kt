@@ -13,11 +13,11 @@ import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.theme.CustomColors
 
 @Composable
-fun BackButton(modifier: Modifier = Modifier) {
+fun BackButton(modifier: Modifier = Modifier, onBack: (() -> Unit)? = null) {
     val navController = LocalNavController.current
     FilledTonalIconButton(
         onClick = {
-            navController.popBackStack()
+            if (onBack != null) onBack() else navController.popBackStack()
         },
         modifier = modifier,
         shapes = IconButtonDefaults.shapes(),

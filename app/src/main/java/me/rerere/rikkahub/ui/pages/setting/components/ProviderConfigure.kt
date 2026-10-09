@@ -49,6 +49,7 @@ import kotlin.reflect.KClass
 fun ProviderConfigure(
     provider: ProviderSetting,
     modifier: Modifier = Modifier,
+    options: ProviderConfigureOptions = ProviderConfigureOptions(),
     onEdit: (provider: ProviderSetting) -> Unit
 ) {
     Column(
@@ -72,9 +73,9 @@ fun ProviderConfigure(
         }
 
         when (provider) {
-            is ProviderSetting.OpenAI -> ProviderConfigureOpenAI(provider, onEdit)
-            is ProviderSetting.Google -> ProviderConfigureGoogle(provider, onEdit)
-            is ProviderSetting.Claude -> ProviderConfigureClaude(provider, onEdit)
+            is ProviderSetting.OpenAI -> ProviderConfigureOpenAI(provider, options, onEdit)
+            is ProviderSetting.Google -> ProviderConfigureGoogle(provider, options, onEdit)
+            is ProviderSetting.Claude -> ProviderConfigureClaude(provider, options, onEdit)
         }
     }
 }
@@ -201,6 +202,7 @@ private val OFFICIAL_PROVIDER_HOSTS = setOf(
 @Composable
 private fun ProviderConfigureOpenAI(
     provider: ProviderSetting.OpenAI,
+    options: ProviderConfigureOptions,
     onEdit: (provider: ProviderSetting.OpenAI) -> Unit
 ) {
     val toaster = LocalToaster.current
@@ -237,7 +239,7 @@ private fun ProviderConfigureOpenAI(
         isError = provider.baseUrl.isNotBlank() && !provider.baseUrl.isValidBaseUrl(),
     )
 
-    OutlinedTextField(
+    if (options.apiPaths) OutlinedTextField(
         value = if (provider.useResponseApi) provider.responsesPath else provider.chatCompletionsPath,
         onValueChange = {
             onEdit(
@@ -283,7 +285,7 @@ private fun ProviderConfigureOpenAI(
         )
     }
 
-    Row(
+    if (options.historyReasoning) Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -299,6 +301,7 @@ private fun ProviderConfigureOpenAI(
 @Composable
 private fun ProviderConfigureClaude(
     provider: ProviderSetting.Claude,
+    options: ProviderConfigureOptions,
     onEdit: (provider: ProviderSetting.Claude) -> Unit
 ) {
     provider.description()
@@ -346,7 +349,7 @@ private fun ProviderConfigureClaude(
         )
     }
 
-    Row(
+    if (options.claudeCache) Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -358,7 +361,7 @@ private fun ProviderConfigureClaude(
         )
     }
 
-    if (provider.promptCaching) {
+    if (options.claudeCache && provider.promptCaching) {
         Text(stringResource(R.string.setting_provider_page_claude_prompt_cache_ttl))
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
             ClaudePromptCacheTtl.entries.forEachIndexed { index, ttl ->
@@ -386,6 +389,7 @@ private fun ProviderConfigureClaude(
 @Composable
 private fun ProviderConfigureGoogle(
     provider: ProviderSetting.Google,
+    options: ProviderConfigureOptions,
     onEdit: (provider: ProviderSetting.Google) -> Unit
 ) {
     val context = LocalContext.current
@@ -466,7 +470,7 @@ private fun ProviderConfigureGoogle(
         )
     }
 
-    Row(
+    if (options.googleVertex) Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -478,7 +482,7 @@ private fun ProviderConfigureGoogle(
         )
     }
 
-    if (provider.vertexAI) {
+    if (options.googleVertex && provider.vertexAI) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -492,7 +496,7 @@ private fun ProviderConfigureGoogle(
         }
     }
 
-    if (provider.vertexAI && provider.useServiceAccount) {
+    if (options.googleVertex && provider.vertexAI && provider.useServiceAccount) {
         OutlinedButton(
             onClick = { serviceAccountJsonLauncher.launch(arrayOf("application/json", "*/*")) },
             modifier = Modifier.fillMaxWidth()

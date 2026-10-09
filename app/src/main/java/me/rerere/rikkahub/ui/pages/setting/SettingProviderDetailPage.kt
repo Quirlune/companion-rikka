@@ -70,6 +70,7 @@ import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -120,6 +121,9 @@ import me.rerere.rikkahub.ui.hooks.useEditState
 import me.rerere.rikkahub.ui.pages.assistant.detail.CustomBodies
 import me.rerere.rikkahub.ui.pages.assistant.detail.CustomHeaders
 import me.rerere.rikkahub.ui.pages.setting.components.ProviderConfigure
+import me.rerere.rikkahub.ui.pages.setting.components.ProviderDetailOptions
+import me.rerere.rikkahub.ui.pages.setting.components.ProviderModelOptions
+import me.rerere.rikkahub.ui.pages.setting.components.ProviderModelLoadPolicy
 import me.rerere.rikkahub.ui.pages.setting.components.ProviderConnectionTester
 import me.rerere.rikkahub.ui.pages.setting.components.SettingProviderBalanceOption
 import me.rerere.rikkahub.ui.pages.setting.components.isUsingDefaultBaseUrl
@@ -139,11 +143,6 @@ fun SettingProviderDetailPage(id: Uuid, vm: SettingVM = koinViewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     val navController = LocalNavController.current
     val provider = settings.providers.find { it.id == id } ?: return
-    val pager = rememberPagerState { 2 }
-    val scope = rememberCoroutineScope()
-    val toaster = LocalToaster.current
-    val context = LocalContext.current
-
     val onEdit = { newProvider: ProviderSetting ->
         val newSettings = settings.copy(
             providers = settings.providers.map {
@@ -164,12 +163,37 @@ fun SettingProviderDetailPage(id: Uuid, vm: SettingVM = koinViewModel()) {
         navController.popBackStack()
     }
 
+    SettingProviderDetailContent(provider = provider, onEdit = onEdit, onDelete = onDelete)
+}
+
+/** Original Config / Models detail structure with an external resource authority. */
+@Composable
+fun SettingProviderDetailContent(
+    provider: ProviderSetting,
+    onEdit: (ProviderSetting) -> Unit,
+    onDelete: () -> Unit,
+    onBack: (() -> Unit)? = null,
+    options: ProviderDetailOptions = ProviderDetailOptions(),
+    enabled: Boolean = true,
+    modelsEnabled: Boolean = enabled,
+    onConfigDirtyChanged: (Boolean) -> Unit = {},
+    configExtraContent: @Composable () -> Unit = {},
+    modelExtraContent: @Composable (Model) -> Unit = {},
+    loadModels: (suspend (ProviderSetting) -> List<Model>)? = null,
+    onModelLoadError: ((Throwable) -> Unit)? = null,
+    onEditConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)? = null,
+) {
+    val pager = rememberPagerState { 2 }
+    val scope = rememberCoroutineScope()
+    val toaster = LocalToaster.current
+    val context = LocalContext.current
+
     Scaffold(
         containerColor = CustomColors.topBarColors.containerColor,
         topBar = {
             TopAppBar(
                 navigationIcon = {
-                    BackButton()
+                    BackButton(onBack = onBack)
                 },
                 colors = CustomColors.topBarColors,
                 title = {
@@ -182,6 +206,7 @@ fun SettingProviderDetailPage(id: Uuid, vm: SettingVM = koinViewModel()) {
                     }
                 },
                 actions = {
+                    if (options.share) {
                     val shareSheetState = rememberShareSheetState()
                     ShareSheet(shareSheetState)
                     IconButton(
@@ -190,6 +215,7 @@ fun SettingProviderDetailPage(id: Uuid, vm: SettingVM = koinViewModel()) {
                         }
                     ) {
                         Icon(HugeIcons.Share01, null)
+                    }
                     }
                 }
             )
@@ -223,6 +249,7 @@ fun SettingProviderDetailPage(id: Uuid, vm: SettingVM = koinViewModel()) {
     ) {
         HorizontalPager(
             state = pager,
+            beyondViewportPageCount = if (options.retainConfigDraft) 1 else 0,
             modifier = Modifier
                 .padding(it)
                 .consumeWindowInsets(it)
@@ -233,21 +260,31 @@ fun SettingProviderDetailPage(id: Uuid, vm: SettingVM = koinViewModel()) {
                         provider = provider,
                         onEdit = {
                             onEdit(it)
-                            toaster.show(
+                            if (options.saveToast) toaster.show(
                                 context.getString(R.string.setting_provider_page_save_success),
                                 type = ToastType.Success
                             )
                         },
                         onDelete = {
                             onDelete()
-                        }
+                        },
+                        options = options,
+                        enabled = enabled,
+                        onDirtyChanged = onConfigDirtyChanged,
+                        extraContent = configExtraContent,
                     )
                 }
 
                 1 -> {
                     SettingProviderModelPage(
                         provider = provider,
-                        onEdit = onEdit
+                        onEdit = onEdit,
+                        options = options,
+                        enabled = modelsEnabled,
+                        modelExtraContent = modelExtraContent,
+                        loadModels = loadModels,
+                        onModelLoadError = onModelLoadError,
+                        onEditConfirmed = onEditConfirmed,
                     )
                 }
             }
@@ -259,10 +296,15 @@ fun SettingProviderDetailPage(id: Uuid, vm: SettingVM = koinViewModel()) {
 private fun SettingProviderConfigPage(
     provider: ProviderSetting,
     onEdit: (ProviderSetting) -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    options: ProviderDetailOptions,
+    enabled: Boolean,
+    onDirtyChanged: (Boolean) -> Unit,
+    extraContent: @Composable () -> Unit,
 ) {
     var internalProvider by remember(provider) { mutableStateOf(provider) }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    SideEffect { onDirtyChanged(internalProvider != provider) }
 
     Column(
         modifier = Modifier
@@ -274,12 +316,15 @@ private fun SettingProviderConfigPage(
     ) {
         ProviderConfigure(
             provider = internalProvider,
+            options = options.configure,
             onEdit = {
-                internalProvider = it
+                if (enabled) internalProvider = it
             }
         )
 
-        if (internalProvider is ProviderSetting.OpenAI) {
+        extraContent()
+
+        if (options.balance && internalProvider is ProviderSetting.OpenAI) {
             SettingProviderBalanceOption(
                 provider = internalProvider,
                 balanceOption = internalProvider.balanceOption,
@@ -293,7 +338,7 @@ private fun SettingProviderConfigPage(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            ProviderConnectionTester(
+            if (options.connectionTest) ProviderConnectionTester(
                 internalProvider = internalProvider,
             )
 
@@ -301,6 +346,7 @@ private fun SettingProviderConfigPage(
 
             if (!internalProvider.builtIn) {
                 IconButton(
+                    enabled = enabled,
                     onClick = {
                         showDeleteDialog = true
                     },
@@ -313,7 +359,7 @@ private fun SettingProviderConfigPage(
                 onClick = {
                     internalProvider = internalProvider.resetBaseUrlToDefault()
                 },
-                enabled = !internalProvider.isUsingDefaultBaseUrl(),
+                enabled = enabled && !internalProvider.isUsingDefaultBaseUrl(),
             ) {
                 Icon(
                     imageVector = HugeIcons.Refresh03,
@@ -322,6 +368,7 @@ private fun SettingProviderConfigPage(
             }
 
             Button(
+                enabled = enabled,
                 onClick = {
                     val providerToSave: ProviderSetting = internalProvider
                     onEdit(providerToSave.copyProvider(name = providerToSave.name.trim()))
@@ -358,6 +405,7 @@ private fun SettingProviderConfigPage(
             },
             confirmButton = {
                 TextButton(
+                    enabled = enabled,
                     onClick = {
                         showDeleteDialog = false
                         onDelete()
@@ -373,35 +421,58 @@ private fun SettingProviderConfigPage(
 @Composable
 private fun SettingProviderModelPage(
     provider: ProviderSetting,
-    onEdit: (ProviderSetting) -> Unit
+    onEdit: (ProviderSetting) -> Unit,
+    options: ProviderDetailOptions,
+    enabled: Boolean,
+    modelExtraContent: @Composable (Model) -> Unit,
+    loadModels: (suspend (ProviderSetting) -> List<Model>)?,
+    onModelLoadError: ((Throwable) -> Unit)?,
+    onEditConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)?,
 ) {
     ModelList(
         providerSetting = provider,
-        onUpdateProvider = onEdit
+        onUpdateProvider = onEdit,
+        options = options,
+        enabled = enabled,
+        modelExtraContent = modelExtraContent,
+        loadModels = loadModels,
+        onModelLoadError = onModelLoadError,
+        onEditConfirmed = onEditConfirmed,
     )
 }
 
 @Composable
 private fun ModelList(
     providerSetting: ProviderSetting,
-    onUpdateProvider: (ProviderSetting) -> Unit
+    onUpdateProvider: (ProviderSetting) -> Unit,
+    options: ProviderDetailOptions,
+    enabled: Boolean,
+    modelExtraContent: @Composable (Model) -> Unit,
+    loadModels: (suspend (ProviderSetting) -> List<Model>)?,
+    onModelLoadError: ((Throwable) -> Unit)?,
+    onEditConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)?,
 ) {
     val providerManager = koinInject<ProviderManager>()
-    val modelList by produceState(emptyList(), providerSetting) {
+    var requestCount by remember(providerSetting.id) { mutableStateOf(0) }
+    var loading by remember(providerSetting.id) { mutableStateOf(false) }
+    val autoKey = providerSetting.takeIf { options.modelLoadPolicy == ProviderModelLoadPolicy.AUTOMATIC }
+    val modelList by produceState(emptyList<Model>(), providerSetting.id, autoKey, requestCount) {
+        if (options.modelLoadPolicy == ProviderModelLoadPolicy.DISABLED ||
+            (options.modelLoadPolicy == ProviderModelLoadPolicy.MANUAL && requestCount == 0)) return@produceState
+        loading = true
         runCatching {
-            println("loading models...")
-            value = providerManager.getProviderByType(providerSetting)
-                .listModels(providerSetting)
-                .sortedBy { it.modelId }
-                .toList()
+            value = (loadModels?.invoke(providerSetting) ?: providerManager.getProviderByType(providerSetting).listModels(providerSetting))
+                .sortedBy { it.modelId }.toList()
         }.onFailure {
-            it.printStackTrace()
+            if (it is kotlinx.coroutines.CancellationException) throw it
+            if (onModelLoadError != null) onModelLoadError(it) else it.printStackTrace()
         }
+        loading = false
     }
     var expanded by rememberSaveable { mutableStateOf(true) }
     val lazyListState = rememberLazyListState()
     val reorderableLazyListState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        onUpdateProvider(providerSetting.moveMove(from.index, to.index))
+        if (enabled) onUpdateProvider(providerSetting.moveMove(from.index, to.index))
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -448,6 +519,10 @@ private fun ModelList(
                     ) { isDragging ->
                         ModelCard(
                             model = item,
+                            options = options.model,
+                            enabled = enabled,
+                            extraContent = modelExtraContent,
+                            onEditConfirmed = onEditConfirmed,
                             onDelete = {
                                 onUpdateProvider(providerSetting.delModel(item))
                             },
@@ -477,6 +552,12 @@ private fun ModelList(
                 .align(Alignment.BottomCenter)
                 .offset(y = -ScreenOffset),
         ) {
+            if (options.modelLoadPolicy == ProviderModelLoadPolicy.MANUAL) IconButton(
+                enabled = enabled && !loading,
+                onClick = { requestCount++ },
+            ) {
+                Icon(HugeIcons.Refresh03, contentDescription = "获取模型列表")
+            }
             AddModelButton(
                 models = modelList,
                 selectedModels = providerSetting.models,
@@ -488,7 +569,11 @@ private fun ModelList(
                 },
                 expanded = expanded,
                 parentProvider = providerSetting,
-                onUpdateProvider = onUpdateProvider
+                onUpdateProvider = onUpdateProvider,
+                options = options.model,
+                enabled = enabled,
+                showPicker = options.modelLoadPolicy != ProviderModelLoadPolicy.DISABLED,
+                onEditConfirmed = onEditConfirmed,
             )
         }
     }
@@ -499,12 +584,18 @@ private fun ModelSettingsForm(
     model: Model,
     onModelChange: (Model) -> Unit,
     isEdit: Boolean,
-    parentProvider: ProviderSetting? = null
+    parentProvider: ProviderSetting? = null,
+    options: ProviderModelOptions = ProviderModelOptions(),
 ) {
-    val pagerState = rememberPagerState { 3 }
+    val pages = remember(options) { listOf(0) + (if (options.advancedSettings) listOf(1) else emptyList()) + (if (options.builtInTools) listOf(2) else emptyList()) }
+    val pagerState = rememberPagerState { pages.size }
     val scope = rememberCoroutineScope()
 
     fun setModelId(id: String) {
+        if (isEdit) {
+            onModelChange(model.copy(modelId = id))
+            return
+        }
         val inputModality = ModelRegistry.MODEL_INPUT_MODALITIES.getData(id)
         val outputModality = ModelRegistry.MODEL_OUTPUT_MODALITIES.getData(id)
         val abilities = ModelRegistry.MODEL_ABILITIES.getData(id)
@@ -533,20 +624,20 @@ private fun ModelSettingsForm(
                 },
                 text = { Text(stringResource(R.string.setting_provider_page_basic_settings)) }
             )
-            Tab(
-                selected = pagerState.currentPage == 1,
+            if (options.advancedSettings) Tab(
+                selected = pages[pagerState.currentPage] == 1,
                 onClick = {
                     scope.launch {
-                        pagerState.animateScrollToPage(1)
+                        pagerState.animateScrollToPage(pages.indexOf(1))
                     }
                 },
                 text = { Text(stringResource(R.string.setting_provider_page_advanced_settings)) }
             )
-            Tab(
-                selected = pagerState.currentPage == 2,
+            if (options.builtInTools) Tab(
+                selected = pages[pagerState.currentPage] == 2,
                 onClick = {
                     scope.launch {
-                        pagerState.animateScrollToPage(2)
+                        pagerState.animateScrollToPage(pages.indexOf(2))
                     }
                 },
                 text = { Text(stringResource(R.string.setting_page_built_in_tools)) }
@@ -557,7 +648,7 @@ private fun ModelSettingsForm(
             state = pagerState,
             modifier = Modifier.fillMaxWidth()
         ) { page ->
-            when (page) {
+            when (pages[page]) {
                 0 -> {
                     // 基本设置页面
                     Column(
@@ -570,7 +661,7 @@ private fun ModelSettingsForm(
                         OutlinedTextField(
                             value = model.modelId,
                             onValueChange = {
-                                if (!isEdit) {
+                                if (!isEdit || options.editModelId) {
                                     setModelId(it.trim())
                                 }
                             },
@@ -581,7 +672,7 @@ private fun ModelSettingsForm(
                                     Text(stringResource(R.string.setting_provider_page_model_id_placeholder))
                                 }
                             },
-                            enabled = !isEdit
+                            enabled = !isEdit || options.editModelId
                         )
 
                         OutlinedTextField(
@@ -598,6 +689,7 @@ private fun ModelSettingsForm(
                             }
                         )
 
+                        if (options.typesAndCapabilities) {
                         ModelTypeSelector(
                             selectedType = model.type,
                             onTypeSelected = {
@@ -624,6 +716,7 @@ private fun ModelSettingsForm(
                                     onModelChange(model.copy(abilities = it))
                                 }
                             )
+                        }
                         }
                     }
                 }
@@ -675,6 +768,32 @@ private fun ModelSettingsForm(
     }
 }
 
+/** The acknowledgement may be synchronous; complete once and never strand a form on a thrown callback. */
+private fun confirmProviderModelEdit(
+    provider: ProviderSetting,
+    commit: (ProviderSetting, (Boolean) -> Unit) -> Unit,
+    setPending: (Boolean) -> Unit,
+    accepted: () -> Unit,
+    failed: () -> Unit,
+) {
+    var completed = false
+    setPending(true)
+    fun finish(success: Boolean) {
+        if (completed) return
+        completed = true
+        setPending(false)
+        if (success) accepted()
+    }
+    try {
+        commit(provider, ::finish)
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        finish(false)
+        throw cancelled
+    } catch (_: Exception) {
+        if (!completed) { finish(false); failed() }
+    }
+}
+
 @Composable
 private fun AddModelButton(
     models: List<Model>,
@@ -683,20 +802,27 @@ private fun AddModelButton(
     onAddModel: (Model) -> Unit,
     onRemoveModel: (Model) -> Unit,
     parentProvider: ProviderSetting,
-    onUpdateProvider: (ProviderSetting) -> Unit
+    onUpdateProvider: (ProviderSetting) -> Unit,
+    options: ProviderModelOptions = ProviderModelOptions(),
+    enabled: Boolean = true,
+    showPicker: Boolean = true,
+    onEditConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)? = null,
 ) {
     val dialogState = useEditState<Model> {
         onAddModel(it.copy(displayName = it.displayName.trim()))
     }
     val scope = rememberCoroutineScope()
+    val toaster = LocalToaster.current
+    var pending by remember(parentProvider.id) { mutableStateOf(false) }
 
     Row(
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ModelPicker(
+        if (showPicker && enabled && !pending) ModelPicker(
             models = models,
             selectedModels = selectedModels,
+            showCapabilities = options.typesAndCapabilities,
             onModelSelected = { model ->
                 val inputModalities = ModelRegistry.MODEL_INPUT_MODALITIES.getData(model.modelId)
                 val outputModalities = ModelRegistry.MODEL_OUTPUT_MODALITIES.getData(model.modelId)
@@ -739,6 +865,7 @@ private fun AddModelButton(
         )
 
         Button(
+            enabled = enabled && !pending,
             onClick = {
                 dialogState.open(Model())
             }
@@ -768,16 +895,19 @@ private fun AddModelButton(
             val sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
             ModalBottomSheet(
                 onDismissRequest = {
-                    dialogState.dismiss()
+                    if (!pending) dialogState.dismiss()
                 },
                 sheetState = sheetState,
                 sheetGesturesEnabled = false,
                 dragHandle = {
                     IconButton(
+                        enabled = !pending,
                         onClick = {
                             scope.launch {
-                                sheetState.hide()
-                                dialogState.dismiss()
+                                if (!pending) {
+                                    sheetState.hide()
+                                    if (!pending) dialogState.dismiss()
+                                }
                             }
                         }
                     ) {
@@ -805,9 +935,10 @@ private fun AddModelButton(
                     ) {
                         ModelSettingsForm(
                             model = modelState,
-                            onModelChange = { dialogState.currentState = it },
+                            onModelChange = { if (!pending) dialogState.currentState = it },
                             isEdit = false,
-                            parentProvider = parentProvider
+                            parentProvider = parentProvider,
+                            options = options,
                         )
                     }
 
@@ -816,16 +947,25 @@ private fun AddModelButton(
                         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                     ) {
                         TextButton(
+                            enabled = !pending,
                             onClick = {
-                                dialogState.dismiss()
+                                if (!pending) dialogState.dismiss()
                             },
                         ) {
                             Text(stringResource(R.string.cancel))
                         }
                         TextButton(
+                            enabled = enabled && !pending,
                             onClick = {
-                                if (modelState.modelId.isNotBlank() && modelState.displayName.isNotBlank()) {
-                                    dialogState.confirm()
+                                if (!pending && modelState.modelId.isNotBlank() && modelState.displayName.isNotBlank()) {
+                                    if (onEditConfirmed == null) dialogState.confirm()
+                                    else confirmProviderModelEdit(
+                                        provider = parentProvider.addModel(modelState.copy(displayName = modelState.displayName.trim())),
+                                        commit = onEditConfirmed,
+                                        setPending = { pending = it },
+                                        accepted = { dialogState.dismiss() },
+                                        failed = { toaster.show("保存失败，修改已保留。", type = ToastType.Error) },
+                                    )
                                 }
                             },
                         ) {
@@ -845,7 +985,8 @@ private fun ModelPicker(
     onModelSelected: (Model) -> Unit,
     onModelDeselected: (Model) -> Unit,
     onAllModelSelected: (List<Model>) -> Unit,
-    onAllModelDeselected: (List<Model>) -> Unit
+    onAllModelDeselected: (List<Model>) -> Unit,
+    showCapabilities: Boolean = true,
 ) {
     var showModal by remember { mutableStateOf(false) }
     if (showModal) {
@@ -952,10 +1093,10 @@ private fun ModelPicker(
                                                 abilities = ModelRegistry.MODEL_ABILITIES.getData(it.modelId),
                                             )
                                         }
-                                        ModelModalityTag(
+                                        if (showCapabilities) ModelModalityTag(
                                             model = modelMeta,
                                         )
-                                        ModelAbilityTag(
+                                        if (showCapabilities) ModelAbilityTag(
                                             model = modelMeta,
                                         )
                                     }
@@ -1164,13 +1305,19 @@ private fun ModelCard(
     modifier: Modifier = Modifier,
     onDelete: () -> Unit,
     onEdit: (Model) -> Unit,
-    parentProvider: ProviderSetting
+    parentProvider: ProviderSetting,
+    options: ProviderModelOptions = ProviderModelOptions(),
+    enabled: Boolean = true,
+    extraContent: @Composable (Model) -> Unit = {},
+    onEditConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)? = null,
 ) {
     val dialogState = useEditState<Model> {
         onEdit(it.copy(displayName = it.displayName.trim()))
     }
     val swipeToDismissBoxState = rememberSwipeToDismissBoxState()
     val scope = rememberCoroutineScope()
+    val toaster = LocalToaster.current
+    var pending by remember(model.id) { mutableStateOf(false) }
 
 
     if (dialogState.isEditing) {
@@ -1178,7 +1325,7 @@ private fun ModelCard(
             val sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
             ModalBottomSheet(
                 onDismissRequest = {
-                    dialogState.dismiss()
+                    if (!pending) dialogState.dismiss()
                 },
                 sheetState = sheetState,
                 sheetGesturesEnabled = false,
@@ -1196,10 +1343,13 @@ private fun ModelCard(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         IconButton(
+                            enabled = !pending,
                             onClick = {
                                 scope.launch {
-                                    sheetState.hide()
-                                    dialogState.dismiss()
+                                    if (!pending) {
+                                        sheetState.hide()
+                                        if (!pending) dialogState.dismiss()
+                                    }
                                 }
                             },
                             modifier = Modifier.align(Alignment.CenterStart)
@@ -1220,9 +1370,10 @@ private fun ModelCard(
                     ) {
                         ModelSettingsForm(
                             model = editingModel,
-                            onModelChange = { dialogState.currentState = it },
+                            onModelChange = { if (!pending) dialogState.currentState = it },
                             isEdit = true,
-                            parentProvider = parentProvider
+                            parentProvider = parentProvider,
+                            options = options,
                         )
                     }
 
@@ -1231,16 +1382,25 @@ private fun ModelCard(
                         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                     ) {
                         TextButton(
+                            enabled = !pending,
                             onClick = {
-                                dialogState.dismiss()
+                                if (!pending) dialogState.dismiss()
                             },
                         ) {
                             Text(stringResource(R.string.cancel))
                         }
                         TextButton(
+                            enabled = enabled && !pending,
                             onClick = {
-                                if (editingModel.displayName.isNotBlank()) {
-                                    dialogState.confirm()
+                                if (!pending && editingModel.displayName.isNotBlank()) {
+                                    if (onEditConfirmed == null) dialogState.confirm()
+                                    else confirmProviderModelEdit(
+                                        provider = parentProvider.editModel(editingModel.copy(displayName = editingModel.displayName.trim())),
+                                        commit = onEditConfirmed,
+                                        setPending = { pending = it },
+                                        accepted = { dialogState.dismiss() },
+                                        failed = { toaster.show("保存失败，修改已保留。", type = ToastType.Error) },
+                                    )
                                 }
                             },
                         ) {
@@ -1272,6 +1432,7 @@ private fun ModelCard(
                     Icon(HugeIcons.Cancel01, null)
                 }
                 FilledIconButton(
+                    enabled = enabled,
                     onClick = {
                         scope.launch {
                             onDelete()
@@ -1287,7 +1448,7 @@ private fun ModelCard(
             }
         },
         enableDismissFromStartToEnd = false,
-        gesturesEnabled = true,
+        gesturesEnabled = enabled,
         modifier = modifier
     ) {
         OutlinedCard {
@@ -1329,14 +1490,18 @@ private fun ModelCard(
                                 )
                             }
                         }
-                        ModelTypeTag(model = model)
-                        ModelModalityTag(model = model)
-                        ModelAbilityTag(model = model)
+                        if (options.typesAndCapabilities) {
+                            ModelTypeTag(model = model)
+                            ModelModalityTag(model = model)
+                            ModelAbilityTag(model = model)
+                        }
                     }
+                    extraContent(model)
                 }
 
                 // Edit button
                 IconButton(
+                    enabled = enabled,
                     onClick = {
                         dialogState.open(model.copy())
                     }

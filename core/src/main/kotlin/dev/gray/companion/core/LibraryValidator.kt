@@ -104,6 +104,8 @@ object LibraryValidator {
             issues += Issue("library.titleConfig.prompt", "标题提示词不能为空")
         if (library.selectedSessionId != null && library.sessions.none { it.id == library.selectedSessionId }) issues += Issue("library.selectedSessionId", "所选会话不存在")
         library.mainCalls.forEach { main ->
+            if (main.avatar != null && main.avatar.decodedBytes() == null)
+                issues += Issue("main.${main.id}.avatar", "头像必须是 32 KB 以内的 JPEG 或 PNG 图片")
             main.boundPackageIds.forEach { id ->
                 if (library.packages.none { it.id == id }) issues += Issue("main.${main.id}.boundPackageIds", "绑定的提示词包不存在")
             }

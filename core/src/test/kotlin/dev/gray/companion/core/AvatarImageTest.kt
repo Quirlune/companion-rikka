@@ -28,6 +28,27 @@ class AvatarImageTest {
             val card = CharacterCard(namespace = "hero", name = "角色", avatar = image)
             assertNull(image.decodedBytes())
             assertTrue(LibraryValidator.validate(Library(characters = listOf(card))).any { it.error && it.path.endsWith(".avatar") })
+            val main = MainCall(id = "main", name = "Main", workflows = emptyList(), avatar = image)
+            assertTrue(LibraryValidator.validate(Library(mainCalls = listOf(main))).any { it.error && it.path == "main.main.avatar" })
         }
+    }
+
+    @Test fun mainAvatarRoundTripsWithoutRewritingCapturedResources() {
+        val legacy = LibraryFormat.json.decodeFromString<MainCall>("""{"id":"main","name":"Main","workflows":[]}""")
+        assertNull(legacy.avatar)
+        val main = legacy.copy(avatar = png)
+        val captured = LibraryFormat.upgrade(Library(mainCalls = listOf(main)))
+        val original = Session(id = "session", mainCallId = main.id, messages = listOf(ChatMessage(id = "floor", text = "kept")))
+        val recovery = RunRecovery(id = "run", sessionId = original.id, turnId = "floor", input = "kept",
+            checkpoint = MessageOperations.captureCheckpoint(original), initialSession = original, frozenResources = captured)
+        val current = captured.copy(mainCalls = listOf(captured.mainCalls.single().copy(avatar = null)), sessions = listOf(original.copy(pendingRun = recovery)))
+        assertTrue(LibraryValidator.validate(current).none { it.error })
+        val restored = LibraryFormat.decode(LibraryFormat.encode(current))
+        assertEquals(current, restored)
+        assertNull(restored.mainCalls.single().avatar)
+        assertEquals(png, restored.sessions.single().pendingRun!!.frozenResources.mainCalls.single().avatar)
+        assertEquals(recovery, restored.sessions.single().pendingRun)
+        val exported = LibraryFormat.decode(LibraryFormat.encode(captured))
+        assertEquals(png, exported.mainCalls.single().avatar)
     }
 }

@@ -3,6 +3,7 @@ package me.rerere.rikkahub.companion
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -20,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.gray.companion.core.AvatarImage
 import dev.gray.companion.core.Library
@@ -39,6 +41,7 @@ import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.ui.components.ai.AssistantPickerDisplay
+import me.rerere.rikkahub.ui.components.ui.UIAvatar
 import me.rerere.rikkahub.ui.pages.chat.CompanionConversationEntry
 import me.rerere.rikkahub.ui.pages.chat.CompanionConversationList
 import me.rerere.rikkahub.ui.pages.chat.DrawerAction
@@ -79,6 +82,9 @@ fun CompanionDrawer(
     val userName = selected?.let(library::userName) ?: library.user.name
     val userAvatar = selected?.let(library::effectivePersona)?.avatar ?: library.user.avatar
     val currentCharacter = library.characters.firstOrNull { it.id == selected?.characterId }
+    val currentMain = library.mainCalls.firstOrNull { it.id == selected?.mainCallId }
+    val currentMainName = currentMain?.name?.ifBlank { "未命名主调用" }
+        ?: if (selected?.mainCallId?.isNotBlank() == true) "主调用不可用" else "选择主调用"
     val characterAssistants = remember(library.characters) {
         library.characters.map { card ->
             Assistant(id = stableUuid(card.id), name = card.name, avatar = card.avatar.toOriginalAvatar())
@@ -157,7 +163,14 @@ fun CompanionDrawer(
             modifier = Modifier.fillMaxWidth(),
         )
         NavigationDrawerItem(
-            label = { Text("主调用", maxLines = 1) },
+            // Match AssistantPickerDisplay(showLeadingIcon = false) exactly.
+            label = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(currentMainName, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Spacer(Modifier.weight(1f))
+                    UIAvatar(name = currentMainName, value = currentMain?.avatar.toOriginalAvatar(), onClick = onMainCalls)
+                }
+            },
             onClick = onMainCalls,
             selected = false,
             modifier = Modifier.fillMaxWidth(),

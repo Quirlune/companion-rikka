@@ -173,7 +173,17 @@ class AppController internal constructor(
     /** Resource plans and source-field edits use the same admission and publication path. */
     suspend fun updateResources(command: (Library) -> ExtensionEditResult): List<Issue> = updateConfiguration(command)
 
-    private suspend fun updateConfiguration(prepare: (Library) -> ExtensionEditResult): List<Issue> {
+    /** Original provider presentation commits to the same resource and credential authority. */
+    internal suspend fun updateProviders(plan: CompanionProviderPlan): List<Issue> =
+        updateConfiguration(plan.credentialChanges) { current ->
+            val prepared = CompanionProviderAdapter.apply(plan, current)
+            ExtensionEditResult(prepared.library, prepared.issues)
+        }
+
+    private suspend fun updateConfiguration(prepare: (Library) -> ExtensionEditResult): List<Issue> =
+        updateConfiguration(emptyList(), prepare)
+
+    private suspend fun updateConfiguration(credentialWrites: List<CredentialWrite>, prepare: (Library) -> ExtensionEditResult): List<Issue> {
         mutex.withLock { editingCount++ }
         try {
             stopAndJoin()
@@ -206,7 +216,14 @@ class AppController internal constructor(
                 return@withLock issues
             }
             try {
-                repository.save(next)
+                if (credentialWrites.isEmpty()) repository.save(next)
+                else {
+                    val commitIssues = ConfigurationCredentialCommit.save(repository, credentials, next, credentialWrites)
+                    if (commitIssues.isNotEmpty()) {
+                        _state.value = _state.value.copy(issues = commitIssues)
+                        return@withLock commitIssues
+                    }
+                }
                 revision++
                 _library.value = next
                 _state.value = _state.value.copy(issues = emptyList(), error = null, traces = emptyList(), streaming = "", pendingOutputs = emptyList())
@@ -677,13 +694,13 @@ class AppController internal constructor(
     }
 
     fun getApiKey(connectionId: String): String = try { credentials.get(connectionId) } catch (_: Exception) { "" }
-    fun setApiKey(connectionId: String, key: String): List<Issue> {
+    suspend fun setApiKey(connectionId: String, key: String): List<Issue> = mutex.withLock {
         if (!storageReady || library.value.connections.none { it.id == connectionId }) {
             val issue = Issue("connection.$connectionId", "API 连接不存在或资源库尚未就绪")
             _state.value = _state.value.copy(issues = listOf(issue))
-            return listOf(issue)
+            return@withLock listOf(issue)
         }
-        return try { credentials.put(connectionId, key); emptyList() }
+        try { credentials.put(connectionId, key); emptyList() }
         catch (_: Exception) {
             val issue = Issue("connection.$connectionId.apiKey", "密钥保存失败")
             _state.value = _state.value.copy(issues = listOf(issue))
