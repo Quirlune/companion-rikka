@@ -19,6 +19,8 @@ open class ModelRequestFailure(
 ) : IllegalStateException(message, cause)
 
 interface LibraryRepository {
+    /** Decoding upgraded stored records; the admission owner saves only after full validation. */
+    val requiresUpgradeSave: Boolean get() = false
     suspend fun load(): Library
     suspend fun save(library: Library)
 }

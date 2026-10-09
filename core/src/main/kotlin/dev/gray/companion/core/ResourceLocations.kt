@@ -61,7 +61,7 @@ object ResourceLocations {
                 return value.split(Regex("\\.(?:entry|workflow|node|block|field)\\."), limit = 2).first()
             }
             return fromField(ExtensionFieldRef(ref.kind, ref.id, field, child("entry"), child("workflow"), child("node"), child("block"),
-                fieldPart.substringAfter('.', "").takeIf { field == ExtensionField.NODE_ARGUMENT && it.isNotEmpty() }))
+                fieldPart.substringAfter('.', "").takeIf { field in setOf(ExtensionField.NODE_ARGUMENT, ExtensionField.GROUP_STATE_DEFAULT) && it.isNotEmpty() }))
         }
         val locations = buildList {
             for (ref in resources(library)) {

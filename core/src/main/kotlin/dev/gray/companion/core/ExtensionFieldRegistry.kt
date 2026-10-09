@@ -8,9 +8,9 @@ object ExtensionFieldRegistry {
         fun addField(field: ExtensionField, title: String, type: ActionFieldType = ActionFieldType.STRING,
                      entryId: String? = null, workflowId: String? = null, nodeId: String? = null, blockId: String? = null,
                      nullable: Boolean = false, integer: Boolean = false, min: Double? = null, max: Double? = null,
-                     choices: List<ActionChoice> = emptyList(), argument: ActionFieldDescriptor? = null) {
+                     choices: List<ActionChoice> = emptyList(), argument: ActionFieldDescriptor? = null, macroKey: String? = null) {
             add(ExtensionFieldDescriptor(ExtensionFieldRef(resource.kind, resource.id, field, entryId, workflowId,
-                nodeId, blockId, argument?.key), title, argument?.type ?: type, argument?.required ?: false,
+                nodeId, blockId, argument?.key ?: macroKey), title, argument?.type ?: type, argument?.required ?: false,
                 nullable, argument?.integer ?: integer, min, max, argument?.choices ?: choices))
         }
         val entries = when (resource.kind) {
@@ -26,6 +26,12 @@ object ExtensionFieldRegistry {
             addField(ExtensionField.ENTRY_ENABLED, "${entry.title.ifBlank { entry.key }} · ${if (fixedEnabled) "固定启用" else "启用"}",
                 ActionFieldType.BOOLEAN, entryId = entry.id,
                 choices = if (fixedEnabled) listOf(ActionChoice("true", "固定启用")) else emptyList())
+        }
+        if (resource.kind == ExtensionResourceKind.GROUP) {
+            library.groups.firstOrNull { it.id == resource.id }?.stateDefaults?.keys?.forEach { key ->
+                // The engine's putIfAbsent consumes this literal value; it never renders it as a template.
+                addField(ExtensionField.GROUP_STATE_DEFAULT, "宏 state.$key · 默认值", ActionFieldType.STRING, macroKey = key)
+            }
         }
         val workflows = when (resource.kind) {
             ExtensionResourceKind.MAIN -> library.mainCalls.firstOrNull { it.id == resource.id }?.workflows
@@ -103,6 +109,9 @@ object ExtensionFieldRegistry {
             ExtensionField.NODE_MAX_TOKENS -> node?.generation?.maxTokens?.toString()
             ExtensionField.NODE_REASONING -> node?.generation?.reasoning?.name
             ExtensionField.NODE_ARGUMENT -> node?.arguments?.get(target.argDescriptorKey)
+            ExtensionField.GROUP_STATE_DEFAULT -> library.groups.firstOrNull {
+                target.kind == ExtensionResourceKind.GROUP && it.id == target.resourceId
+            }?.stateDefaults?.get(target.argDescriptorKey)
         }
     }
 
@@ -150,7 +159,9 @@ object ExtensionFieldRegistry {
                 if (target.field == ExtensionField.CHARACTER_DESCRIPTION) it.copy(description = value!!) else it.copy(entries = it.entries.map(::entry)) })
             ExtensionResourceKind.PACKAGE -> library.copy(packages = library.packages.map { if (it.id != target.resourceId) it else it.copy(entries = it.entries.map(::entry)) })
             ExtensionResourceKind.MAIN -> library.copy(mainCalls = library.mainCalls.map { if (it.id != target.resourceId) it else it.copy(workflows = it.workflows.map(::workflow)) })
-            ExtensionResourceKind.GROUP -> library.copy(groups = library.groups.map { if (it.id != target.resourceId) it else it.copy(workflows = it.workflows.map(::workflow)) })
+            ExtensionResourceKind.GROUP -> library.copy(groups = library.groups.map { if (it.id != target.resourceId) it else
+                if (target.field == ExtensionField.GROUP_STATE_DEFAULT) it.copy(stateDefaults = it.stateDefaults + (target.argDescriptorKey!! to value!!))
+                else it.copy(workflows = it.workflows.map(::workflow)) })
         }
         val issues = if (validateLibrary) LibraryValidator.validate(candidate).filter { it.error } else emptyList()
         return ExtensionEditResult(candidate.takeIf { issues.isEmpty() }, issues, listOf("更新实际字段：${descriptor.title}"))

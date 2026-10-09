@@ -4,17 +4,10 @@ import dev.gray.companion.core.*
 
 /** Pure edit rules used before the controller validates and commits one library revision. */
 internal object LibraryEditPreparation {
-    /** Ordinary resource saves cannot erase the owner ledger along with its bindings. */
+    /** Collection definitions use their own editor; ordinary associations no longer have collection owners. */
     fun extensionMetadataIssues(before: Library, edited: Library): List<Issue> = buildList {
         if (before.extensions != edited.extensions)
-            add(Issue("extensions", "请通过扩展编辑或配置导入修改扩展定义"))
-        val previous = before.mainCalls.associateBy { it.id }
-        edited.mainCalls.forEach { main ->
-            val old = previous[main.id]
-            if (main.extensionBindings != old?.extensionBindings.orEmpty() ||
-                main.extensionBindingOrigins != old?.extensionBindingOrigins.orEmpty())
-                add(Issue("main.${main.id}.extensions", "扩展安装状态已改变，请重新打开编辑器；启停与解除安装请在扩展中操作"))
-        }
+            add(Issue("extensions", "请通过集合编辑或配置导入修改集合定义"))
     }
 
     fun changesFrozenSession(before: Library, edited: Library): Boolean = before.sessions.any { previous ->

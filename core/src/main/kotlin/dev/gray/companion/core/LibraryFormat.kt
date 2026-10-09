@@ -7,7 +7,7 @@ import kotlinx.serialization.json.intOrNull
 
 /** Resource wire versions are independent of the Android SQLite table version. */
 object LibraryFormat {
-    const val CURRENT_VERSION = 11
+    const val CURRENT_VERSION = 12
     private const val LEGACY_VERSION = 1
 
     val json = Json { ignoreUnknownKeys = false; encodeDefaults = true }
@@ -18,6 +18,10 @@ object LibraryFormat {
     fun decode(text: String): Library {
         val document = json.parseToJsonElement(text) as? JsonObject
             ?: error("资源文件须为对象")
+        return decode(document)
+    }
+
+    fun decode(document: JsonObject): Library {
         val versionField = document["schemaVersion"]
         val version = if (versionField == null) LEGACY_VERSION else
             (versionField as? JsonPrimitive)?.intOrNull ?: error("资源版本须为整数")
@@ -29,11 +33,13 @@ object LibraryFormat {
     /** Additive resource upgrades preserve legacy addresses and each journal's execution version. */
     fun upgrade(library: Library): Library {
         checkVersion(library.schemaVersion)
-        val named = MacroNaming.normalize(library)
+        val named = MacroNaming.normalize(CollectionCompatibility.canonicalLive(library))
         fun upgradeSession(session: Session): Session {
             val pending = session.pendingRun ?: return session
             val frozen = pending.frozenResources
             checkVersion(frozen.schemaVersion)
+            // Captured execution worlds retain their historical metadata and actual bindings.
+            // Only the pre-existing naming/schema upgrade applies here, never canonicalLive.
             val namedFrozen = MacroNaming.normalize(frozen)
             val upgradedFrozen = if (namedFrozen.schemaVersion == CURRENT_VERSION) namedFrozen
                 else namedFrozen.copy(schemaVersion = CURRENT_VERSION)

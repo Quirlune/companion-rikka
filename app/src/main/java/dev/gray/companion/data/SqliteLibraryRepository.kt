@@ -11,6 +11,8 @@ import kotlinx.serialization.KSerializer
 
 /** Resource records stay indexed by type and stable ID; sessions are independent records. */
 class SqliteLibraryRepository(context: Context) : LibraryRepository {
+    override var requiresUpgradeSave: Boolean = false
+        private set
     private val helper = Db(context.applicationContext)
     private val json = LibraryFormat.json
     private data class EncodedRecord(val value: Any, val payload: String)
@@ -80,6 +82,7 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
         remember("extension", decoded.extensions) { it.id }
         persistedRecords = persisted
         encodedRecords = encoded
+        requiresUpgradeSave = library !== decoded
         library
     }
 
@@ -155,6 +158,7 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
         }
         persistedRecords = wanted
         encodedRecords = nextEncoded
+        requiresUpgradeSave = false
     }
 
     private fun putMeta(db: SQLiteDatabase, key: String, value: String?) {

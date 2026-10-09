@@ -76,7 +76,16 @@ object ConfigurationCommands {
     private val settingKeys = listOf("selectedProfileId", "selectedPersonaId", "reasoningParsing", "titleConfig")
 
     fun preview(text: String, base: Library): ConfigurationPreview = try {
-        val root = objectAt(json.parseToJsonElement(text), "config")
+        preview(objectAt(json.parseToJsonElement(text), "config"), base)
+    } catch (failure: ConfigProblem) {
+        ConfigurationPreview(null, listOf(Issue(failure.path, failure.message ?: "配置包无效")))
+    } catch (_: Exception) {
+        ConfigurationPreview(null, listOf(Issue("config", "配置包 JSON 或资源字段无效")))
+    }
+
+    /** Already parsed archive content follows the same strict keys, candidate and receipt path. */
+    fun preview(document: JsonObject, base: Library): ConfigurationPreview = try {
+        val root = document
         keys(root, setOf("format", "label", "resources", "commands"), "config")
         if (stringAt(root["format"], "config.format") != FORMAT) fail("config.format", "不支持的配置包格式")
         val label = root["label"]?.let { stringAt(it, "config.label") }?.takeIf { it.isNotBlank() } ?: "配置导入"
@@ -127,7 +136,7 @@ object ConfigurationCommands {
 
     /** The controller calls this under its library mutex, then saves the returned library and receipt together. */
     fun apply(plan: ConfigurationPlan, current: Library): ConfigurationApplyResult = transform(
-        current, plan.changes, plan.settings, forward = true, label = plan.label
+        current, plan.changes.map(CollectionCompatibility::canonicalChange), plan.settings, forward = true, label = plan.label
     )
 
     /** Typed editor candidate, with the same normalization, excluded-state guard and validation as imports. */
@@ -141,15 +150,13 @@ object ConfigurationCommands {
 
     /** Only values this receipt installed may be restored; unrelated later changes are retained. */
     fun undo(receipt: ConfigurationEditReceipt, current: Library): ConfigurationApplyResult = transform(
-        current, receipt.changes, receipt.settings, forward = false, label = receipt.label
+        current, CollectionCompatibility.canonicalReceipt(receipt).changes, receipt.settings, forward = false, label = receipt.label
     )
 
     private fun finishPreview(base: Library, working: Library, label: String): ConfigurationPreview {
-        val reconciled = if (base.extensions != working.extensions) {
-            val result = ExtensionCommands.reconcile(base, working)
-            result.library ?: return ConfigurationPreview(null, result.issues)
-        } else working
-        val normalized = LibraryFormat.upgrade(reconciled.withStandardCharacterFields())
+        requireCanonicalLive(base)
+        excludedChange(base, working)?.let { fail(it, "配置包不能修改会话、收藏或运行状态") }
+        val normalized = LibraryFormat.upgrade(working.withStandardCharacterFields())
         excludedChange(base, normalized)?.let { fail(it, "配置包不能修改会话、收藏或运行状态") }
         val issues = LibraryValidator.validate(normalized).filter { it.error }
         if (issues.isNotEmpty()) return ConfigurationPreview(null, issues)
@@ -159,6 +166,7 @@ object ConfigurationCommands {
 
     private fun transform(current: Library, changes: List<ConfigurationChange>, settings: List<ConfigurationSettingChange>,
                           forward: Boolean, label: String): ConfigurationApplyResult = try {
+        requireCanonicalLive(current)
         if (changes.map { it.kind to it.id }.distinct().size != changes.size || settings.map { it.key }.distinct().size != settings.size)
             fail("config", "配置计划含重复目标")
         for (change in changes) {
@@ -346,7 +354,7 @@ object ConfigurationCommands {
 
     private fun resourceValues(library: Library, kind: String): List<JsonElement> = when (kind) {
         "character" -> library.characters.map { json.encodeToJsonElement(CharacterCard.serializer(), it) }
-        "mainCall" -> library.mainCalls.map { json.encodeToJsonElement(MainCall.serializer(), it) }
+        "mainCall" -> library.mainCalls.map { json.encodeToJsonElement(MainCall.serializer(), CollectionCompatibility.canonicalMain(it)) }
         "package" -> library.packages.map { json.encodeToJsonElement(PromptPackage.serializer(), it) }
         "group" -> library.groups.map { json.encodeToJsonElement(CallGroup.serializer(), it) }
         "persona" -> library.personas.map { json.encodeToJsonElement(UserPersona.serializer(), it) }
@@ -359,7 +367,7 @@ object ConfigurationCommands {
 
     private fun resourceJson(library: Library, kind: String, id: String): JsonElement? = when (kind) {
         "character" -> library.characters.firstOrNull { it.id == id }?.let { json.encodeToJsonElement(CharacterCard.serializer(), it) }
-        "mainCall" -> library.mainCalls.firstOrNull { it.id == id }?.let { json.encodeToJsonElement(MainCall.serializer(), it) }
+        "mainCall" -> library.mainCalls.firstOrNull { it.id == id }?.let { json.encodeToJsonElement(MainCall.serializer(), CollectionCompatibility.canonicalMain(it)) }
         "package" -> library.packages.firstOrNull { it.id == id }?.let { json.encodeToJsonElement(PromptPackage.serializer(), it) }
         "group" -> library.groups.firstOrNull { it.id == id }?.let { json.encodeToJsonElement(CallGroup.serializer(), it) }
         "persona" -> library.personas.firstOrNull { it.id == id }?.let { json.encodeToJsonElement(UserPersona.serializer(), it) }
@@ -379,7 +387,7 @@ object ConfigurationCommands {
 
     private fun replaceResource(library: Library, kind: String, id: String, value: JsonElement?, index: Int?): Library = when (kind) {
         "character" -> library.copy(characters = replace(library.characters, id, value, index, CharacterCard.serializer()) { it.id })
-        "mainCall" -> library.copy(mainCalls = replace(library.mainCalls, id, value, index, MainCall.serializer()) { it.id })
+        "mainCall" -> library.copy(mainCalls = replace(library.mainCalls, id, CollectionCompatibility.canonicalMainImage(value), index, MainCall.serializer()) { it.id })
         "package" -> library.copy(packages = replace(library.packages, id, value, index, PromptPackage.serializer()) { it.id })
         "group" -> library.copy(groups = replace(library.groups, id, value, index, CallGroup.serializer()) { it.id })
         "persona" -> library.copy(personas = replace(library.personas, id, value, index, UserPersona.serializer()) { it.id })
@@ -422,6 +430,11 @@ object ConfigurationCommands {
 
     private fun keys(value: JsonObject, allowed: Set<String>, path: String) {
         (value.keys - allowed).firstOrNull()?.let { fail("$path.$it", "未知字段") }
+    }
+
+    private fun requireCanonicalLive(library: Library) {
+        if (CollectionCompatibility.canonicalLive(library) !== library)
+            fail("library.extensions", "旧集合安装信息尚未迁移，请重新加载资源库后再进行配置操作")
     }
 
     private fun fail(path: String, message: String): Nothing = throw ConfigProblem(path, message)

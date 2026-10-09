@@ -22,12 +22,14 @@ import coil3.network.cachecontrol.CacheControlCacheStrategy
 import coil3.svg.SvgDecoder
 import coil3.request.crossfade
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import android.view.WindowManager
 import android.view.KeyEvent
 import me.rerere.rikkahub.ui.context.VolumeKeyScrollOwner
 import me.rerere.rikkahub.ui.context.consumeVolumeKey
+import android.provider.OpenableColumns
 
 class MainActivity : ComponentActivity(), VolumeKeyScrollOwner {
     override val volumeKeyListeners = mutableListOf<(Boolean) -> Boolean>()
@@ -52,12 +54,18 @@ class MainActivity : ComponentActivity(), VolumeKeyScrollOwner {
     private val importFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) lifecycleScope.launch {
             try {
-                val json = withContext(Dispatchers.IO) {
-                    contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                        ?: error("无法读取文件")
+                fileError = "正在读取资源…"
+                val fileName = withContext(Dispatchers.IO) {
+                    runCatching {
+                        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                            if (cursor.moveToFirst()) cursor.getString(0) else ""
+                        }.orEmpty()
+                    }.getOrDefault("")
                 }
-                controller.previewConfigurationImport(json)
+                controller.previewResourceImport(fileName) { contentResolver.openInputStream(uri) ?: error("无法读取文件") }
                 fileError = "待预览"
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) { fileError = e.message ?: "导入失败" }
         }
     }
@@ -79,7 +87,7 @@ class MainActivity : ComponentActivity(), VolumeKeyScrollOwner {
                         add(SvgDecoder.Factory(scaleToDensity = true))
                     }.build()
                 }
-                OriginalFrontendHost(controller, onExport = { fileError = null; exportFile.launch("companion-resources.json") }, onImport = { fileError = null; importFile.launch(arrayOf("application/json", "text/plain")) }, externalError = fileError)
+                OriginalFrontendHost(controller, onExport = { fileError = null; exportFile.launch("companion-resources.json") }, onImport = { fileError = null; importFile.launch(arrayOf("application/json", "text/plain", "application/zip", "application/x-zip-compressed", "application/octet-stream", "image/png")) }, externalError = fileError)
             }
         }
         handlePreviewImport(intent)

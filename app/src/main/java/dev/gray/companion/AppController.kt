@@ -20,9 +20,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.Locale
+import java.io.File
+import java.io.InputStream
+import java.util.concurrent.atomic.AtomicLong
+import kotlinx.serialization.json.JsonObject
 import me.rerere.rikkahub.ui.hooks.readBooleanPreference
 
 data class PendingOutput(val workflowId: String, val nodeId: String, val text: String, val outputSlot: OutputSlot = OutputSlot.BODY, val turnId: String? = null, val reasoningSnapshot: ReasoningSnapshot? = null)
@@ -89,6 +94,7 @@ class AppController internal constructor(
     @Volatile private var storageReady = false
     private var editingCount = 0
     private var importDraft: ConfigurationImportDraft? = null
+    private val importGeneration = AtomicLong()
     private data class ImportPreparation(val id: String?, val issues: List<Issue>)
     private val _configurationImport = MutableStateFlow<ConfigurationImportPreview?>(null)
     val configurationImport: StateFlow<ConfigurationImportPreview?> = _configurationImport.asStateFlow()
@@ -124,7 +130,7 @@ class AppController internal constructor(
                         initial = initial.startNewConversation()
                     }
                 }
-                if (initial !== loaded) {
+                if (initial !== loaded || repository.requiresUpgradeSave) {
                     // Copy secrets first; retain old encrypted keys if saving fails or migration is interrupted.
                     withContext(Dispatchers.IO) {
                         loaded.profiles.filter { it.apiConnectionId == null }.forEach { profile ->
@@ -692,28 +698,59 @@ class AppController internal constructor(
     /** The file picker prepares a fixed plan; no resource or conversation changes here. */
     suspend fun previewConfigurationImport(jsonText: String): List<Issue> = prepareImport(jsonText, false).issues
 
-    private suspend fun prepareImport(jsonText: String, selectImportedSession: Boolean): ImportPreparation = mutex.withLock {
-        if (!storageReady) return@withLock ImportPreparation(null, listOf(Issue("import", "资源库尚未就绪")))
-        importDraft = null
-        _configurationImport.value = null
-        val current = _library.value
-        val id = newId()
-        val prepared = try {
-            withContext(Dispatchers.Default) {
-                ConfigurationImportPreparer.prepare(jsonText, current, id, selectImportedSession)
+    suspend fun previewResourceImport(fileName: String, source: () -> InputStream): List<Issue> =
+        prepareImport(false) { checkCurrent ->
+            withContext(Dispatchers.IO) {
+                val readContext = kotlin.coroutines.coroutineContext
+                ResourceArchiveImport.read(source(), File(applicationContext.cacheDir, "resource-import"), fileName,
+                    checkCancelled = { readContext.ensureActive(); checkCurrent() },
+                    prepareAvatar = { bytes, _ -> AvatarImportPreparation.encode(bytes) })
             }
-        } catch (cancelled: CancellationException) { throw cancelled }
-        catch (failure: Exception) {
-            val issues = listOf(Issue("import", failure.message ?: "JSON 无法读取或格式不受支持"))
-            ConfigurationImportPreparation(null,
-                ConfigurationImportPreview(id, "导入预览", emptyList(), emptyList(), issues, undoable = false), issues)
+        }.issues
+
+    private suspend fun prepareImport(jsonText: String, selectImportedSession: Boolean): ImportPreparation =
+        prepareImport(selectImportedSession) { checkCurrent ->
+            withContext(Dispatchers.Default) {
+                checkCurrent()
+                val document = LibraryFormat.json.parseToJsonElement(jsonText) as? JsonObject ?: error("资源文件须为对象")
+                ResourceArchiveResult(document, emptyList(), 0, 0L)
+            }
         }
-        importDraft = prepared.draft
-        _configurationImport.value = prepared.preview
-        ImportPreparation(id, prepared.issues)
+
+    /** File IO stays outside admission; only the latest completed read can publish a fixed preview. */
+    private suspend fun prepareImport(selectImportedSession: Boolean,
+                                      read: suspend (() -> Unit) -> ResourceArchiveResult): ImportPreparation {
+        val generation = mutex.withLock {
+            if (!storageReady) return ImportPreparation(null, listOf(Issue("import", "资源库尚未就绪")))
+            importDraft = null
+            _configurationImport.value = null
+            importGeneration.incrementAndGet()
+        }
+        val document = try {
+            read { if (importGeneration.get() != generation) throw CancellationException("Import replaced or cancelled") }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { ResourceArchiveResult(null, listOf(Issue("import", "资源文件无法读取或格式不受支持")), 0, 0L) }
+        return mutex.withLock {
+            if (importGeneration.get() != generation) return@withLock ImportPreparation(null, listOf(Issue("import", "导入读取已取消或被替换")))
+            val id = newId()
+            fun failed(issues: List<Issue>) = ConfigurationImportPreparation(null,
+                ConfigurationImportPreview(id, "导入预览", emptyList(), emptyList(), issues, undoable = false), issues)
+            val prepared = try {
+                withContext(Dispatchers.Default) {
+                    document.document?.let { ConfigurationImportPreparer.prepare(it, _library.value, id, selectImportedSession, document.issues) }
+                        ?: failed(document.issues.ifEmpty { listOf(Issue("import", "资源文件未产生可导入内容")) })
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { failed(listOf(Issue("import", "资源字段无效或格式不受支持"))) }
+            if (importGeneration.get() != generation) return@withLock ImportPreparation(null, listOf(Issue("import", "导入预览已取消或被替换")))
+            importDraft = prepared.draft
+            _configurationImport.value = prepared.preview
+            ImportPreparation(id, prepared.issues)
+        }
     }
 
     fun dismissConfigurationImport() {
+        importGeneration.incrementAndGet()
         importDraft = null
         _configurationImport.value = null
     }

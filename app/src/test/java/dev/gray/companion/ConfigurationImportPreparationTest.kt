@@ -5,6 +5,38 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ConfigurationImportPreparationTest {
+    @Test fun compiledDocumentKeepsSourceWarningsAndUsesTheSameStrictConfigurationReceipt() {
+        val current = LibraryFormat.upgrade(Library(packages = listOf(PromptPackage(
+            id = "unrelated", namespace = "unrelated", name = "原有资源"))))
+        val document = LibraryFormat.json.parseToJsonElement("""{
+          "format":"companion.config.v1","label":"分文件资源",
+          "resources":{"packages":[{"id":"imported","namespace":"imported","name":"导入资源",
+          "entries":[{"id":"entry","key":"body","text":"第一行\\n第二行"}]}]}
+        }""") as kotlinx.serialization.json.JsonObject
+        val warning = Issue("archive.README.md", "说明文档仅作为包说明", error = false)
+        val prepared = ConfigurationImportPreparer.prepare(document, current, "document-preview", false, listOf(warning))
+        assertTrue(prepared.issues.toString(), prepared.draft is ConfigurationImportDraft.Configuration)
+        assertEquals(1, prepared.preview.issues.count { it == warning })
+        assertEquals(listOf(warning), prepared.draft!!.warnings)
+        val applied = ConfigurationImportPreparer.apply(prepared.draft!!, current)
+        assertNotNull(applied.issues.toString(), applied.library)
+        assertNotNull(applied.receipt)
+        val later = applied.library!!.copy(packages = applied.library!!.packages.map {
+            if (it.id == "unrelated") it.copy(name = "后续编辑") else it
+        })
+        val undone = ConfigurationCommands.undo(applied.receipt!!, later)
+        assertNotNull(undone.issues.toString(), undone.library)
+        assertEquals("后续编辑", undone.library!!.packages.single().name)
+        val touched = later.copy(packages = later.packages.map {
+            if (it.id == "imported") it.copy(name = "精修过") else it
+        })
+        assertNull(ConfigurationCommands.undo(applied.receipt!!, touched).library)
+        val refused = ConfigurationImportPreparer.prepare(document, current, "refused", false,
+            listOf(Issue("archive.bad", "文件错误")))
+        assertNull(refused.draft)
+        assertTrue(refused.preview.issues.any { it.error })
+    }
+
     @Test fun resourceOnlyBackupPreparesUndoablePlanWithoutChangingCurrentLibrary() {
         val current = LibraryFormat.upgrade(Library())
         val imported = LibraryFormat.upgrade(Library(packages = listOf(

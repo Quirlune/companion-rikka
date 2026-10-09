@@ -301,8 +301,8 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                             entry<Screen.SettingPreferencesNetwork> { SettingPreferencesNetworkPage() }
                             entry<Screen.QuickMessages> { QuickMessagesPage() }
                             entry<Screen.WebView> { WebViewPage(it.url, it.contentId) }
-                            entry<Screen.CompanionExtensions> { key ->
-                                ConfigurationExtensionsPage(library, key.mainCallId, saving,
+                            entry<Screen.CompanionExtensions> {
+                                ConfigurationExtensionsPage(library, saving,
                                     onApply = ::applyCommand,
                                     onOpenResource = { resource ->
                                         val kind = when (resource.kind) {
@@ -480,7 +480,7 @@ private fun CompanionSettingsPage(onExport: () -> Unit, onImport: () -> Unit, un
                 item(onClick = { navigator.navigate(Screen.SettingPreferencesUI) }, headlineContent = { Text("界面显示") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
             } }
             item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("资源备份") }) {
-                item(onClick = onImport, headlineContent = { Text("导入 JSON") }, leadingContent = { Icon(HugeIcons.ImageUpload, null) })
+                item(onClick = onImport, headlineContent = { Text("导入资源") }, leadingContent = { Icon(HugeIcons.ImageUpload, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionImportHistory) }, headlineContent = { Text("配置撤回") },
                     supportingContent = { Text("$undoCount 次可检查的配置导入") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
                 item(onClick = onExport, headlineContent = { Text("导出 JSON") }, leadingContent = { Icon(HugeIcons.Share04, null) })

@@ -34,9 +34,27 @@ internal object ConfigurationImportPreparer {
     fun prepare(jsonText: String, current: Library, id: String, selectImportedSession: Boolean): ConfigurationImportPreparation {
         val document = LibraryFormat.json.parseToJsonElement(jsonText) as? JsonObject
             ?: error("资源文件须为对象")
+        return prepare(document, current, id, selectImportedSession)
+    }
+
+    fun prepare(document: JsonObject, current: Library, id: String, selectImportedSession: Boolean,
+                sourceIssues: List<Issue> = emptyList()): ConfigurationImportPreparation {
+        val prepared = prepareDocument(document, current, id, selectImportedSession)
+        if (sourceIssues.isEmpty()) return prepared
+        val issues = prepared.issues + sourceIssues
+        val draft = prepared.draft?.takeIf { sourceIssues.none { it.error } }?.let {
+            when (it) {
+                is ConfigurationImportDraft.Configuration -> it.copy(warnings = it.warnings + sourceIssues.filterNot { issue -> issue.error })
+                is ConfigurationImportDraft.Legacy -> it.copy(warnings = it.warnings + sourceIssues.filterNot { issue -> issue.error })
+            }
+        }
+        return prepared.copy(draft = draft, preview = prepared.preview.copy(issues = prepared.preview.issues + sourceIssues), issues = issues)
+    }
+
+    private fun prepareDocument(document: JsonObject, current: Library, id: String, selectImportedSession: Boolean): ConfigurationImportPreparation {
         val format = (document["format"] as? JsonPrimitive)?.content
         if (format == "companion.config.v1") {
-            val preview = ConfigurationCommands.preview(jsonText, current)
+            val preview = ConfigurationCommands.preview(document, current)
             val issues = preview.issues
             return ConfigurationImportPreparation(
                 preview.plan?.let { ConfigurationImportDraft.Configuration(id, it, issues.filterNot { issue -> issue.error }) },
@@ -46,8 +64,8 @@ internal object ConfigurationImportPreparer {
             )
         }
 
-        val decoded = if (format == "sillytavern.preview.v1") SillyTavernImport.convert(jsonText, current)
-            else ImportResult(ModelCatalog.normalize(LibraryFormat.decode(jsonText)), emptyList())
+        val decoded = if (format == "sillytavern.preview.v1") SillyTavernImport.convert(document.toString(), current)
+            else ImportResult(ModelCatalog.normalize(LibraryFormat.decode(document)), emptyList())
         val imported = LibraryFormat.upgrade(decoded.library.withStandardCharacterFields())
         val warnings = decoded.warnings.map { Issue("import", it, error = false) }
         val hasChats = imported.sessions.isNotEmpty() || imported.chatFolders.isNotEmpty() || imported.savedChats.isNotEmpty()

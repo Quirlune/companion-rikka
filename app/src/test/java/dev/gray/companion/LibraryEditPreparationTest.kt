@@ -5,7 +5,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LibraryEditPreparationTest {
-    @Test fun ordinarySaveCannotEraseOwnersTogetherWithTheirBindings() {
+    @Test fun ordinarySaveCanEditActualAssociationsAfterCollectionOwnersAreRetired() {
         val definition = ConfigurationExtension(id = "ext", name = "扩展",
             resources = listOf(ExtensionResourceRef(ExtensionResourceKind.PACKAGE, "pack")))
         val origin = ExtensionBindingOrigin(ExtensionResourceKind.PACKAGE, "pack", ownerBindingIds = listOf("binding"))
@@ -13,7 +13,7 @@ class LibraryEditPreparationTest {
             extensionBindings = listOf(ExtensionBinding("binding", "ext", true)), extensionBindingOrigins = listOf(origin))
         val before = Library(mainCalls = listOf(main), extensions = listOf(definition))
         val erased = before.copy(mainCalls = listOf(MainCall(id = "main", name = "主调用")))
-        assertTrue(LibraryEditPreparation.extensionMetadataIssues(before, erased).any { it.error })
+        assertTrue(LibraryEditPreparation.extensionMetadataIssues(before, erased).isEmpty())
         assertTrue(LibraryEditPreparation.extensionMetadataIssues(before,
             before.copy(mainCalls = listOf(main.copy(description = "changed")))).isEmpty())
         assertTrue(LibraryEditPreparation.extensionMetadataIssues(before,

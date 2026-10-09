@@ -3,10 +3,6 @@ package dev.gray.companion.ui
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Matrix
-import android.media.ExifInterface
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,9 +21,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.gray.companion.core.AvatarImage
 import dev.gray.companion.core.CharacterCard
-import java.io.ByteArrayInputStream
+import dev.gray.companion.AvatarImportPreparation
 import java.io.ByteArrayOutputStream
-import java.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -95,36 +90,5 @@ private fun loadAvatar(context: Context, uri: Uri): AvatarImage {
         }
         output.toByteArray()
     } ?: error("图片不可读")
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-    require(bounds.outWidth > 0 && bounds.outHeight > 0)
-    var sample = 1
-    while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 512) sample *= 2
-    val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample }) ?: error("图片不可读")
-    val orientation = runCatching { ExifInterface(ByteArrayInputStream(bytes)).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
-    val transform = Matrix().apply {
-        when (orientation) {
-            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> setScale(-1f, 1f)
-            ExifInterface.ORIENTATION_ROTATE_180 -> setRotate(180f)
-            ExifInterface.ORIENTATION_FLIP_VERTICAL -> setScale(1f, -1f)
-            ExifInterface.ORIENTATION_TRANSPOSE -> { setRotate(90f); postScale(-1f, 1f) }
-            ExifInterface.ORIENTATION_ROTATE_90 -> setRotate(90f)
-            ExifInterface.ORIENTATION_TRANSVERSE -> { setRotate(270f); postScale(-1f, 1f) }
-            ExifInterface.ORIENTATION_ROTATE_270 -> setRotate(270f)
-        }
-    }
-    val oriented = Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, transform, true)
-    val edge = minOf(oriented.width, oriented.height)
-    val cropped = Bitmap.createBitmap(oriented, (oriented.width - edge) / 2, (oriented.height - edge) / 2, edge, edge)
-    val scaled = Bitmap.createScaledBitmap(cropped, 256, 256, true)
-    val opaque = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
-    Canvas(opaque).apply { drawColor(Color.WHITE); drawBitmap(scaled, 0f, 0f, null) }
-    var compressed = ByteArray(0)
-    for (quality in listOf(82, 65, 45)) {
-        compressed = ByteArrayOutputStream().use { output -> opaque.compress(Bitmap.CompressFormat.JPEG, quality, output); output.toByteArray() }
-        if (compressed.size <= AvatarImage.MAX_BYTES) break
-    }
-    listOf(decoded, oriented, cropped, scaled, opaque).distinct().forEach { it.recycle() }
-    require(compressed.size <= AvatarImage.MAX_BYTES)
-    return AvatarImage(base64 = Base64.getEncoder().encodeToString(compressed))
+    return AvatarImportPreparation.encode(bytes)
 }

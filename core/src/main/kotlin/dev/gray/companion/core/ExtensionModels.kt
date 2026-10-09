@@ -7,7 +7,8 @@ import kotlinx.serialization.Serializable
 @Serializable enum class ExtensionField {
     CHARACTER_DESCRIPTION, ENTRY_TEXT, ENTRY_ENABLED, BLOCK_TEMPLATE, BLOCK_ROLE, BLOCK_ENABLED,
     WORKFLOW_MODEL, WORKFLOW_ENABLED, WORKFLOW_QUEUED, WORKFLOW_PRIORITY,
-    NODE_ENABLED, NODE_MODEL, NODE_TEMPERATURE, NODE_TOP_P, NODE_MAX_TOKENS, NODE_REASONING, NODE_ARGUMENT
+    NODE_ENABLED, NODE_MODEL, NODE_TEMPERATURE, NODE_TOP_P, NODE_MAX_TOKENS, NODE_REASONING, NODE_ARGUMENT,
+    GROUP_STATE_DEFAULT
 }
 @Serializable data class ExtensionFieldRef(
     val kind: ExtensionResourceKind, val resourceId: String, val field: ExtensionField,
@@ -19,6 +20,7 @@ import kotlinx.serialization.Serializable
     val id: String = newId(), val name: String,
     val resources: List<ExtensionResourceRef> = emptyList(), val parameters: List<ExtensionParameter> = emptyList()
 )
+/** Read-only legacy wire metadata. Canonical live main calls no longer install collections. */
 @Serializable data class ExtensionBinding(val id: String = newId(), val extensionId: String, val enabled: Boolean = false)
 @Serializable data class ExtensionBindingOrigin(
     val kind: ExtensionResourceKind, val resourceId: String, val manual: Boolean = false,

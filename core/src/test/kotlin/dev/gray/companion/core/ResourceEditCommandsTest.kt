@@ -96,7 +96,7 @@ class ResourceEditCommandsTest {
         assertTrue(ResourceEditCommands.apply(guarded, cycle).issues.any { "依赖已改变" in it.message })
     }
 
-    @Test fun copyRemapsInternalGraphHistoryTilesAndBindingOwnersWhileKeepingExternalAddresses() {
+    @Test fun copyRemapsInternalGraphHistoryTilesAndKeepsCollectionsIndependent() {
         fun checked(result: ExtensionEditResult): Library {
             assertNotNull(result.issues.joinToString("\n") { "${it.path}: ${it.message}" }, result.library)
             return requireNotNull(result.library)
@@ -110,8 +110,6 @@ class ResourceEditCommandsTest {
             workflows = listOf(original.workflows.single().copy(nodes = listOf(first, second)),
                 Workflow(id = "after", title = "After", afterWorkflowId = "flow", nodes = emptyList()))))))
         library = checked(ExtensionCommands.createDefinition(library, ConfigurationExtension(id = "ext", name = "Ext", resources = listOf(pack))))
-        library = checked(ExtensionCommands.install(library, "main", "ext"))
-        library = checked(ExtensionCommands.setEnabled(library, "main", library.mainCalls.single().extensionBindings.single().id, true))
         val sourceLocation = ResourceLocation(ExtensionResourceRef(ExtensionResourceKind.MAIN, "main"))
         val plan = ResourceEditCommands.previewCopy(library, sourceLocation)
         val next = applied(plan, library).library!!
@@ -125,7 +123,9 @@ class ResourceEditCommandsTest {
         assertNotEquals(old.history.processor.workflow.id, copied.history.processor.workflow.id)
         assertEquals(copied.tiles.single().id, copied.bodySourceTileId)
         assertEquals("{{result.tone}}", copied.tiles.single().template)
-        assertEquals(listOf(copied.extensionBindings.single().id), copied.extensionBindingOrigins.single().ownerBindingIds)
+        assertTrue(copied.extensionBindings.isEmpty())
+        assertTrue(copied.extensionBindingOrigins.isEmpty())
+        assertEquals(library.extensions, next.extensions)
         assertEquals(listOf("pack"), copied.boundPackageIds)
         assertTrue(plan.changes.any { "共享" in it })
         val namespaceCollision = LibraryFormat.upgrade(base().copy(characters = listOf(CharacterCard(id = "character", name = "Character", namespace = "tone_copy"))))
@@ -153,8 +153,6 @@ class ResourceEditCommandsTest {
         assertFalse(ResourceEditCommands.previewDelete(recorded, unusedTarget).canApply)
         library = library.copy(mainCalls = listOf(library.mainCalls.single().copy(workflows = emptyList())))
         library = ExtensionCommands.createDefinition(library, ConfigurationExtension("ext", "Ext", listOf(pack), listOf(ExtensionParameter("parameter", "Tone", source)))).library!!
-        library = ExtensionCommands.install(library, "main", "ext").library!!
-        library = ExtensionCommands.setEnabled(library, "main", library.mainCalls.single().extensionBindings.single().id, true).library!!
         assertFalse(ResourceEditCommands.previewDelete(library, target).canApply)
         val plan = ResourceEditCommands.previewDelete(library, target, true)
         val result = applied(plan, library)
