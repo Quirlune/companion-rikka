@@ -13,6 +13,7 @@ data class ProviderModelOptions(
     val advancedSettings: Boolean = true,
     val builtInTools: Boolean = true,
     val editModelId: Boolean = false,
+    val prepareNewOverride: (me.rerere.ai.provider.ProviderSetting) -> me.rerere.ai.provider.ProviderSetting = { it },
 )
 
 enum class ProviderModelLoadPolicy { AUTOMATIC, MANUAL, DISABLED }
@@ -26,4 +27,5 @@ data class ProviderDetailOptions(
     val saveToast: Boolean = true,
     val modelLoadPolicy: ProviderModelLoadPolicy = ProviderModelLoadPolicy.AUTOMATIC,
     val retainConfigDraft: Boolean = false,
+    val balanceLoadPolicy: ProviderModelLoadPolicy = ProviderModelLoadPolicy.AUTOMATIC,
 )

@@ -301,7 +301,7 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                     onBack = { navigator.popBackStack() })
                             }
                             entry<Screen.SettingProviderDetail> { key ->
-                                CompanionProviderDetailPage(key.providerId, library, saving, controller::getApiKey, ::commitProviders,
+                                CompanionProviderDetailPage(key.providerId, library, saving, controller::getCredential, ::commitProviders,
                                     onEditProfile = { edit(Editing(EditorKind.PROFILE, it)) },
                                     onSelectDefault = { id -> update { it.copy(selectedProfileId = id) } },
                                     onBack = { navigator.popBackStack() })
@@ -416,14 +416,12 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                         ProfileEditor(initial, library.connections, { value -> save { it.copy(profiles = it.profiles.replaceOrAdd(value) { it.id }, selectedProfileId = it.selectedProfileId ?: value.id) } }, back, saving)
                                     }
                                     EditorKind.CONNECTION -> {
-                                        val initial = remember(key) { library.connections.firstOrNull { it.id == key.id } ?: ApiConnection(id = key.id) }
-                                        ConnectionEditor(initial, controller.getApiKey(key.id), { value, secret ->
-                                        if (!saving) { saving = true; scope.launch {
-                                            try {
-                                                if (report(controller.updateLibrary { it.copy(connections = it.connections.replaceOrAdd(value) { it.id }) }) && report(controller.setApiKey(value.id, secret))) navigator.popBackStack()
-                                            } finally { saving = false }
-                                        } }
-                                        }, back, saving)
+                                        if (library.connections.any { it.id == key.id })
+                                            CompanionProviderDetailPage(key.id, library, saving, controller::getCredential, ::commitProviders,
+                                                onEditProfile = { edit(Editing(EditorKind.PROFILE, it)) },
+                                                onSelectDefault = { id -> update { it.copy(selectedProfileId = id) } }, onBack = back)
+                                        else CompanionProvidersPage(library, saving, ::commitProviders,
+                                            onOpenProvider = { navigator.navigate(Screen.SettingProviderDetail(it.toString())) }, onBack = back)
                                     }
                                     null -> Text("此编辑页不可用")
                                 }

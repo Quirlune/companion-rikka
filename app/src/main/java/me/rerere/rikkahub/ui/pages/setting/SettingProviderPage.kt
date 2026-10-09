@@ -146,10 +146,14 @@ fun SettingProviderPageContent(
                     BackButton(onBack = onBack)
                 },
                 actions = {
-                    if (allowRecommendations) RecommendProviderButton { provider ->
+                    if (allowRecommendations) RecommendProviderButton(onAddConfirmed = onProvidersChangeConfirmed?.let { commit ->
+                        { provider, complete -> if (enabled) commit(listOf(provider.copyProvider(Uuid.random())) + providers, complete) else complete(false) }
+                    }) { provider ->
                         if (enabled) onProvidersChange(listOf(provider.copyProvider(Uuid.random())) + providers)
                     }
-                    if (allowImport) ImportProviderButton {
+                    if (allowImport) ImportProviderButton(onAddConfirmed = onProvidersChangeConfirmed?.let { commit ->
+                        { provider, complete -> if (enabled) commit(listOf(provider.copyProvider(Uuid.random())) + providers, complete) else complete(false) }
+                    }) {
                         if (enabled) onProvidersChange(listOf(it.copyProvider(Uuid.random())) + providers)
                     }
                     AddButton(configureOptions = configureOptions, enabled = enabled,
@@ -248,6 +252,7 @@ fun SettingProviderPageContent(
 
 @Composable
 private fun RecommendProviderButton(
+    onAddConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)? = null,
     onAdd: (ProviderSetting) -> Unit
 ) {
     val toaster = LocalToaster.current
@@ -284,11 +289,9 @@ private fun RecommendProviderButton(
                     RecommendProviderItem(
                         provider = provider,
                         onAdd = {
-                            onAdd(provider)
-                            toaster.show(
-                                importSuccessMessage,
-                                type = ToastType.Success
-                            )
+                            val complete: (Boolean) -> Unit = { accepted -> if (accepted) toaster.show(importSuccessMessage, type = ToastType.Success) }
+                            if (onAddConfirmed != null) onAddConfirmed(provider, complete)
+                            else { onAdd(provider); complete(true) }
                         }
                     )
                 }
@@ -343,6 +346,7 @@ private fun RecommendProviderItem(
 
 @Composable
 private fun ImportProviderButton(
+    onAddConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)? = null,
     onAdd: (ProviderSetting) -> Unit
 ) {
     val toaster = LocalToaster.current
@@ -350,14 +354,14 @@ private fun ImportProviderButton(
     var showImportDialog by remember { mutableStateOf(false) }
 
     val scanQrCodeLauncher = rememberLauncherForActivityResult(ScanQRCode()) { result ->
-        handleQRResult(result, onAdd, toaster, context)
+        handleQRResult(result, onAdd, toaster, context, onAddConfirmed)
     }
 
     val pickImageLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         uri?.let {
-            handleImageQRCode(it, onAdd, toaster, context)
+            handleImageQRCode(it, onAdd, toaster, context, onAddConfirmed)
         }
     }
 
@@ -476,7 +480,8 @@ private fun handleQRResult(
     result: QRResult,
     onAdd: (ProviderSetting) -> Unit,
     toaster: com.dokar.sonner.ToasterState,
-    context: android.content.Context
+    context: android.content.Context,
+    onAddConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)? = null,
 ) {
     runCatching {
         when (result) {
@@ -498,11 +503,7 @@ private fun handleQRResult(
 
             is QRResult.QRSuccess -> {
                 val setting = decodeProviderSetting(result.content.rawValue ?: "")
-                onAdd(setting)
-                toaster.show(
-                    context.getString(R.string.setting_provider_page_import_success),
-                    type = ToastType.Success
-                )
+                completeProviderImport(setting, onAdd, onAddConfirmed, toaster, context)
             }
 
             QRResult.QRUserCanceled -> {}
@@ -519,7 +520,8 @@ private fun handleImageQRCode(
     uri: Uri,
     onAdd: (ProviderSetting) -> Unit,
     toaster: com.dokar.sonner.ToasterState,
-    context: android.content.Context
+    context: android.content.Context,
+    onAddConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)? = null,
 ) {
     runCatching {
         // 使用ImageUtils解析二维码
@@ -534,11 +536,7 @@ private fun handleImageQRCode(
         }
 
         val setting = decodeProviderSetting(qrContent)
-        onAdd(setting)
-        toaster.show(
-            context.getString(R.string.setting_provider_page_import_success),
-            type = ToastType.Success
-        )
+        completeProviderImport(setting, onAdd, onAddConfirmed, toaster, context)
     }.onFailure { error ->
         toaster.show(
             context.getString(R.string.setting_provider_page_image_qr_decode_failed, error.message ?: ""),
@@ -547,6 +545,15 @@ private fun handleImageQRCode(
     }
 }
 
+
+private fun completeProviderImport(provider: ProviderSetting, onAdd: (ProviderSetting) -> Unit,
+    onAddConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)?,
+    toaster: com.dokar.sonner.ToasterState, context: android.content.Context) {
+    val complete: (Boolean) -> Unit = { accepted -> if (accepted) toaster.show(
+        context.getString(R.string.setting_provider_page_import_success), type = ToastType.Success) }
+    if (onAddConfirmed != null) onAddConfirmed(provider, complete)
+    else { onAdd(provider); complete(true) }
+}
 
 @Composable
 private fun AddButton(configureOptions: ProviderConfigureOptions = ProviderConfigureOptions(), enabled: Boolean = true,

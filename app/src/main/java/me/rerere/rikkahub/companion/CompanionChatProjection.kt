@@ -56,7 +56,8 @@ internal fun projectCompanionChat(
                 id = stableUuid(key),
                 role = MessageRole.ASSISTANT,
                 parts = buildList {
-                    output.reasoningSnapshot?.let { add(it.toReasoningPart()) }
+                    output.reasoningSnapshot?.takeIf { it.text.isNotBlank() || it.nativeMessage == null }
+                        ?.let { add(it.toReasoningPart()) }
                     if (output.text.isNotEmpty()) add(UIMessagePart.Text(regionText(output.text, output.outputSlot)))
                 },
                 createdAt = kotlin.time.Instant.fromEpochMilliseconds(session.updatedAt).toLocalDateTime(TimeZone.currentSystemDefault()),

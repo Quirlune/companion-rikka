@@ -10,6 +10,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.security.KeyFactory
 import java.security.PrivateKey
+import java.security.MessageDigest
 import java.security.Signature
 import java.security.spec.PKCS8EncodedKeySpec
 import java.time.Instant
@@ -37,8 +38,10 @@ class ServiceAccountTokenProvider(
     /**
      * Generate cache key based on service account email and scopes
      */
-    private fun generateCacheKey(serviceAccountEmail: String, scopes: List<String>): String {
-        return "$serviceAccountEmail:${scopes.sorted().joinToString(",")}"
+    private fun generateCacheKey(serviceAccountEmail: String, privateKeyPem: String, scopes: List<String>): String {
+        val fingerprint = Base64.getUrlEncoder().withoutPadding().encodeToString(
+            MessageDigest.getInstance("SHA-256").digest(privateKeyPem.toByteArray(Charsets.UTF_8)))
+        return "$serviceAccountEmail:$fingerprint:${scopes.sorted().joinToString(",")}"
     }
 
     /**
@@ -61,7 +64,7 @@ class ServiceAccountTokenProvider(
         privateKeyPem: String,
         scopes: List<String> = listOf("https://www.googleapis.com/auth/cloud-platform")
     ): String = withContext(Dispatchers.IO) {
-        val cacheKey = generateCacheKey(serviceAccountEmail, scopes)
+        val cacheKey = generateCacheKey(serviceAccountEmail, privateKeyPem, scopes)
 
         // Check cache first
         tokenCache[cacheKey]?.let { cachedToken ->

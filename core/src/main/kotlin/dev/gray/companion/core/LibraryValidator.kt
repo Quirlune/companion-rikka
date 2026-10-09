@@ -5,6 +5,7 @@ object LibraryValidator {
         val semantics = ExecutionSemantics(executionVersion)
         val issues = mutableListOf<Issue>()
         if (library.schemaVersion != LibraryFormat.CURRENT_VERSION) issues += Issue("library.schemaVersion", "不支持的资源版本")
+        issues += NativeProviderConfiguration.validate(library)
         checkMetadata(library, issues)
         issues += ExtensionCommands.validate(library)
         if (semantics.reasoningArchives)

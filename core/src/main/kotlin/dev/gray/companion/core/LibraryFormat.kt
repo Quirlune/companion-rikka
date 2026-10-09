@@ -7,13 +7,15 @@ import kotlinx.serialization.json.intOrNull
 
 /** Resource wire versions are independent of the Android SQLite table version. */
 object LibraryFormat {
-    const val CURRENT_VERSION = 13
+    const val CURRENT_VERSION = 14
     private const val LEGACY_VERSION = 1
 
     val json = Json { ignoreUnknownKeys = false; encodeDefaults = true }
 
-    fun encode(library: Library): String =
-        json.encodeToString(Library.serializer(), upgrade(library))
+    fun encode(library: Library): String {
+        requireNativeConfiguration(library)
+        return json.encodeToString(Library.serializer(), upgrade(library))
+    }
 
     fun decode(text: String): Library {
         val document = json.parseToJsonElement(text) as? JsonObject
@@ -27,6 +29,7 @@ object LibraryFormat {
             (versionField as? JsonPrimitive)?.intOrNull ?: error("资源版本须为整数")
         checkVersion(version)
         val decoded = json.decodeFromJsonElement(Library.serializer(), document)
+        requireNativeConfiguration(decoded)
         return upgrade(if (decoded.schemaVersion == version) decoded else decoded.copy(schemaVersion = version))
     }
 
@@ -62,5 +65,11 @@ object LibraryFormat {
 
     private fun checkVersion(version: Int) {
         require(version in LEGACY_VERSION..CURRENT_VERSION) { "不支持的资源版本：$version" }
+    }
+
+    private fun requireNativeConfiguration(library: Library) {
+        NativeProviderConfiguration.validate(library).firstOrNull { it.error }?.let {
+            throw IllegalArgumentException("${it.path}: ${it.message}")
+        }
     }
 }

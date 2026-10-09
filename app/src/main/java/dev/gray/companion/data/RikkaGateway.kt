@@ -14,6 +14,7 @@ import dev.gray.companion.core.ModelReasoning
 import dev.gray.companion.core.Protocol
 import dev.gray.companion.core.Role
 import dev.gray.companion.core.ModelUsageRecord
+import dev.gray.companion.NativeProviderCodec
 import dev.gray.companion.core.UsageStatus
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.CancellationException
@@ -34,6 +35,10 @@ import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.ui.StreamChunk
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.StreamChunkHandler
+import me.rerere.ai.core.MessageRole
+import kotlinx.serialization.json.jsonObject
 import me.rerere.ai.util.HttpException
 import okhttp3.OkHttpClient
 import org.koin.core.context.GlobalContext
@@ -105,22 +110,28 @@ class RikkaGateway(
     private suspend fun request(profile: ModelProfile, messages: List<ChatMessage>, onDelta: suspend (ModelDelta) -> Unit): ModelResponse {
         lastFailureMessage = null
         if (profile.model.isBlank()) throw GatewayFailure("请先填写模型 ID", retryable = false)
-        val secret = credentials.get(ModelCatalog.credentialId(profile))
-        if (secret.isBlank()) {
-            lastFailureMessage = "所选模型的 API 连接尚未填写密钥"
+        val native = try { NativeProviderCodec.request(profile, credentials::get) }
+        catch (failure: IllegalArgumentException) {
+            lastFailureMessage = failure.message ?: "模型连接配置无效"
             throw GatewayFailure(lastFailureMessage!!, retryable = false)
         }
-        val model = Model(modelId = profile.model.trim(), displayName = profile.model.trim())
-        val setting = when (profile.protocol) {
-            Protocol.OPENAI -> ProviderSetting.OpenAI(apiKey = secret, baseUrl = profile.baseUrl.trimEnd('/'), useResponseApi = profile.responseApi, models = listOf(model))
-            Protocol.GOOGLE -> ProviderSetting.Google(apiKey = secret, baseUrl = profile.baseUrl.trimEnd('/'), models = listOf(model))
-            Protocol.CLAUDE -> ProviderSetting.Claude(apiKey = secret, baseUrl = profile.baseUrl.trimEnd('/'), models = listOf(model))
-        }
-        val uiMessages = messages.map { message -> when (message.role) {
+        val model = native.model
+        val setting = native.provider
+        if (model.type != me.rerere.ai.provider.ModelType.CHAT ||
+            model.outputModalities != listOf(me.rerere.ai.provider.Modality.TEXT))
+            throw GatewayFailure("当前主调用接收文本回复，请选择纯文本输出的聊天模型", retryable = false)
+        val uiMessages = messages.map { message ->
+            val archived = message.reasoningSnapshot?.nativeMessage?.let {
+                runCatching { me.rerere.rikkahub.utils.JsonInstant.decodeFromJsonElement(UIMessage.serializer(), it) }.getOrNull()
+            }?.takeIf { original -> message.role == Role.ASSISTANT && original.role == MessageRole.ASSISTANT &&
+                original.parts.filterIsInstance<UIMessagePart.Text>().joinToString("") { it.text } == message.text }
+            archived ?: when (message.role) {
             Role.SYSTEM -> UIMessage.system(message.text)
             Role.USER -> UIMessage.user(message.text)
             Role.ASSISTANT -> UIMessage.assistant(message.text)
         } }
+        val nativeHandler = StreamChunkHandler(model)
+        var nativeMessages = listOf(UIMessage.assistant(""))
         val answer = StringBuilder()
         val reasoningText = StringBuilder()
         var reasoningStartedAt: Long? = null
@@ -136,8 +147,8 @@ class RikkaGateway(
                 ModelReasoning.XHIGH -> ReasoningLevel.XHIGH
                 ModelReasoning.MAX -> ReasoningLevel.MAX
             },
-            customHeaders = profile.resolvedHeaders.map { CustomHeader(it.name, it.value) },
-            customBody = profile.customBody.map { CustomBody(it.key, it.value) })
+            customHeaders = profile.resolvedHeaders.map { CustomHeader(it.name, it.value) } + model.customHeaders,
+            customBody = model.customBodies)
         val startedAt = System.currentTimeMillis()
         var status = UsageStatus.FAILED
         var promptTokens: Long? = null
@@ -145,6 +156,8 @@ class RikkaGateway(
         var reportedTotal: Long? = null
         try {
             manager.getProviderByType(setting).streamText(setting, uiMessages, params).collect { chunk ->
+                if (profile.nativeModel != null || profile.resolvedProvider != null)
+                    nativeMessages = nativeHandler.handle(nativeMessages, chunk)
                 when (chunk) {
                     is StreamChunk.TextDelta -> {
                         answer.append(chunk.text)
@@ -176,6 +189,7 @@ class RikkaGateway(
                         completionTokens = maxOf(completionTokens ?: 0L, chunk.usage.completionTokens.toLong())
                         reportedTotal = maxOf(reportedTotal ?: 0L, chunk.usage.totalTokens.toLong())
                     }
+                    is StreamChunk.ToolCallStart -> throw GatewayFailure("当前调用尚未配置客户端工具执行器", retryable = false)
                     else -> Unit
                 }
             }
@@ -211,9 +225,11 @@ class RikkaGateway(
                     promptTokens = promptTokens, completionTokens = completionTokens, totalTokens = total))
             }
         }
-        return ModelResponse(answer.toString(), reasoningStartedAt?.let { started ->
-            ReasoningSnapshot(reasoningText.toString(), started, reasoningFinishedAt)
-        })
+        val nativeMessage = if (profile.nativeModel != null || profile.resolvedProvider != null)
+            me.rerere.rikkahub.utils.JsonInstant.encodeToJsonElement(UIMessage.serializer(), nativeMessages.last()).jsonObject else null
+        return ModelResponse(answer.toString(), if (reasoningStartedAt != null || nativeMessage != null)
+            ReasoningSnapshot(reasoningText.toString(), reasoningStartedAt ?: startedAt,
+                reasoningFinishedAt ?: System.currentTimeMillis(), nativeMessage) else null)
     }
 
     companion object {

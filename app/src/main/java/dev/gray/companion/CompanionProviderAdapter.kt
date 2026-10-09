@@ -6,6 +6,9 @@ import dev.gray.companion.core.Library
 import dev.gray.companion.core.ModelProfile
 import dev.gray.companion.core.Protocol
 import dev.gray.companion.core.RequestHeader
+import dev.gray.companion.core.RequestBodyField
+import dev.gray.companion.core.CredentialSlot
+import dev.gray.companion.core.CredentialKind
 import java.util.UUID
 import kotlin.uuid.Uuid
 import me.rerere.ai.provider.Model
@@ -53,7 +56,8 @@ internal object CompanionProviderAdapter {
             if (connections.none { it.id == id }) {
                 connections += ApiConnection(id = id, name = preset.name, protocol = preset.protocol(),
                     baseUrl = preset.baseUrl(), enabled = preset.enabled,
-                    responseApi = (preset as? ProviderSetting.OpenAI)?.useResponseApi ?: false)
+                    responseApi = (preset as? ProviderSetting.OpenAI)?.useResponseApi ?: false,
+                    nativeProvider = NativeProviderCodec.providerOptions(preset))
             }
         }
         return if (connections == library.connections) library else library.copy(connections = connections)
@@ -71,20 +75,10 @@ internal object CompanionProviderAdapter {
         val providers = library.connections.map { connection ->
             val id = nativeConnectionId(connection)
             val models = library.profiles.filter { it.apiConnectionId == connection.id }.map { profile ->
-                Model(id = opaqueId("profile", profile.id), modelId = profile.model, displayName = profile.name)
+                NativeProviderCodec.model(profile, opaqueId("profile", profile.id))
             }
-            val projected = when (connection.protocol) {
-                Protocol.OPENAI -> ProviderSetting.OpenAI(id = id, enabled = connection.enabled, name = connection.name,
-                    models = models, baseUrl = connection.baseUrl, useResponseApi = connection.responseApi)
-                Protocol.GOOGLE -> ProviderSetting.Google(id = id, enabled = connection.enabled, name = connection.name,
-                    models = models, baseUrl = connection.baseUrl)
-                Protocol.CLAUDE -> ProviderSetting.Claude(id = id, enabled = connection.enabled, name = connection.name,
-                    models = models, baseUrl = connection.baseUrl)
-            }
-            // Keep the original descriptions and built-in affordances without importing credentials or models.
             val preset = DEFAULT_PROVIDERS.firstOrNull { connection.id == "provider:${it.id}" }
-            if (preset == null) projected else projected.copyProvider(builtIn = true,
-                description = preset.description, shortDescription = preset.shortDescription)
+            NativeProviderCodec.provider(connection, id, models, preset)
         }
         return CompanionProviderSnapshot(library.connections, library.profiles, providers, connectionIds, profileIds,
             library.connections.associate { nativeConnectionId(it) to CompanionConnectionExtras(it.customHeaders, it.maxConcurrentRequests) })
@@ -95,6 +89,7 @@ internal object CompanionProviderAdapter {
         desiredProviders: List<ProviderSetting>,
         connectionExtras: Map<Uuid, CompanionConnectionExtras> = snapshot.extras,
         editedApiKeys: Map<Uuid, Pair<String, String>> = emptyMap(),
+        editedCredentials: Map<CredentialSlot, Pair<String, String>> = emptyMap(),
     ): CompanionProviderPlanResult = try {
         require(desiredProviders.map { it.id }.distinct().size == desiredProviders.size) { "提供商标识重复" }
         val allModels = desiredProviders.flatMap { it.models }
@@ -110,10 +105,13 @@ internal object CompanionProviderAdapter {
             require(snapshot.connectionIds.containsKey(provider.id) || id !in oldConnections) { "新提供商标识与已有资源冲突" }
             val old = oldConnections[id] ?: ApiConnection(id = id)
             val extras = connectionExtras[provider.id] ?: snapshot.extras[provider.id] ?: CompanionConnectionExtras()
+            val options = NativeProviderCodec.providerOptions(provider)
+            val previousOptions = snapshot.providers.firstOrNull { it.id == provider.id }?.let(NativeProviderCodec::providerOptions)
             old.copy(name = provider.name, protocol = provider.protocol(), baseUrl = provider.baseUrl(),
                 enabled = provider.enabled,
                 responseApi = if (provider is ProviderSetting.OpenAI) provider.useResponseApi else old.responseApi,
-                customHeaders = extras.customHeaders, maxConcurrentRequests = extras.maxConcurrentRequests)
+                customHeaders = extras.customHeaders, maxConcurrentRequests = extras.maxConcurrentRequests,
+                nativeProvider = if (old.nativeProvider == null && previousOptions == options) null else options)
         }
         val modelsByConnection = desiredProviders.associate { provider ->
             val connectionId = connectionIds.getValue(provider.id)
@@ -125,7 +123,12 @@ internal object CompanionProviderAdapter {
                 val profile = previous ?: ModelProfile(id = id, protocol = provider.protocol(), baseUrl = provider.baseUrl(),
                     responseApi = (provider as? ProviderSetting.OpenAI)?.useResponseApi ?: false, apiConnectionId = connectionId)
                 // Keep every advanced request value and legacy fallback transport field of existing profiles.
-                profile.copy(name = model.displayName, model = model.modelId)
+                val options = NativeProviderCodec.modelOptions(model)
+                val previousOptions = snapshot.providers.flatMap { it.models }.firstOrNull { it.id == model.id }
+                    ?.let(NativeProviderCodec::modelOptions)
+                profile.copy(name = model.displayName, model = model.modelId,
+                    customBody = model.customBodies.map { RequestBodyField(it.key, it.value) },
+                    nativeModel = if (profile.nativeModel == null && previousOptions == options) null else options)
             }.toMutableList()
         }
         // Reordering providers must not regroup/interleave the persisted global profile list.
@@ -135,8 +138,21 @@ internal object CompanionProviderAdapter {
             } }
             desiredProviders.forEach { provider -> addAll(modelsByConnection.getValue(connectionIds.getValue(provider.id))) }
         }
-        val keys = editedApiKeys.mapNotNull { (providerId, edit) ->
-            if (edit.first == edit.second) null else CredentialWrite(connectionIds.getValue(providerId), edit.first, edit.second)
+        val credentials = editedCredentials.toMutableMap()
+        editedApiKeys.forEach { (providerId, edit) ->
+            val slot = CredentialSlot(connectionIds.getValue(providerId))
+            require(credentials[slot] == null || credentials[slot] == edit) { "密钥编辑重复且不一致" }
+            credentials[slot] = edit
+        }
+        val keys = credentials.mapNotNull { (slot, edit) ->
+            require(when (slot.kind) {
+                CredentialKind.API_KEY, CredentialKind.PRIVATE_KEY -> connections.any { it.id == slot.ownerId }
+                CredentialKind.MODEL_API_KEY, CredentialKind.MODEL_PRIVATE_KEY -> profiles.any { it.id == slot.ownerId }
+            }) { "凭据所属资源已不存在" }
+            if (edit.first == edit.second) null else CredentialWrite(slot.ownerId, edit.first, edit.second, slot.kind)
+        }
+        require(NativeProviderCodec.validate(Library(connections = connections, profiles = profiles)).none { it.error }) {
+            "原版提供商或模型配置无效"
         }
         CompanionProviderPlanResult(CompanionProviderPlan(snapshot.connections, snapshot.profiles, connections, profiles, keys))
     } catch (failure: IllegalArgumentException) {

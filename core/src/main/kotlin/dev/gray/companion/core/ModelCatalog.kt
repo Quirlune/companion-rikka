@@ -30,7 +30,8 @@ object ModelCatalog {
         val connectionId = profile.apiConnectionId ?: return profile // legacy bundles remain readable
         val connection = library.connections.firstOrNull { it.id == connectionId && it.enabled } ?: return null
         return profile.copy(protocol = connection.protocol, baseUrl = connection.baseUrl,
-            responseApi = connection.responseApi, resolvedHeaders = connection.customHeaders)
+            responseApi = connection.responseApi, resolvedHeaders = connection.customHeaders,
+            resolvedProvider = connection.nativeProvider)
     }
 
     fun credentialId(profile: ModelProfile): String = profile.apiConnectionId ?: profile.id

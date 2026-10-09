@@ -81,9 +81,13 @@ internal class InvocationPreparer(private val library: Library) {
             throw NodeExecutionFailure(ref, "此事件由运行时派发", RecoveryFailureKind.PROMPT, retryable = false)
         }
         val profile = if (descriptor.usesModel) {
-            captured?.profile?.let { saved -> saved.copy(
-                resolvedHeaders = ModelCatalog.resolveProfile(library, saved.id)?.resolvedHeaders.orEmpty()
-            ) } ?: ref.node.generation.resolve(library, ref.workflow)
+            captured?.profile?.let { saved ->
+                // The supplied library is the captured world on resume. Rebuild only transient transport
+                // values; the saved profile retains the wave's already-resolved generation overrides.
+                val resolved = ModelCatalog.resolveProfile(library, saved.id)
+                saved.copy(resolvedHeaders = resolved?.resolvedHeaders.orEmpty(),
+                    resolvedProvider = resolved?.resolvedProvider)
+            } ?: ref.node.generation.resolve(library, ref.workflow)
         } else null
         if (descriptor.usesModel && (profile == null || profile.model.isBlank())) {
             throw NodeExecutionFailure(ref, "请先选择并填写模型", RecoveryFailureKind.CONFIGURATION, retryable = false)

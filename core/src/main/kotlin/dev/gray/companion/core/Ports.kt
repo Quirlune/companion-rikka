@@ -25,8 +25,27 @@ interface LibraryRepository {
     suspend fun save(library: Library)
 }
 
+/** Secrets have stable resource owners; slot namespaces belong to the storage adapter. */
+enum class CredentialKind { API_KEY, PRIVATE_KEY, MODEL_API_KEY, MODEL_PRIVATE_KEY }
+data class CredentialSlot(val ownerId: String, val kind: CredentialKind = CredentialKind.API_KEY)
+
 interface CredentialStore {
     fun get(profileId: String): String
     fun put(profileId: String, secret: String)
     fun remove(profileId: String)
+
+    fun get(slot: CredentialSlot): String {
+        if (slot.kind != CredentialKind.API_KEY) throw UnsupportedOperationException("Credential slot kind is not supported")
+        return get(slot.ownerId)
+    }
+
+    fun put(slot: CredentialSlot, secret: String) {
+        if (slot.kind != CredentialKind.API_KEY) throw UnsupportedOperationException("Credential slot kind is not supported")
+        put(slot.ownerId, secret)
+    }
+
+    fun remove(slot: CredentialSlot) {
+        if (slot.kind != CredentialKind.API_KEY) throw UnsupportedOperationException("Credential slot kind is not supported")
+        remove(slot.ownerId)
+    }
 }

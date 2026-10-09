@@ -12,6 +12,7 @@ import me.rerere.rikkahub.data.repository.FilesRepository
 import me.rerere.rikkahub.ui.pages.setting.SettingVM
 import me.rerere.rikkahub.utils.JsonInstant
 import okhttp3.OkHttpClient
+import me.rerere.ai.provider.ProviderManager
 import dev.gray.companion.data.createCompanionNetworkClient
 import me.rerere.rikkahub.ui.pages.extensions.QuickMessagesVM
 import org.koin.android.ext.koin.androidContext
@@ -31,6 +32,7 @@ class CompanionApplication : Application() {
                 single { SettingsStore(get(), get()) }
                 single { PebbleEngine.Builder().autoEscaping(false).build() }
                 single<OkHttpClient> { createCompanionNetworkClient(get(), get()) }
+                single { ProviderManager(get(), get()) }
                 single { AppDatabaseFactory.create(get()) }
                 single { FilesRepository(get<AppDatabase>().managedFileDao()) }
                 single { FilesManager(get(), get(), get()) }

@@ -1,5 +1,11 @@
 # Companion 新窗口接续交接
 
+最新追加：2026-10-09 revision40 / 0.42-preview(code202)，基座private main 2f2a1ec9。用户确认其设计不替换模型/提供商底层，本轮整块复用原版配置、鉴权和请求模块，具体边界见ARCHITECTURE revision40。NativeProviderCodec负责完整原版ProviderSetting/Model与核心资源的双向转换，不再逐字段剔除Vertex/API路径/Claude缓存/模型覆盖等选项；typed CredentialSlot保留API旧存储、隔离私钥和模型覆盖秘密。原版高级模型、推荐、QR导入、无密钥分享、余额/明确连接测试已接；既有Connection编辑路由也改为原版页面。标题/续跑按冻结配置读取单轮秘密快照。新增wire14，SQLite1/recovery1/execution8不变，旧null配置维持旧请求默认。
+
+本轮三个Astra代理提供设计和部分代码后因额度中止，后续由root完成，不能把代理结果当成完整审查。初批17项检查与原生构建通过，最终新增响应元数据归档检查与最终打包结果见任务work/native-providers-v42-*；APK为Companion-0.42-preview.apk。当前模拟器仍装0.41.1且由用户手动关闭，本轮没有重新开、安装或真实API请求。nativeMessage保存原版流事件元数据，只在未变形的assistant历史中回传；文字主调用尚不新增图片/embedding/客户端工具流程，选择不支持输出时明确报错。以下0.41记录为历史，以本段、实际源码和最新架构为准。
+
+0.42交付已核对18项独立检查全部通过：核心原版payload／旧格式／冻结／typed store4项、旧断点1项、codec4项、adapter4项、凭据commit4项、最终响应元数据1项。初批构建7m2s，最后新增1项检查与原生最终构建1m24s，未重跑已通过项。APK同包名/同v2证书/code202，SHA256 cd52f52873881592f75a0edab5579fe5250caf27b0a23cb47ab057369be6ae17。完整验收记录在outputs/原版提供商模块验收记录.json；实际界面和认证请求留待用户体验，不以编译代替。
+
 更新：2026-10-09，追加0.41.1/code201修复，基座main d0c8dc47：真实电脑预览打开提供商详情时，原版ModelList无条件注入ProviderManager而崩溃；现改为回调宿主不取得该依赖。同时补齐原版内置提供商为真实核心连接，保留既有连接、模型、密钥和默认模型，按稳定ID幂等添加，不能按URL合并账号。原0.41的11项检查不能替代本次页面验收。本次证据在任务目录work/provider-v41-*；以下其他0.41交付描述为首轮记录，以本段、实际源码和最新架构补充为准。实验分支不作为基座。
 
 修复验收：4项提供商适配检查与最终原生构建通过，APK同签名安装到专用Companion_UI/emulator-5580，保留firstInstallTime。实际打开提供商列表、OpenAI配置/模型页与添加模型表单，未触发新崩溃；没有提交测试模型或请求真实API。20条原版内置连接新增，原15条资源记录逐字节保留；原有启动偏好另建1条当前对话。APK为Companion-0.41.1-preview.apk，SHA256 6889871dad7410aa086584d933aca45927fa14cb10a448253703a508a285a3e1。窗口自动化未获准控制qemu，使用Android SDK检查应用内页面，不能据此声称Windows窗口已置顶。验收后窗口关闭，用户确认是手动关闭，保持关闭，不作为新崩溃。

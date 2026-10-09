@@ -4,6 +4,7 @@ import java.util.UUID
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 
 fun newId(): String = UUID.randomUUID().toString()
 @Serializable enum class Role { SYSTEM, USER, ASSISTANT }
@@ -29,9 +30,9 @@ fun defaultNodes() = listOf(WorkflowNode(visible = true, blocks = listOf(PromptB
 @Serializable enum class ModelReasoning { OFF, AUTO, LOW, MEDIUM, HIGH, XHIGH, MAX }
 @Serializable data class RequestHeader(val name: String = "", val value: String = "")
 @Serializable data class RequestBodyField(val key: String = "", val value: JsonElement)
-@Serializable data class ApiConnection(val id: String = newId(), val name: String = "API 连接", val protocol: Protocol = Protocol.OPENAI, val baseUrl: String = "https://api.openai.com/v1", val responseApi: Boolean = false, val enabled: Boolean = true, val customHeaders: List<RequestHeader> = emptyList(), val maxConcurrentRequests: Int = 2)
+@Serializable data class ApiConnection(val id: String = newId(), val name: String = "API 连接", val protocol: Protocol = Protocol.OPENAI, val baseUrl: String = "https://api.openai.com/v1", val responseApi: Boolean = false, val enabled: Boolean = true, val customHeaders: List<RequestHeader> = emptyList(), val maxConcurrentRequests: Int = 2, val nativeProvider: JsonObject? = null)
 // Legacy transport fields remain readable; a bound connection is authoritative.
-@Serializable data class ModelProfile(val id: String = newId(), val name: String = "模型", val protocol: Protocol = Protocol.OPENAI, val baseUrl: String = "https://api.openai.com/v1", val model: String = "", val temperature: Float? = null, val maxTokens: Int? = null, val responseApi: Boolean = false, val apiConnectionId: String? = null, val topP: Float? = null, val reasoning: ModelReasoning = ModelReasoning.OFF, val customBody: List<RequestBodyField> = emptyList(), @Transient val resolvedHeaders: List<RequestHeader> = emptyList())
+@Serializable data class ModelProfile(val id: String = newId(), val name: String = "模型", val protocol: Protocol = Protocol.OPENAI, val baseUrl: String = "https://api.openai.com/v1", val model: String = "", val temperature: Float? = null, val maxTokens: Int? = null, val responseApi: Boolean = false, val apiConnectionId: String? = null, val topP: Float? = null, val reasoning: ModelReasoning = ModelReasoning.OFF, val customBody: List<RequestBodyField> = emptyList(), @Transient val resolvedHeaders: List<RequestHeader> = emptyList(), val nativeModel: JsonObject? = null, @Transient val resolvedProvider: JsonObject? = null)
 @Serializable data class BodyDisplaySnapshot(val sourceTileId: String, val html: String? = null, val style: MacroTileStyle = MacroTileStyle())
 @Serializable data class TextRevision(val id: String = newId(), val text: String, val createdAt: Long = System.currentTimeMillis(), val bodyDisplay: BodyDisplaySnapshot? = null)
 @Serializable data class ChatMessage(val id: String = newId(), val role: Role = Role.USER, val text: String = "", val createdAt: Long = System.currentTimeMillis(), val outputSlot: OutputSlot = OutputSlot.BODY, val turnId: String? = null, val speakerName: String? = null, val textRevisions: List<TextRevision> = emptyList(), val activeTextRevisionId: String? = null, val activeTextRevisionCreatedAt: Long? = null, val deleted: Boolean = false, val workflowId: String? = null, val nodeId: String? = null, val rawText: String? = null, val bodyDisplay: BodyDisplaySnapshot? = null, val reasoningSnapshot: ReasoningSnapshot? = null, val authoredOpening: Boolean = false)

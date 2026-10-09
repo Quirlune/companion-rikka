@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderManager
@@ -53,13 +54,16 @@ import org.koin.compose.koinInject
 @Composable
 fun ProviderConnectionTester(
     internalProvider: ProviderSetting,
+    providerManagerOverride: ProviderManager? = null,
+    onRequestError: ((Throwable) -> Throwable)? = null,
+    enabled: Boolean = true,
 ) {
     var showTestDialog by remember { mutableStateOf(false) }
-    val providerManager = koinInject<ProviderManager>()
+    val providerManager = providerManagerOverride ?: koinInject<ProviderManager>()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    IconButton(onClick = { showTestDialog = true }) {
+    IconButton(onClick = { showTestDialog = true }, enabled = enabled) {
         Icon(HugeIcons.Connect, null)
     }
 
@@ -121,45 +125,52 @@ fun ProviderConnectionTester(
             },
             confirmButton = {
                 TextButton(
+                    enabled = enabled && nonStreamingState !is UiState.Loading &&
+                        streamingState !is UiState.Loading && toolsState !is UiState.Loading,
                     onClick = {
                         if (model == null) return@TextButton
-                        val provider = providerManager.getProviderByType(internalProvider)
+                        val testModel = model!!
+                        val effectiveSetting = testModel.providerOverwrite ?: internalProvider
+                        val provider = providerManager.getProviderByType(effectiveSetting)
                         resetStates()
                         scope.launch {
                             launch {
                                 runCatching {
                                     nonStreamingState = UiState.Loading
                                     val result = provider.generateText(
-                                        providerSetting = internalProvider,
+                                        providerSetting = effectiveSetting,
                                         messages = listOf(
                                             UIMessage.system("You are a helpful assistant"),
                                             UIMessage.user("hello"),
                                         ),
                                         params = TextGenerationParams(
-                                            model = model!!,
-                                            customHeaders = model!!.customHeaders,
-                                            customBody = model!!.customBodies
+                                            model = testModel,
+                                            customHeaders = testModel.customHeaders,
+                                            customBody = testModel.customBodies
                                         )
                                     )
                                     val text = result.message.parts
                                         .filterIsInstance<UIMessagePart.Text>()
                                         .joinToString("") { it.text }
                                     nonStreamingState = UiState.Success(text)
-                                }.onFailure { nonStreamingState = UiState.Error(it) }
+                                }.onFailure {
+                                    if (it is CancellationException) throw it
+                                    nonStreamingState = UiState.Error(onRequestError?.invoke(it) ?: it)
+                                }
                             }
                             launch {
                                 runCatching {
                                     streamingState = UiState.Loading
                                     val flow = provider.streamText(
-                                        providerSetting = internalProvider,
+                                        providerSetting = effectiveSetting,
                                         messages = listOf(
                                             UIMessage.system("You are a helpful assistant"),
                                             UIMessage.user("hello"),
                                         ),
                                         params = TextGenerationParams(
-                                            model = model!!,
-                                            customHeaders = model!!.customHeaders,
-                                            customBody = model!!.customBodies
+                                            model = testModel,
+                                            customHeaders = testModel.customHeaders,
+                                            customBody = testModel.customBodies
                                         )
                                     )
                                     flow.collect { chunk ->
@@ -168,7 +179,10 @@ fun ProviderConnectionTester(
                                         }
                                     }
                                     streamingState = UiState.Success("")
-                                }.onFailure { streamingState = UiState.Error(it) }
+                                }.onFailure {
+                                    if (it is CancellationException) throw it
+                                    streamingState = UiState.Error(onRequestError?.invoke(it) ?: it)
+                                }
                             }
                             launch {
                                 runCatching {
@@ -179,16 +193,16 @@ fun ProviderConnectionTester(
                                         execute = { emptyList() }
                                     )
                                     val result = provider.generateText(
-                                        providerSetting = internalProvider,
+                                        providerSetting = effectiveSetting,
                                         messages = listOf(
                                             UIMessage.system("You are a helpful assistant"),
                                             UIMessage.user("Use the get_current_time tool."),
                                         ),
                                         params = TextGenerationParams(
-                                            model = model!!,
+                                            model = testModel,
                                             tools = listOf(testTool),
-                                            customHeaders = model!!.customHeaders,
-                                            customBody = model!!.customBodies
+                                            customHeaders = testModel.customHeaders,
+                                            customBody = testModel.customBodies
                                         )
                                     )
                                     val message = result.message
@@ -211,7 +225,10 @@ fun ProviderConnectionTester(
                                         )
                                     }
                                     toolsState = UiState.Success(resultText)
-                                }.onFailure { toolsState = UiState.Error(it) }
+                                }.onFailure {
+                                    if (it is CancellationException) throw it
+                                    toolsState = UiState.Error(onRequestError?.invoke(it) ?: it)
+                                }
                             }
                         }
                     }

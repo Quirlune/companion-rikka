@@ -6,6 +6,30 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ConfigurationCredentialCommitTest {
+    @Test fun typedPrivateAndOverrideSlotsRollbackWithoutChangingLegacyApiKey() = runBlocking {
+        val api = CredentialSlot("account")
+        val private = CredentialSlot("account", CredentialKind.PRIVATE_KEY)
+        val override = CredentialSlot("model", CredentialKind.MODEL_API_KEY)
+        val values = mutableMapOf(api to "api-fixture", private to "private-before", override to "override-before")
+        val original = values.toMap()
+        val store = object : CredentialStore {
+            override fun get(profileId: String): String = get(CredentialSlot(profileId))
+            override fun put(profileId: String, secret: String) { put(CredentialSlot(profileId), secret) }
+            override fun remove(profileId: String) { remove(CredentialSlot(profileId)) }
+            override fun get(slot: CredentialSlot): String = values[slot].orEmpty()
+            override fun put(slot: CredentialSlot, secret: String) { values[slot] = secret }
+            override fun remove(slot: CredentialSlot) { values.remove(slot) }
+        }
+        val next = Library(connections = listOf(ApiConnection(id = "account")),
+            profiles = listOf(ModelProfile(id = "model", apiConnectionId = "account")))
+        val repository = Repository(next).apply { fail = true }
+        val issues = ConfigurationCredentialCommit.save(repository, store, next, listOf(
+            CredentialWrite("account", "private-before", "private-after", CredentialKind.PRIVATE_KEY),
+            CredentialWrite("model", "override-before", "override-after", CredentialKind.MODEL_API_KEY)))
+        assertTrue(issues.any { it.error }); assertEquals(original, values)
+        assertEquals("api-fixture", store.get("account"))
+    }
+
     private class Secrets(initial: Map<String, String>) : CredentialStore {
         val values = initial.toMutableMap()
         var failNextId: String? = null

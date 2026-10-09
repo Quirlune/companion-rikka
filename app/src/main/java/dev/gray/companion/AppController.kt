@@ -77,7 +77,7 @@ class AppController internal constructor(
         val library: Library,
         val session: Session,
         val revision: Long,
-        val secrets: Map<String, String>,
+        val secrets: Map<CredentialSlot, String>,
         val input: String,
         val regenerationBase: Session?,
         val sourceSessionId: String,
@@ -116,7 +116,7 @@ class AppController internal constructor(
                 val loaded = repository.load()
                 var initial = CompanionProviderAdapter.withBuiltInProviders(
                     LibraryFormat.upgrade(ModelCatalog.normalize(if (loaded == Library()) LibraryDefaults.create() else loaded).withStandardCharacterFields()))
-                val issues = LibraryValidator.validate(initial)
+                val issues = LibraryValidator.validate(initial) + NativeProviderCodec.validate(initial)
                 if (issues.any { it.error }) {
                     _library.value = initial
                     _state.value = _state.value.copy(loading = false, issues = issues)
@@ -205,7 +205,7 @@ class AppController internal constructor(
             }
             if (LibraryEditPreparation.changesFrozenSession(before, edited))
                 return@withLock listOf(Issue("recovery", "这一轮仍有断点；请先恢复或跳过，再修改会话环境"))
-            val rawIssues = LibraryValidator.validate(edited).filter { it.error }
+            val rawIssues = (LibraryValidator.validate(edited) + NativeProviderCodec.validate(edited)).filter { it.error }
             if (rawIssues.isNotEmpty()) {
                 _state.value = _state.value.copy(issues = rawIssues)
                 return@withLock rawIssues
@@ -232,7 +232,15 @@ class AppController internal constructor(
                 _streaming.value = ""
                 val removedConnections = before.connections.map { it.id }.toSet() - next.connections.map { it.id }.toSet()
                 val removedLegacy = before.profiles.filter { it.apiConnectionId == null && next.profiles.none { other -> other.id == it.id } }.map { it.id }
-                val cleanupFailed = (removedConnections + removedLegacy).map { runCatching { credentials.remove(it) }.isFailure }.any { it }
+                val removedOverrides = before.profiles.filter { previous ->
+                    val following = next.profiles.firstOrNull { it.id == previous.id }
+                    following == null || (previous.nativeModel?.get("providerOverwrite") is kotlinx.serialization.json.JsonObject &&
+                        following.nativeModel?.get("providerOverwrite") !is kotlinx.serialization.json.JsonObject)
+                }.flatMap { listOf(CredentialSlot(it.id, CredentialKind.MODEL_API_KEY),
+                    CredentialSlot(it.id, CredentialKind.MODEL_PRIVATE_KEY)) }
+                val removedSlots = removedConnections.flatMap { listOf(CredentialSlot(it), CredentialSlot(it, CredentialKind.PRIVATE_KEY)) } +
+                    removedLegacy.map { CredentialSlot(it) } + removedOverrides
+                val cleanupFailed = removedSlots.map { runCatching { credentials.remove(it) }.isFailure }.any { it }
                 if (cleanupFailed) {
                     val warning = Issue("connection.apiKey", "配置已保存，但旧密钥清理失败", error = false)
                     _state.value = _state.value.copy(issues = listOf(warning))
@@ -290,19 +298,19 @@ class AppController internal constructor(
             val requestLibrary = if (force) snapshot.copy(titleConfig = snapshot.titleConfig.copy(enabled = true)) else snapshot
             val request = ChatTitles.request(requestLibrary, session, Locale.getDefault().displayName)
                 ?: return listOf(Issue("title", "请先配置标题模型，并保留至少一条聊天消息"))
-            val secret = try { withContext(Dispatchers.IO) { credentials.get(ModelCatalog.credentialId(request.profile)) } }
+            val secrets = try { withContext(Dispatchers.IO) {
+                NativeProviderCodec.requiredCredentialSlots(request.profile).associateWith { credentials.get(it) }
+            } }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { return listOf(Issue("title", "标题模型的 API 密钥无法读取")) }
-            if (secret.isBlank()) return listOf(Issue("title", "标题模型的 API 连接尚未填写密钥"))
+            try { NativeProviderCodec.request(request.profile) { secrets[it].orEmpty() } }
+            catch (failure: IllegalArgumentException) { return listOf(Issue("title", failure.message ?: "标题模型连接配置无效")) }
             val source = titleSource(session)
             _state.value = _state.value.copy(titleError = null)
             viewModelScope.async(start = CoroutineStart.LAZY) {
                 try {
-                    val gateway = gatewayFactory(object : CredentialStore {
-                        override fun get(profileId: String): String = secret
-                        override fun put(profileId: String, secret: String) = error("运行凭据快照只读")
-                        override fun remove(profileId: String) = error("运行凭据快照只读")
-                    }, sessionId, snapshot.connections.associate { it.id to it.maxConcurrentRequests }, ::recordUsage)
+                    val gateway = gatewayFactory(credentialSnapshot(secrets), sessionId,
+                        snapshot.connections.associate { it.id to it.maxConcurrentRequests }, ::recordUsage)
                     val titleText = gateway.generate(request.profile, request.messages) {}
                     val title = ReasoningTextParser.parse(titleText, snapshot.reasoningParsing).text.trim()
                     if (title.isBlank()) return@async listOf(Issue("title", "模型没有返回标题"))
@@ -566,8 +574,9 @@ class AppController internal constructor(
             if (runInput.isBlank()) { setError("用户消息不能为空"); return@withLock null }
             val secrets = try {
                 withContext(Dispatchers.IO) {
-                    WorkflowRequirements.requiredProfiles(old, session, actionDescriptors).filterNotNull()
-                        .map(ModelCatalog::credentialId).distinct().associateWith { credentials.get(it) }
+                    val requestedLibrary = recovery?.frozenResources ?: old
+                    WorkflowRequirements.requiredProfiles(requestedLibrary, recovery?.initialSession ?: session, actionDescriptors).filterNotNull()
+                        .flatMap { NativeProviderCodec.requiredCredentialSlots(it) }.distinct().associateWith { credentials.get(it) }
                 }
             } catch (_: Exception) {
                 setError("API 密钥无法读取，请检查连接设置")
@@ -599,11 +608,8 @@ class AppController internal constructor(
         var titleSessionId: String? = null
         var recoveryAccepted = false
         try {
-            val gateway = gatewayFactory(object : CredentialStore {
-                override fun get(profileId: String): String = secrets[profileId].orEmpty()
-                override fun put(profileId: String, secret: String) = error("运行凭据快照只读")
-                override fun remove(profileId: String) = error("运行凭据快照只读")
-            }, session.id, snapshot.connections.associate { it.id to it.maxConcurrentRequests }, ::recordUsage)
+            val gateway = gatewayFactory(credentialSnapshot(secrets), session.id,
+                snapshot.connections.associate { it.id to it.maxConcurrentRequests }, ::recordUsage)
             val outputOrder = (snapshot.mainCalls.firstOrNull { it.id == session.mainCallId }?.workflows.orEmpty() +
                 snapshot.loadedCallGroups(session).flatMap { it.workflows })
                 .flatMap { flow -> flow.nodes.map { flow.id to it.id } }.withIndex().associate { it.value to it.index }
@@ -695,6 +701,14 @@ class AppController internal constructor(
     }
 
     fun getApiKey(connectionId: String): String = try { credentials.get(connectionId) } catch (_: Exception) { "" }
+    fun getCredential(slot: CredentialSlot): String = try { credentials.get(slot) } catch (_: Exception) { "" }
+
+    private fun credentialSnapshot(values: Map<CredentialSlot, String>): CredentialStore = object : CredentialStore {
+        override fun get(profileId: String): String = get(CredentialSlot(profileId))
+        override fun get(slot: CredentialSlot): String = values[slot].orEmpty()
+        override fun put(profileId: String, secret: String) = error("运行凭据快照只读")
+        override fun remove(profileId: String) = error("运行凭据快照只读")
+    }
     suspend fun setApiKey(connectionId: String, key: String): List<Issue> = mutex.withLock {
         if (!storageReady || library.value.connections.none { it.id == connectionId }) {
             val issue = Issue("connection.$connectionId", "API 连接不存在或资源库尚未就绪")

@@ -1,6 +1,7 @@
 package dev.gray.companion.core
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 @Serializable enum class ReasoningParsingMode { OFF, TAGGED, START_UNTIL_END }
 @Serializable data class ReasoningParsingConfig(
@@ -16,7 +17,8 @@ import kotlinx.serialization.Serializable
     }
 }
 @Serializable data class ReasoningSnapshot(
-    val text: String = "", val startedAt: Long = System.currentTimeMillis(), val finishedAt: Long? = null
+    val text: String = "", val startedAt: Long = System.currentTimeMillis(), val finishedAt: Long? = null,
+    val nativeMessage: JsonObject? = null
 )
 data class ModelResponse(val text: String, val reasoning: ReasoningSnapshot? = null)
 sealed interface ModelDelta {
@@ -46,7 +48,7 @@ class ReasoningTextParser(private val config: ReasoningParsingConfig) {
         val texts = listOfNotNull(native?.text?.takeIf { it.isNotEmpty() }, tagged.toString().takeIf { it.isNotEmpty() })
         val end = if (thinking || native?.finishedAt == null && native != null) null
             else listOfNotNull(native?.finishedAt, taggedEnd).maxOrNull()
-        return ReasoningSnapshot(texts.joinToString("\n\n"), start, end)
+        return ReasoningSnapshot(texts.joinToString("\n\n"), start, end, native?.nativeMessage)
     }
 
     fun accept(delta: ModelDelta): String {

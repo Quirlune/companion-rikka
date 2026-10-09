@@ -182,6 +182,9 @@ fun SettingProviderDetailContent(
     loadModels: (suspend (ProviderSetting) -> List<Model>)? = null,
     onModelLoadError: ((Throwable) -> Unit)? = null,
     onEditConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)? = null,
+    requestProviderManager: ProviderManager? = null,
+    onRequestError: ((Throwable) -> Throwable)? = null,
+    prepareProviderForShare: (ProviderSetting) -> ProviderSetting = { it },
 ) {
     val pager = rememberPagerState { 2 }
     val scope = rememberCoroutineScope()
@@ -211,7 +214,7 @@ fun SettingProviderDetailContent(
                     ShareSheet(shareSheetState)
                     IconButton(
                         onClick = {
-                            shareSheetState.show(provider)
+                            shareSheetState.show(prepareProviderForShare(provider))
                         }
                     ) {
                         Icon(HugeIcons.Share01, null)
@@ -272,6 +275,8 @@ fun SettingProviderDetailContent(
                         enabled = enabled,
                         onDirtyChanged = onConfigDirtyChanged,
                         extraContent = configExtraContent,
+                        requestProviderManager = requestProviderManager,
+                        onRequestError = onRequestError,
                     )
                 }
 
@@ -301,6 +306,8 @@ private fun SettingProviderConfigPage(
     enabled: Boolean,
     onDirtyChanged: (Boolean) -> Unit,
     extraContent: @Composable () -> Unit,
+    requestProviderManager: ProviderManager?,
+    onRequestError: ((Throwable) -> Throwable)?,
 ) {
     var internalProvider by remember(provider) { mutableStateOf(provider) }
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -328,9 +335,11 @@ private fun SettingProviderConfigPage(
             SettingProviderBalanceOption(
                 provider = internalProvider,
                 balanceOption = internalProvider.balanceOption,
-                onEdit = { internalProvider = internalProvider.copyProvider(balanceOption = it) }
+                onEdit = { if (enabled) internalProvider = internalProvider.copyProvider(balanceOption = it) }
             )
-            ProviderBalanceText(providerSetting = provider, style = MaterialTheme.typography.labelSmall)
+            ProviderBalanceText(providerSetting = internalProvider, style = MaterialTheme.typography.labelSmall,
+                loadPolicy = options.balanceLoadPolicy, providerManagerOverride = requestProviderManager,
+                onRequestError = onRequestError, enabled = enabled)
         }
 
         Row(
@@ -340,6 +349,8 @@ private fun SettingProviderConfigPage(
         ) {
             if (options.connectionTest) ProviderConnectionTester(
                 internalProvider = internalProvider,
+                providerManagerOverride = requestProviderManager,
+                onRequestError = onRequestError, enabled = enabled,
             )
 
             Spacer(Modifier.weight(1f))
@@ -738,7 +749,8 @@ private fun ModelSettingsForm(
                             onUpdateProviderOverride = { providerOverride ->
                                 onModelChange(model.copy(providerOverwrite = providerOverride))
                             },
-                            parentProvider = parentProvider
+                            parentProvider = parentProvider,
+                            prepareNewOverride = options.prepareNewOverride,
                         )
 
                         CustomHeaders(
@@ -1600,7 +1612,8 @@ private fun BuiltInToolsSettings(
 private fun ProviderOverrideSettings(
     providerOverride: ProviderSetting?,
     onUpdateProviderOverride: (ProviderSetting?) -> Unit,
-    parentProvider: ProviderSetting?
+    parentProvider: ProviderSetting?,
+    prepareNewOverride: (ProviderSetting) -> ProviderSetting = { it },
 ) {
     var showProviderConfig by remember { mutableStateOf(false) }
     var editingProvider by remember { mutableStateOf<ProviderSetting?>(null) }
@@ -1668,7 +1681,7 @@ private fun ProviderOverrideSettings(
                         builtIn = false,
                         models = emptyList(), // 这里必须设置为空，不然会导致循环依赖JSON
                         description = {},
-                    )
+                    )?.let(prepareNewOverride)
                     showProviderConfig = true
                 },
                 modifier = Modifier.fillMaxWidth()

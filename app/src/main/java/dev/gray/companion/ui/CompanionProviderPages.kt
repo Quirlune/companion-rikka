@@ -28,14 +28,16 @@ import me.rerere.rikkahub.ui.pages.setting.components.*
 import okhttp3.OkHttpClient
 import org.koin.compose.koinInject
 
-private val companionConfigure = ProviderConfigureOptions(
-    apiPaths = false, historyReasoning = false, claudeCache = false, googleVertex = false)
+private val companionConfigure = ProviderConfigureOptions()
 private val companionDetail = ProviderDetailOptions(
     configure = companionConfigure,
-    model = ProviderModelOptions(typesAndCapabilities = false, advancedSettings = false,
-        builtInTools = false, editModelId = true),
-    share = false, balance = false, connectionTest = false, saveToast = false,
+    model = ProviderModelOptions(editModelId = true,
+        prepareNewOverride = { NativeProviderCodec.sanitizeProvider(it).copyProvider(models = emptyList()) }),
+    saveToast = false, balanceLoadPolicy = ProviderModelLoadPolicy.MANUAL,
     modelLoadPolicy = ProviderModelLoadPolicy.MANUAL, retainConfigDraft = true)
+
+private fun profileMapping(snapshot: CompanionProviderSnapshot, provider: ProviderSetting): Map<Uuid, String> =
+    snapshot.profileIds + provider.models.associate { it.id to (snapshot.profileIds[it.id] ?: "profile:${it.id}") }
 
 /** Only presentation adapters; the actual list and detail layouts are the original pages. */
 @Composable
@@ -48,10 +50,12 @@ internal fun CompanionProvidersPage(library: Library, busy: Boolean,
     var committing by remember { mutableStateOf(false) }
     fun submit(desired: List<ProviderSetting>, complete: (Boolean) -> Unit = {}) {
         if (busy || committing) { complete(false); return }
-            val keys = desired.filter { it.id !in snapshot.connectionIds && CompanionProviderAdapter.apiKey(it).isNotEmpty() }
-                .associate { it.id to ("" to CompanionProviderAdapter.apiKey(it)) }
-            val result = CompanionProviderAdapter.plan(snapshot, desired.map { CompanionProviderAdapter.withApiKey(it, "") },
-                editedApiKeys = keys)
+            val keys = desired.filter { it.id !in snapshot.connectionIds }.flatMap { provider ->
+                NativeProviderCodec.credentialValues(provider, "provider:${provider.id}", profileMapping(snapshot, provider))
+                    .map { (slot, value) -> slot to ("" to value) }
+            }.toMap()
+            val result = CompanionProviderAdapter.plan(snapshot, desired.map(NativeProviderCodec::sanitizeProvider),
+                editedCredentials = keys)
             val plan = result.plan
             if (plan == null) {
                 toaster.show(result.issues.firstOrNull()?.message ?: "修改无效", type = ToastType.Error)
@@ -74,13 +78,13 @@ internal fun CompanionProvidersPage(library: Library, busy: Boolean,
     SettingProviderPageContent(snapshot.providers, onProvidersChange = { submit(it) },
         onProvidersChangeConfirmed = { desired, complete -> submit(desired, complete) },
         onOpenProvider = onOpenProvider, onBack = onBack,
-        allowRecommendations = false, allowImport = false, configureOptions = companionConfigure,
+        allowRecommendations = true, allowImport = true, configureOptions = companionConfigure,
         enabled = !busy && !committing)
 }
 
 @Composable
 internal fun CompanionProviderDetailPage(providerId: String, library: Library, busy: Boolean,
-    getApiKey: (String) -> String, onCommit: suspend (CompanionProviderPlan) -> List<Issue>,
+    getCredential: (CredentialSlot) -> String, onCommit: suspend (CompanionProviderPlan) -> List<Issue>,
     onEditProfile: (String) -> Unit, onSelectDefault: (String) -> Unit, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
@@ -97,7 +101,13 @@ internal fun CompanionProviderDetailPage(providerId: String, library: Library, b
         Column { SettingsHeader("API 连接", onBack); Text("连接已不存在，请返回提供商列表。", Modifier.padding(16.dp)) }
         return
     }
-    var storedKey by remember(connectionId) { mutableStateOf(getApiKey(connectionId)) }
+    fun readStored(image: CompanionProviderSnapshot): Map<CredentialSlot, String> = buildSet {
+        add(CredentialSlot(connectionId)); add(CredentialSlot(connectionId, CredentialKind.PRIVATE_KEY))
+        image.profiles.filter { it.apiConnectionId == connectionId }.forEach {
+            add(CredentialSlot(it.id, CredentialKind.MODEL_API_KEY)); add(CredentialSlot(it.id, CredentialKind.MODEL_PRIVATE_KEY))
+        }
+    }.associateWith(getCredential)
+    var storedSecrets by remember(connectionId) { mutableStateOf(readStored(snapshot)) }
     var extras by remember(connectionId) { mutableStateOf(snapshot.extras.getValue(nativeId)) }
     var configDirty by remember(connectionId) { mutableStateOf(false) }
     var committing by remember(connectionId) { mutableStateOf(false) }
@@ -113,7 +123,7 @@ internal fun CompanionProviderDetailPage(providerId: String, library: Library, b
         if (!dirty && !committing) {
             snapshot = CompanionProviderAdapter.capture(library)
             snapshot.extras[nativeId]?.let { extras = it }
-            storedKey = getApiKey(connectionId)
+            storedSecrets = readStored(snapshot)
         }
     }
     val projected = snapshot.providers.firstOrNull { it.id == nativeId }
@@ -121,13 +131,25 @@ internal fun CompanionProviderDetailPage(providerId: String, library: Library, b
         Column { SettingsHeader("API 连接", onBack); Text("连接已不存在，请返回提供商列表。", Modifier.padding(16.dp)) }
         return
     }
-    val provider = remember(projected, storedKey) { CompanionProviderAdapter.withApiKey(projected, storedKey) }
+    val provider = remember(projected, storedSecrets) {
+        NativeProviderCodec.hydrateProvider(projected, connectionId, snapshot.profileIds) { storedSecrets[it].orEmpty() }
+    }
+    val requestManager = remember(client, extras.customHeaders) {
+        val requestClient = client.newBuilder().apply {
+            if (extras.customHeaders.isNotEmpty()) addInterceptor { chain ->
+                val request = chain.request().newBuilder()
+                extras.customHeaders.forEach { request.header(it.name, it.value) }
+                chain.proceed(request.build())
+            }
+        }.build()
+        ProviderManager(requestClient, context)
+    }
 
-    fun submit(desired: List<ProviderSetting>, keys: Map<Uuid, Pair<String, String>> = emptyMap(), deleting: Boolean = false,
+    fun submit(desired: List<ProviderSetting>, keys: Map<CredentialSlot, Pair<String, String>> = emptyMap(), deleting: Boolean = false,
                complete: (Boolean) -> Unit = {}) {
         if (!editingEnabled) { complete(false); return }
         val result = CompanionProviderAdapter.plan(snapshot, desired,
-            connectionExtras = snapshot.extras + (nativeId to extras), editedApiKeys = keys)
+            connectionExtras = snapshot.extras + (nativeId to extras), editedCredentials = keys)
         val plan = result.plan
         if (plan == null) {
             toaster.show(result.issues.firstOrNull()?.message ?: "修改无效", type = ToastType.Error)
@@ -144,7 +166,7 @@ internal fun CompanionProviderDetailPage(providerId: String, library: Library, b
                 else {
                     snapshot = CompanionProviderAdapter.capture(latestLibrary.copy(connections = plan.connections, profiles = plan.profiles))
                     extras = snapshot.extras.getValue(nativeId)
-                    storedKey = getApiKey(connectionId)
+                    storedSecrets = readStored(snapshot)
                     configDirty = false
                     toaster.show("已保存", type = ToastType.Success)
                 }
@@ -156,16 +178,19 @@ internal fun CompanionProviderDetailPage(providerId: String, library: Library, b
         }
     }
 
+    fun submitProvider(edited: ProviderSetting, complete: (Boolean) -> Unit = {}) {
+        val keys = NativeProviderCodec.credentialValues(edited, connectionId, profileMapping(snapshot, edited))
+            .mapValues { (slot, value) -> storedSecrets[slot].orEmpty() to value }
+            .filterValues { it.first != it.second }
+        val clean = NativeProviderCodec.sanitizeProvider(edited)
+        submit(snapshot.providers.map { if (it.id == nativeId) clean else it }, keys, complete = complete)
+    }
     SettingProviderDetailContent(provider = provider,
         onEditConfirmed = { edited, complete ->
-            val withoutKey = CompanionProviderAdapter.withApiKey(edited, "")
-            submit(snapshot.providers.map { if (it.id == nativeId) withoutKey else it }, complete = complete)
+            submitProvider(edited, complete)
         },
         onEdit = { edited ->
-            val nextKey = CompanionProviderAdapter.apiKey(edited)
-            val keys = if (nextKey != storedKey) mapOf(nativeId to (storedKey to nextKey)) else emptyMap()
-            val withoutKey = CompanionProviderAdapter.withApiKey(edited, "")
-            submit(snapshot.providers.map { if (it.id == nativeId) withoutKey else it }, keys)
+            submitProvider(edited)
         },
         onDelete = { submit(snapshot.providers.filterNot { it.id == nativeId }, deleting = true) },
         onBack = ::requestBack, options = companionDetail, enabled = editingEnabled,
@@ -213,6 +238,12 @@ internal fun CompanionProviderDetailPage(providerId: String, library: Library, b
                 ProviderManager(queryClient, context).getProviderByType(requested).listModels(requested)
             }
         },
+        requestProviderManager = requestManager,
+        onRequestError = { failure ->
+            if (failure is CancellationException) throw failure
+            IllegalStateException("连接请求失败，请检查连接配置。")
+        },
+        prepareProviderForShare = NativeProviderCodec::sanitizeProvider,
         onModelLoadError = { failure ->
             if (failure is CancellationException) throw failure
             toaster.show("模型列表获取失败，请检查连接配置；也可以手动添加模型。", type = ToastType.Error)
