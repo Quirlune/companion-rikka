@@ -51,7 +51,7 @@ internal class AcceptedTurnPublisher(
                 regenerationBase != null && result.status != RunStatus.SUCCESS ->
                     MessageOperationResult(current.copy(pendingRun = journal ?: current.pendingRun))
                 regenerationBase != null -> MessageOperations.commitRegeneration(
-                    if (forking) regenerationBase else current, session, savedResult)
+                    regenerationBase, session, savedResult)
                 current.pendingRun != null -> MessageOperations.continuePartialTurn(current, savedResult)
                 result.status == RunStatus.SUCCESS -> MessageOperations.recordSuccessfulTurn(session, savedResult)
                 journal != null -> MessageOperations.recordPartialTurn(session, savedResult)
@@ -59,6 +59,7 @@ internal class AcceptedTurnPublisher(
             }
             val generated = operation.session ?: error(operation.issues.firstOrNull()?.message ?: "运行进度无法保存")
             val committed = generated.copy(title = current.title, titlePending = current.titlePending,
+                folderId = current.folderId,
                 isPinned = if (forking && result.status == RunStatus.SUCCESS) false else current.isPinned,
                 updatedAt = System.currentTimeMillis())
             val next = if (forking && result.status == RunStatus.SUCCESS) library.value.copy(

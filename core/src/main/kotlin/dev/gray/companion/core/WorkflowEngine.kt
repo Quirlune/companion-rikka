@@ -1,17 +1,22 @@
 package dev.gray.companion.core
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlin.coroutines.CoroutineContext
 
 class WorkflowEngine(
     private val actions: ActionRegistry = ActionRegistry.defaults(),
@@ -23,6 +28,12 @@ class WorkflowEngine(
     private data class Completed(val ref: PlannedNode, val candidate: ValidatedCandidate, val replay: Boolean = false) {
         val outcome: ActionOutcome get() = candidate.outcome
     }
+    private sealed interface SchedulerSignal {
+        data class Event(val name: String) : SchedulerSignal
+        data class Finished(val success: Boolean) : SchedulerSignal
+    }
+    private enum class PreparationStatus { ACCEPTED, INACTIVE, FAILED }
+    private data class WriterStamp(val event: String, val workflowId: String, val nodeKey: String, val queued: Boolean, val priority: Int)
 
     suspend fun run(
         library: Library,
@@ -30,7 +41,7 @@ class WorkflowEngine(
         input: String,
         gateway: ModelGateway,
         onUpdate: suspend (RunUpdate) -> Unit = {}
-    ): RunResult = execute(library, session, input, gateway, null, null, onUpdate)
+    ): RunResult = execute(CompletedWorlds.executionLibrary(library, session), session, input, gateway, null, null, onUpdate)
 
     suspend fun resume(
         library: Library,
@@ -46,8 +57,9 @@ class WorkflowEngine(
             currentSession.pendingRun?.id != recovery.id ||
             (currentSession.id != recovery.sessionId && !recovery.regenerating))
             return conflict(recovery, "恢复断点与当前会话不一致")
-        val revised = repairedResources(recovery.frozenResources, library, decision.nodeKey)
-            ?: return conflict(recovery, "调用结构或环境已变化；只能编辑失败调用的提示词块")
+        val revised = if (ExecutionSemantics(recovery.executionVersion).scopedMemoryResources) recovery.frozenResources
+            else repairedResources(recovery.frozenResources, library, decision.nodeKey, recovery.initialSession.mainCallId)
+                ?: return conflict(recovery, "调用结构或环境已变化；只能编辑失败调用的提示词块")
         if (decision.kind != RecoveryDecisionKind.SKIP) {
             val target = (revised.mainCalls.flatMap { it.configuredWorkflows() } +
                 revised.groups.flatMap { it.workflows })
@@ -77,7 +89,8 @@ class WorkflowEngine(
             recovery.unavailableKeys, recovery.historyMemory, recovery.currentOnlyMacros)
     }
 
-    private fun freezeResources(library: Library, session: Session): Library {
+    private fun freezeResources(library: Library, session: Session, executionVersion: Int): Library {
+        if (ExecutionSemantics(executionVersion).completedPureReplay) return CapturedResourceClosure.capture(library, session, executionVersion = executionVersion)
         val main = library.mainCalls.first { it.id == session.mainCallId }
         val groups = library.loadedCallGroups(session, main)
         val packages = library.loadedPromptPackages(session, main)
@@ -89,7 +102,7 @@ class WorkflowEngine(
         val connectionIds = profiles.mapNotNull { it.apiConnectionId }.toSet()
         return library.copy(
             characters = library.characters.filter { it.id == session.characterId },
-            mainCalls = listOf(ExtensionCommands.withoutMetadata(main)), extensions = emptyList(), packages = packages, groups = groups, profiles = profiles,
+            mainCalls = listOf(ExtensionCommands.withoutMetadata(main)), extensions = emptyList(), memoryConfig = null, packages = packages, groups = groups, profiles = profiles,
             connections = library.connections.filter { it.id in connectionIds },
             sessions = emptyList(), selectedSessionId = null,
             chatFolders = emptyList(), savedChats = emptyList(), configurationEdits = emptyList(),
@@ -98,11 +111,11 @@ class WorkflowEngine(
     }
 
     /** Only target prompt blocks may change execution inputs; editor metadata is not an input. */
-    private fun repairedResources(frozen: Library, live: Library, nodeKey: String): Library? {
+    private fun repairedResources(frozen: Library, live: Library, nodeKey: String, mainCallId: String): Library? {
         val workflowId = nodeKey.substringBefore('/')
         val nodeId = nodeKey.substringAfter('/', "")
         if (nodeId.isEmpty()) return null
-        val frozenMain = frozen.mainCalls.singleOrNull() ?: return null
+        val frozenMain = frozen.mainCalls.firstOrNull { it.id == mainCallId } ?: return null
         val liveMain = live.mainCalls.firstOrNull { it.id == frozenMain.id } ?: return null
         var found = false
         fun capturedMetadata(block: PromptBlock, captured: PromptBlock?): PromptBlock = block.copy(
@@ -152,7 +165,10 @@ class WorkflowEngine(
             } ||
             frozen.user != live.user || frozen.selectedPersonaId != live.selectedPersonaId ||
             frozen.selectedProfileId != live.selectedProfileId) return null
-        return frozen.copy(mainCalls = listOf(patchedMain), groups = patchedGroups,
+        if (frozen.mainCalls.filterNot { it.id == mainCallId }.any { old ->
+                live.mainCalls.firstOrNull { it.id == old.id }?.let { MacroNaming.runtimeShape(it) } != MacroNaming.runtimeShape(old)
+            } || frozen.extensions != live.extensions.filter { candidate -> frozen.extensions.any { it.id == candidate.id } }) return null
+        return frozen.copy(mainCalls = frozen.mainCalls.map { if (it.id == mainCallId) patchedMain else it }, groups = patchedGroups,
             connections = updatedConnections)
     }
 
@@ -166,7 +182,7 @@ class WorkflowEngine(
         onUpdate: suspend (RunUpdate) -> Unit
     ): RunResult {
         val traces = mutableListOf<RunTrace>()
-        val executionVersion = previous?.executionVersion ?: ExecutionSemantics.CURRENT
+        val executionVersion = previous?.executionVersion ?: session.executableWorld?.executionVersion ?: ExecutionSemantics.CURRENT
         val semantics = ExecutionSemantics(executionVersion)
         val legacy = semantics.legacyProcessing
         val updateMutex = Mutex()
@@ -180,7 +196,7 @@ class WorkflowEngine(
             unavailableResultKeys = session.unavailableResultKeys, historyMemory = session.historyMemory,
             currentOnlyMacros = session.currentOnlyMacros)
 
-        val validation = LibraryValidator.validate(library, executionVersion).firstOrNull { it.error }
+        val validation = ExecutionResources.views(library).flatMap { LibraryValidator.validate(it, executionVersion) }.firstOrNull { it.error }
         if (validation != null) {
             trace(null, "error", validation.message)
             return failed()
@@ -190,26 +206,44 @@ class WorkflowEngine(
             trace(null, "error", "主调用不存在")
             return failed()
         }
+        if (session.executableWorld?.recipes.orEmpty().flatMap { it.targets }.any {
+                it.key in session.unavailableResultKeys || it.key !in session.results
+            }) {
+            trace(null, "error", "旧分支廉价结果尚未重建，请先完成分支恢复")
+            return failed()
+        }
         if (library.characters.none { it.id == session.characterId }) {
             trace(null, "error", "角色卡不存在")
             return failed()
         }
-        if (main.workflows.none { it.enabled && it.effectiveTrigger() == RuntimeEvents.USER_MESSAGE && it.nodes.any { node -> node.enabled } }) {
+        if ((!semantics.completedPureReplay || !main.specialDefault) && main.workflows.none {
+                it.enabled && it.effectiveTrigger() == RuntimeEvents.USER_MESSAGE && it.nodes.any { node -> node.enabled }
+            }) {
             trace(null, "error", "主调用缺少 user.message 入口")
             return failed()
         }
         val stagedState = session.state.toMutableMap()
         val groups = library.loadedCallGroups(session, main)
         groups.forEach { group -> group.stateDefaults.forEach { (key, value) -> stagedState.putIfAbsent(key, value) } }
-        val processor = main.history.processor
+        val memoryBinding = MemoryPlugins.binding(library, session, main, executionVersion)
+        val processor = memoryBinding?.processor
         val initialHistory = HistoryContext(library, session, main, legacyProcessing = legacy, executionVersion = executionVersion)
         val processingCandidate = initialHistory.pendingCandidate()
         initialHistory.issues.forEach { trace(null, "history", it.message) }
-        val workflows = main.configuredWorkflows().filter {
-            semantics.hierarchicalMemory || it.id != processor.aggregationWorkflow?.id
-        } + groups.flatMap { it.workflows }
+        val workflows = (main.configuredWorkflows().filter {
+            semantics.hierarchicalMemory || it.id != main.history.processor.aggregationWorkflow?.id
+        } + groups.flatMap { it.workflows }).map { workflow ->
+            if (MemoryPlugins.workflowActive(library, session, workflow.id, executionVersion)) workflow
+            else workflow.copy(enabled = false)
+        }
         val availableActions = actions.snapshot()
-        val (plan, planningIssue) = RunPlan.create(workflows, availableActions, executionVersion)
+        val capturedWorld = if (semantics.completedPureReplay) CompletedWorlds.capture(library, session, input, executionVersion) else null
+        val completedCapture = capturedWorld?.let(::CompletedWorldCapture)
+        // Participation affects this plan only; disabling a plugin never mutates shared nodes.
+        val participatingWorkflows = workflows.map { workflow -> workflow.copy(nodes = workflow.nodes.map { node ->
+            if (PluginParticipation.nodeActive(ExecutionResources.forWorkflow(library, workflow.id, executionVersion), session, node)) node else node.copy(enabled = false)
+        }) }
+        val (plan, planningIssue) = RunPlan.create(participatingWorkflows, availableActions, executionVersion)
         if (planningIssue != null || plan == null) {
             trace(null, "error", planningIssue?.message ?: "运行计划无法创建")
             return failed()
@@ -254,7 +288,7 @@ class WorkflowEngine(
         // Pending and skipped producers cannot lend their previous-turn text to this run.
         // The saved result remains intact if that producer is not executed.
         val maskedKeys = (inactiveGroupKeys + session.unavailableResultKeys).toMutableSet()
-        if (processingCandidate == null) (processor.workflow.nodes + processor.aggregationWorkflow?.nodes.orEmpty())
+        if (processingCandidate == null) (processor?.workflow?.nodes.orEmpty() + processor?.aggregationWorkflow?.nodes.orEmpty())
             .forEach { maskedKeys += resultKeys(it) }
         workflows.filter { !it.enabled }.flatMap { it.nodes }.forEach { maskedKeys += resultKeys(it) }
         workflows.filter { it.enabled }.flatMap { it.nodes.filter { node -> !node.enabled } }
@@ -271,7 +305,7 @@ class WorkflowEngine(
         val resourceByWorkflow = buildMap {
             main.configuredWorkflows().forEach { put(it.id, main.id) }
             groups.forEach { group -> group.workflows.forEach { put(it.id, group.id) } }
-            if (processor.workflow.enabled) put(processor.workflow.id, main.id)
+            memoryBinding?.let { if (it.processor.workflow.enabled) put(it.processor.workflow.id, it.ownerId) }
         }
         val activeOwnerIds = setOf(main.id) + groups.map { it.id }
         val invocationPreparer = InvocationPreparer(library)
@@ -285,7 +319,7 @@ class WorkflowEngine(
             state = state, results = results, resultOrigins = stagedOrigins.filterKeys { it in results },
             macroHistory = stagedHistory.toMap(), promptInjections = stagedInjections.toList(),
             historyDigests = stagedDigests.toMap(), unavailableResultKeys = maskedKeys.toSet(), historyMemory = stagedMemory,
-            currentOnlyMacros = stagedHeads.toMap()
+            currentOnlyMacros = stagedHeads.toMap(), inactivePaths = emptyList()
         )
         val replies = mutableListOf<ChatMessage>()
         var bodyDisplayReceipt = previous?.bodyDisplayReceipt
@@ -299,8 +333,10 @@ class WorkflowEngine(
         }
         val recoveryBase = previous ?: RunRecovery(
             id = newId(), sessionId = session.id, turnId = currentUserMessageId.orEmpty(), input = input,
-            checkpoint = MessageOperations.captureCheckpoint(session), initialSession = session.copy(pendingRun = null),
-            frozenResources = freezeResources(library, session), executionVersion = ExecutionSemantics.CURRENT
+            checkpoint = MessageOperations.captureCheckpoint(session).let { checkpoint -> checkpoint.copy(
+                runtime = checkpoint.runtime.copy(completedWorld = CompletedWorlds.checkpointWorld(capturedWorld))) },
+            initialSession = session.copy(pendingRun = null),
+            frozenResources = freezeResources(library, session, executionVersion), executionVersion = executionVersion
         )
         fun replayIncomplete(): Boolean = previous != null && !replayedOldKeys.containsAll(oldAcceptedKeys)
         fun recoverySnapshot(): RunRecovery = recoveryBase.copy(
@@ -327,32 +363,105 @@ class WorkflowEngine(
             return RunResult(checkpoint.state, checkpoint.results, checkpoint.replies,
                 checkpoint.traces, RunStatus.PAUSED, checkpoint.resultOrigins, checkpoint.macroHistory,
                 checkpoint.promptInjections, checkpoint.historyDigests, checkpoint, checkpoint.unavailableKeys,
-                checkpoint.historyMemory, checkpoint.currentOnlyMacros)
+                checkpoint.historyMemory, checkpoint.currentOnlyMacros,
+                completedWorld = CompletedWorlds.checkpointWorld(capturedWorld))
         }
         suspend fun progress() { updateMutex.withLock { onUpdate(RunUpdate(progress = partialResult())) } }
         val executedOutput = mutableMapOf<String, String>()
         val compiledModelTargets = mutableSetOf<String>()
         val candidateExecutor = NodeCandidateExecutor(library, gateway, outcomeValidator,
             Semaphore(maxConcurrentNodes), semantics)
+        val queuedCandidateExecutor = if (semantics.independentEventLanes)
+            NodeCandidateExecutor(library, gateway, outcomeValidator, Semaphore(maxConcurrentNodes), semantics)
+        else candidateExecutor
         val visited = mutableSetOf<String>()
         var eventCount = 0
         val emittedEvents = ArrayDeque<String>()
+        // Only this actor owns stage, admission, preparation records and accepted receipts.
+        // Workers receive immutable contexts and never hold the writer while requesting a model.
+        val commands = Channel<suspend () -> Unit>(Channel.UNLIMITED)
+        var writerSender: CoroutineContext? = null
+        val writerJob = if (semantics.independentEventLanes) CoroutineScope(currentCoroutineContext()).launch {
+            for (command in commands) command()
+        } else null
+        suspend fun <T> write(block: suspend () -> T): T {
+            if (writerJob == null) return block()
+            val sender = currentCoroutineContext()
+            val result = CompletableDeferred<T>()
+            commands.send {
+                try { sender.ensureActive(); writerSender = sender; result.complete(block()) }
+                catch (failure: Throwable) { result.completeExceptionally(failure) }
+                finally { writerSender = null }
+            }
+            return result.await()
+        }
+        var signals: Channel<SchedulerSignal>? = null
+        fun emit(event: String) {
+            if (semantics.independentEventLanes) check(signals?.trySend(SchedulerSignal.Event(event))?.isSuccess == true)
+            else emittedEvents.addLast(event)
+        }
+        val preparationDependencies = if (semantics.independentEventLanes)
+            plan.preparationDependencies(library, session, main) else emptyMap()
+        val preparationCycles = mutableSetOf<String>()
+        if (semantics.independentEventLanes) {
+            val refs = plan.events.values.flatMap { it.waves.flatten() }.associateBy { it.key }
+            val edges = refs.mapValues { (key, ref) -> preparationDependencies[key].orEmpty() +
+                ref.node.dependsOn.map { "${ref.workflow.id}/$it" } }
+            val finished = mutableSetOf<String>()
+            val path = mutableListOf<String>()
+            fun visit(key: String) {
+                val index = path.indexOf(key)
+                if (index >= 0) { preparationCycles += path.drop(index); return }
+                if (!finished.add(key)) return
+                path += key
+                edges[key].orEmpty().forEach(::visit)
+                path.removeAt(path.lastIndex)
+            }
+            edges.keys.forEach(::visit)
+        }
+        val preparationTerminals = plan.events[RuntimeEvents.TURN_PREPARE]?.waves.orEmpty().flatten()
+            .associate { it.key to CompletableDeferred<PreparationStatus>() }
+        fun preparationTerminal(key: String, status: PreparationStatus) {
+            preparationTerminals[key]?.complete(status)
+        }
+        val addressWriters = mutableMapOf<String, MutableList<WriterStamp>>()
+        val candidateWindows = mutableMapOf<String, WriterStamp>()
+        val overlappingCandidates = mutableSetOf<Pair<String, String>>()
+        fun pair(a: String, b: String): Pair<String, String> = if (a < b) a to b else b to a
+        fun simultaneous(a: WriterStamp, b: WriterStamp): Boolean = a.workflowId != b.workflowId &&
+            (pair(a.nodeKey, b.nodeKey) in overlappingCandidates || a.event == b.event &&
+                (!a.queued || !b.queued || a.priority == b.priority))
 
         suspend fun perform(item: Prepared): Completed {
             val ref = item.ref
             val pureModel = ref.action?.descriptor?.execution == ActionExecution.PURE_MODEL
-            acceptedReceipts[ref.key]?.let { return Completed(ref, ValidatedCandidate(it.outcome, it.reply?.rawText), true) }
-            if (ref.key in lockedFailures && ref.key != decision?.nodeKey) {
-                val saved = priorFailures.getValue(ref.key)
+            fun withReads(candidate: ValidatedCandidate): ValidatedCandidate {
+                val reads = if (semantics.globalMemory && library.memoryConfig != null) item.context.historyRead
+                    ?: item.context.dependencyOutputs.values.mapNotNull { it.historyRead }.takeIf { it.isNotEmpty() }?.let { inherited ->
+                        HistoryPromptRead(inherited.flatMap { it.sources }.distinct(), inherited.flatMap { it.childSegmentIds }.distinct())
+                    } else null
+                return candidate.copy(outcome = candidate.outcome.copy(historyRead = reads))
+            }
+            val savedReceipt = write { acceptedReceipts[ref.key] }
+            savedReceipt?.let { return Completed(ref, ValidatedCandidate(it.outcome, it.reply?.rawText), true) }
+            val savedFailure = write { if (ref.key in lockedFailures && ref.key != decision?.nodeKey) priorFailures[ref.key] else null }
+            if (savedFailure != null) {
+                val saved = savedFailure
                 throw NodeExecutionFailure(ref, saved.reason, saved.kind, saved.source, saved.retryable)
             }
             if (ref.key == decision?.nodeKey && decision?.kind == RecoveryDecisionKind.MANUAL) {
                 if (!pureModel || decision.manualText == null)
                     throw NodeExecutionFailure(ref, "此调用不能手动提供候选文本", RecoveryFailureKind.CONFIGURATION, retryable = false)
-                return Completed(ref, ValidatedCandidate(outcomeValidator.validate(ref, item.context, ActionOutcome(decision.manualText))))
+                return Completed(ref, withReads(ValidatedCandidate(outcomeValidator.validateManual(ref, item.context, decision.manualText))))
             }
-            val candidate = candidateExecutor.execute(ref, item.context,
+            val executor = if (ref.workflow.queued) queuedCandidateExecutor else candidateExecutor
+            val candidate = executor.execute(ref, item.context,
                 correction = decision?.takeIf { it.nodeKey == ref.key }?.correction,
+                onProcessedPreview = { preview, reasoning ->
+                    updateMutex.withLock { onUpdate(RunUpdate(nodeId = ref.node.id, text = preview,
+                        visible = true, workflowId = ref.workflow.id, outputSlot = ref.node.outputSlot,
+                        turnId = currentUserMessageId, replace = true, reasoningSnapshot = reasoning)) }
+                },
                 onReasoningUpdate = { reasoning ->
                     updateMutex.withLock { onUpdate(RunUpdate(nodeId = ref.node.id, visible = true,
                         workflowId = ref.workflow.id, outputSlot = ref.node.outputSlot,
@@ -363,29 +472,31 @@ class WorkflowEngine(
                         text = "", visible = true, workflowId = ref.workflow.id,
                         outputSlot = ref.node.outputSlot, turnId = currentUserMessageId, replace = true)) }
                 })
-            return Completed(ref, candidate)
+            return Completed(ref, withReads(candidate))
         }
 
-        suspend fun executeEvent(event: String): Boolean {
-            if (++eventCount > 32) {
-                trace(null, "error", "事件链超过上限")
-                return false
-            }
-            val eventPlan = plan.events[event] ?: return true
+        suspend fun executeEvent(event: String, frame: EventPlan? = null, laneTag: String? = null,
+                                 dependenciesFailed: Set<String> = emptySet()): Boolean {
+            val eventPlan = frame ?: plan.events[event] ?: return true
+            if (frame == null && !write {
+                    if (++eventCount > 32) { trace(null, "error", "事件链超过上限"); false } else true
+                }) return false
             val processingEvent = event == RuntimeEvents.HISTORY_PROCESS
             val eventInput = if (processingEvent) processingCandidate?.text.orEmpty() else input
-            val freshWorkflows = eventPlan.waves.flatten().map { it.workflow }.distinctBy { it.id }
-                .filter { visited.add(it.id) }
+            val freshWorkflows = write {
+                val fresh = eventPlan.waves.flatten().map { it.workflow }.distinctBy { it.id }
+                    .filter { visited.add(it.id) }
+                fresh.flatMap { it.nodes }.forEach { maskedKeys += resultKeys(it) }
+                maskViews(fresh.flatMap { it.nodes })
+                fresh
+            }
             val freshIds = freshWorkflows.mapTo(mutableSetOf()) { it.id }
             val admittedWorkflows = mutableSetOf<String>()
             val evaluatedWorkflows = mutableSetOf<String>()
-            // Mask every scheduled output before evaluating any trigger. Historical macro.*
-            // versions remain an explicit, independent read path.
-            freshWorkflows.flatMap { it.nodes }.forEach { maskedKeys += resultKeys(it) }
-            maskViews(freshWorkflows.flatMap { it.nodes })
             val skipped = mutableSetOf<String>()
             val outcomes = mutableMapOf<String, ActionOutcome>()
             for ((waveIndex, wave) in eventPlan.waves.withIndex()) {
+                val prepared = write {
                 val waveState = stagedState.toMap()
                 val waveResults = visibleResults()
                 val waveOrigins = stagedOrigins.filterKeys { it in waveResults }
@@ -396,27 +507,32 @@ class WorkflowEngine(
                 fun captureMacroTarget(ref: PlannedNode): MacroTargetSnapshot? {
                     if (targetWorld == null || ref.node.actionId != "macro.process") return null
                     val address = ref.node.declaredWriteAddress(ref.action?.descriptor) ?: return null
-                    val version = MacroReferences.currentVersion(library, targetWorld, address)
+                    val resources = ExecutionResources.forWorkflow(library, ref.workflow.id, executionVersion)
+                    val version = MacroReferences.currentVersion(resources, targetWorld, address)
                     val hiddenHead = address in targetWorld.currentOnlyMacros && version == null &&
                         (address.startsWith("result.") || address.startsWith("state."))
                     val text = when {
                         hiddenHead -> null
                         version != null -> version.text
                         address.startsWith("state.") -> targetWorld.state[address.substring(6)]
-                        else -> MacroReferences.baseValue(library, targetWorld, address)
+                        else -> MacroReferences.baseValue(resources, targetWorld, address)
                     }
                     return MacroTargetSnapshot(address, text, version?.enabled != false)
                 }
-                val environmentId = "$event:$waveIndex"
+                val environmentId = if (laneTag == null) "$event:$waveIndex" else "$event:$laneTag:$waveIndex"
                 environments.putIfAbsent(environmentId, RecoveryEnvironment(environmentId, event,
                     waveSession.copy(pendingRun = null), eventInput))
                 val waveHistory = HistoryContext(library, waveSession, main, processingEvent, processingCandidate, legacy, executionVersion = executionVersion)
                 val waveEnvironment = InvocationEnvironment(waveSession, eventInput, waveHistory, currentUserMessageId, executionVersion)
                 val waveIssues = mutableListOf<Issue>()
-                val waveRenderer = TemplateRenderer(
-                    loadedResources(library, waveSession, waveState, waveResults, eventInput, waveIssues, waveOrigins, waveHistory, executionVersion),
-                    eventInput, waveResults, waveState, waveIssues, waveOrigins, waveSession, waveHistory, executionVersion
-                )
+                val renderers = mutableMapOf<String, TemplateRenderer>()
+                fun rendererFor(workflowId: String): TemplateRenderer = renderers.getOrPut(workflowId) {
+                    val resources = ExecutionResources.forWorkflow(library, workflowId, executionVersion)
+                    val history = waveHistory.withResources(resources)
+                    TemplateRenderer(
+                        loadedResources(resources, waveSession, waveState, waveResults, eventInput, waveIssues, waveOrigins, history, executionVersion),
+                        eventInput, waveResults, waveState, waveIssues, waveOrigins, waveSession, history, executionVersion)
+                }
                 // Admit once at the first ready wave of this level, using one shared snapshot
                 // for peers. Higher levels can observe the completed lower levels.
                 wave.map { it.workflow }.distinctBy { it.id }.filter {
@@ -425,9 +541,9 @@ class WorkflowEngine(
                     if (workflow.id in admittedIds) admittedWorkflows += workflow.id
                     else if (workflow.id in declinedIds) Unit
                     else if (checkedCondition(workflow.condition, "workflow.${workflow.id}", waveState, waveResults,
-                        eventInput, waveIssues) { waveRenderer.read(it, "workflow.${workflow.id}.condition.expression") } &&
+                        eventInput, waveIssues) { rendererFor(workflow.id).read(it, "workflow.${workflow.id}.condition.expression") } &&
                         RecognitionEvaluator.matches(workflow.recognition) { template ->
-                            waveRenderer.render(template, "workflow.${workflow.id}.recognition")
+                            rendererFor(workflow.id).render(template, "workflow.${workflow.id}.recognition")
                         }) {
                         admittedWorkflows += workflow.id
                         admittedIds += workflow.id
@@ -438,7 +554,12 @@ class WorkflowEngine(
                     if (ref.workflow.id !in admittedWorkflows) continue
                     if (ref.key !in replyRank) replyRank[ref.key] = nextReplyRank++
                     if (ref.key in acceptedReceipts) active += ref
-                    else if (ref.key in explicitSkips) {
+                    else if (ref.key in dependenciesFailed) {
+                        priorFailures[ref.key] = RecoveryFailure(ref.key, ref.workflow.id, ref.node.id,
+                            ref.node.title, RecoveryFailureKind.CONFIGURATION, "必要的提示词准备未成功，目标模型未执行", retryable = false)
+                        skipped += ref.key
+                        trace(ref, "skipped", "必要的提示词准备未成功，目标模型未执行")
+                    } else if (ref.key in explicitSkips) {
                         skipped += ref.key
                         trace(ref, "skipped", "已明确跳过此调用")
                     } else if (ref.key in inactiveKeys) {
@@ -450,20 +571,32 @@ class WorkflowEngine(
                             ref.node.dependsOn.none { "${ref.workflow.id}/$it" in explicitSkips || "${ref.workflow.id}/$it" in priorFailures })
                             inactiveKeys += ref.key
                         trace(ref, "skipped", "依赖节点未执行")
-                    } else if (!ref.node.enabled || !checkedCondition(ref.node.condition,
+                    } else if (!ref.node.enabled || !PluginParticipation.nodeActive(ExecutionResources.forWorkflow(library, ref.workflow.id, executionVersion), waveSession, ref.node) || !checkedCondition(ref.node.condition,
                         "workflow.${ref.workflow.id}.node.${ref.node.id}", waveState, waveResults, eventInput, waveIssues) {
-                            waveRenderer.read(it, "workflow.${ref.workflow.id}.node.${ref.node.id}.condition.expression")
+                            rendererFor(ref.workflow.id).read(it, "workflow.${ref.workflow.id}.node.${ref.node.id}.condition.expression")
                         } ||
                         (ref.node.recognition != null && !RecognitionEvaluator.matches(ref.node.recognition) { template ->
-                            waveRenderer.render(template, "workflow.${ref.workflow.id}.node.${ref.node.id}.recognition")
+                            rendererFor(ref.workflow.id).render(template, "workflow.${ref.workflow.id}.node.${ref.node.id}.recognition")
                         })) {
                         skipped += ref.key
                         inactiveKeys += ref.key
                         trace(ref, "skipped", "节点未启用或条件不满足")
                     } else active += ref
                 }
-                waveIssues.firstOrNull { it.error }?.let { trace(null, "error", it.message); return false }
-                if (active.isEmpty()) continue
+                if (semantics.independentEventLanes) wave.forEach { ref ->
+                    if (ref.workflow.id !in admittedWorkflows || ref.key in inactiveKeys)
+                        preparationTerminal(ref.key, PreparationStatus.INACTIVE)
+                    else if (ref.key in skipped) preparationTerminal(ref.key, PreparationStatus.FAILED)
+                }
+                waveIssues.firstOrNull { it.error }?.let { issue ->
+                    trace(null, "error", issue.message)
+                    if (semantics.independentEventLanes) wave.firstOrNull { it.key !in acceptedReceipts }?.let { ref ->
+                        priorFailures[ref.key] = RecoveryFailure(ref.key, ref.workflow.id, ref.node.id, ref.node.title,
+                            RecoveryFailureKind.CONFIGURATION, issue.message, retryable = false)
+                    }
+                    return@write null
+                }
+                if (active.isEmpty()) return@write emptyList<Prepared>()
                 val addressesByRef = active.associateWith { ref ->
                     ref.node.declaredOutputAddresses(ref.action?.descriptor)
                 }
@@ -475,11 +608,12 @@ class WorkflowEngine(
                         priorFailures[ref.key] = RecoveryFailure(ref.key, ref.workflow.id, ref.node.id,
                             ref.node.title, RecoveryFailureKind.CONFIGURATION, "并行节点写入同一宏地址", retryable = false)
                         skipped += ref.key
+                        preparationTerminal(ref.key, PreparationStatus.FAILED)
                         trace(ref, "error", "并行节点写入同一宏地址")
                     }
                     active.removeAll(conflicting)
                 }
-                if (active.isEmpty()) continue
+                if (active.isEmpty()) return@write emptyList<Prepared>()
                 val prepared = mutableListOf<Prepared>()
                 val activeModelTargets = active.filter { it.action?.descriptor?.usesModel == true }.mapTo(mutableSetOf()) { it.key }
                 val injectionKeys = mutableSetOf<Pair<String, String>>()
@@ -489,6 +623,7 @@ class WorkflowEngine(
                     priorFailures[ref.key] = RecoveryFailure(ref.key, ref.workflow.id, ref.node.id,
                         ref.node.title, kind, reason, retryable = false)
                     skipped += ref.key
+                    preparationTerminal(ref.key, PreparationStatus.FAILED)
                     trace(ref, "error", reason)
                 }
                 // Resolve injection targets before compiling any model prompt in this wave.
@@ -506,6 +641,10 @@ class WorkflowEngine(
                     val issues = rendered.issues + descriptor.validate(arguments, "node.${ref.node.id}")
                     issues.firstOrNull { it.error }?.let { preparationFailure(ref, it.message) }
                     if (ref.key in skipped) continue
+                    if (!semantics.anchoredPromptSlots && descriptor.injectionTargetBlockField?.let(arguments::get)?.isNotBlank() == true) {
+                        preparationFailure(ref, "此恢复版本不支持指定注入槽")
+                        continue
+                    }
                     val id = arguments[idField]?.trim().orEmpty()
                     val resourceId = resourceByWorkflow.getValue(ref.workflow.id)
                     if (!injectionKeys.add(resourceId to id)) {
@@ -518,9 +657,11 @@ class WorkflowEngine(
                     if (!descriptor.removesInjection) {
                         val target = injectionTarget(main, availableActions,
                             descriptor.injectionTargetWorkflowField?.let(arguments::get),
-                            descriptor.injectionTargetNodeField?.let(arguments::get))
+                            descriptor.injectionTargetNodeField?.let(arguments::get),
+                            descriptor.injectionTargetBlockField?.let(arguments::get), executionVersion)
                         if (target == null) {
-                            preparationFailure(ref, "提示词注入目标不存在或不是主调用模型节点")
+                            preparationFailure(ref, if (descriptor.injectionTargetBlockField?.let(arguments::get)?.isNotBlank() == true)
+                                "注入槽不存在、已停用或不属于目标模型节点" else "提示词注入目标不存在或不是主调用模型节点")
                             continue
                         }
                         targets += target
@@ -534,9 +675,10 @@ class WorkflowEngine(
                 for (ref in active) {
                     if (ref.key in skipped) continue
                     val node = ref.node
+                    val resources = ExecutionResources.forWorkflow(library, ref.workflow.id, executionVersion)
                     if (ref.key in acceptedReceipts) {
                         prepared += Prepared(ref, ActionContext(node, eventInput, emptyList(), emptyMap(),
-                            waveState, waveResults, null, gateway, {}, session = waveSession, library = library,
+                            waveState, waveResults, null, gateway, {}, session = waveSession, library = resources,
                             workflowId = ref.workflow.id, executionVersion = executionVersion))
                         continue
                     }
@@ -548,9 +690,13 @@ class WorkflowEngine(
                     val contextResults = contextSession.results
                     val contextHistory = if (frozenEnvironment == null) waveHistory else
                         HistoryContext(library, contextSession, main, processingEvent, processingCandidate, legacy, executionVersion = executionVersion)
+                    val dependencyReads = node.dependsOn.mapNotNull { id ->
+                        val producer = ref.workflow.nodes.firstOrNull { it.id == id } ?: return@mapNotNull null
+                        outcomes["${ref.workflow.id}/$id"]?.historyRead?.let { producer.outputKey to it }
+                    }.toMap()
                     val preparation = try {
                         invocationPreparer.prepare(ref, InvocationEnvironment(contextSession,
-                            frozenEnvironment?.input ?: eventInput, contextHistory, currentUserMessageId, executionVersion),
+                            frozenEnvironment?.input ?: eventInput, contextHistory, currentUserMessageId, executionVersion, dependencyReads, macroTarget),
                             frozenPreparation, renderedInjections[ref.key])
                     } catch (failure: NodeExecutionFailure) {
                         preparationFailure(ref, failure.detail, failure.kind)
@@ -567,7 +713,7 @@ class WorkflowEngine(
                                 onUpdate(RunUpdate(nodeId = node.id, text = delta, visible = true,
                                     workflowId = ref.workflow.id, outputSlot = node.outputSlot, turnId = currentUserMessageId))
                             }
-                        }, dependencyOutputs, contextSession, library, ref.workflow.id, executionVersion, macroTarget
+                        }, dependencyOutputs, contextSession, resources, ref.workflow.id, executionVersion, macroTarget, preparation.historyRead
                     )
                     prepared += Prepared(ref, context)
                     if (ref.key !in acceptedReceipts && ref.key !in preparedRecords) preparedRecords[ref.key] =
@@ -581,18 +727,31 @@ class WorkflowEngine(
                         provisional = true)
                 }
                 if (prepared.any { it.ref.key !in acceptedReceipts }) progress()
-                suspend fun recordFailure(failure: NodeExecutionFailure) {
+                if (semantics.independentEventLanes) prepared.filter { it.ref.key !in acceptedReceipts }.forEach { item ->
+                    val stamp = WriterStamp(event, item.ref.workflow.id, item.ref.key, item.ref.workflow.queued, item.ref.priority)
+                    candidateWindows.values.filter { it.workflowId != stamp.workflowId }.forEach { active ->
+                        overlappingCandidates += pair(active.nodeKey, stamp.nodeKey)
+                    }
+                    candidateWindows[item.ref.key] = stamp
+                }
+                prepared.toList()
+                } ?: return false
+                if (prepared.isEmpty()) continue
+                suspend fun recordFailureOwned(failure: NodeExecutionFailure) {
                     val category = failure.detail.ifEmpty {
                         if (failure.ref.action?.descriptor?.usesModel == true) "模型调用失败" else "动作执行失败"
                     }
                     priorFailures[failure.ref.key] = RecoveryFailure(failure.ref.key, failure.ref.workflow.id,
                         failure.ref.node.id, failure.ref.node.title, failure.kind, category, failure.source, failure.retryable)
                     skipped += failure.ref.key
+                    candidateWindows.remove(failure.ref.key)
+                    preparationTerminal(failure.ref.key, PreparationStatus.FAILED)
                     trace(failure.ref, "error", category)
                 }
+                suspend fun recordFailure(failure: NodeExecutionFailure) = write { recordFailureOwned(failure) }
                 val usedAddresses = mutableSetOf<String>()
                 val usedPatches = mutableSetOf<InjectionIdentity>()
-                suspend fun publishCompleted(completed: List<Completed>) {
+                suspend fun publishCompleted(completed: List<Completed>) = write {
                     currentCoroutineContext().ensureActive()
                     val validCompleted = mutableListOf<Completed>()
                     for (item in completed) {
@@ -602,7 +761,12 @@ class WorkflowEngine(
                         val patchIds = item.outcome.injectionWrites.map { patch ->
                             InjectionIdentity(resourceByWorkflow.getValue(item.ref.workflow.id), patch.id)
                         }
-                        val invalid = addresses.any { it in usedAddresses } ||
+                        val stamp = WriterStamp(event, item.ref.workflow.id, item.ref.key, item.ref.workflow.queued, item.ref.priority)
+                        val actualKeys = addresses + patchIds.map { "injection:${it.resourceId}/${it.id}" }
+                        val concurrentConflict = semantics.independentEventLanes && !item.replay && actualKeys.any { address ->
+                            addressWriters[address].orEmpty().any { simultaneous(it, stamp) }
+                        }
+                        val invalid = concurrentConflict || addresses.any { it in usedAddresses } ||
                             patchIds.size != patchIds.distinct().size || patchIds.any { it in usedPatches } ||
                             item.outcome.emittedEvents.any { it.isBlank() || (if (legacy) it in RuntimeEvents.reserved else RuntimeEvents.isReserved(it)) } ||
                             (item.outcome.macroWrites.keys + item.outcome.activationWrites.keys).any {
@@ -614,6 +778,8 @@ class WorkflowEngine(
                                 item.ref.node.id, item.ref.node.title, RecoveryFailureKind.CONFIGURATION,
                                 "并行节点写入冲突或结果地址无效", retryable = false)
                             skipped += item.ref.key
+                            candidateWindows.remove(item.ref.key)
+                            preparationTerminal(item.ref.key, PreparationStatus.FAILED)
                             trace(item.ref, "error", "并行节点写入冲突或结果地址无效")
                         } else {
                             usedAddresses += addresses
@@ -625,27 +791,35 @@ class WorkflowEngine(
                     for (item in validCompleted) {
                         currentCoroutineContext().ensureActive()
                         val receipt = if (item.replay) acceptedReceipts.getValue(item.ref.key) else try {
-                            val automaticSegment = if (!legacy && processingEvent && processingCandidate != null &&
+                            val automaticSegment = if (!legacy && processingEvent && processingCandidate != null && processor != null &&
                                 item.ref.workflow.id == processor.workflow.id && item.ref.node.id ==
                                     processor.workflow.nodes.lastOrNull { it.enabled && it.outputKey == processor.outputKey }?.id &&
-                                item.outcome.text.isNotBlank()) HistoryMemory.segmentFromSources("历史摘要", item.outcome.text,
-                                    processingCandidate.sources, processor.workflow.id) else null
+                                item.outcome.text.isNotBlank()) {
+                                val sources = if (semantics.globalMemory && library.memoryConfig != null) {
+                                    val actual = item.outcome.historyRead?.sources.orEmpty()
+                                    if (actual.isEmpty() || actual.any { it !in processingCandidate.sources })
+                                        throw NodeExecutionFailure(item.ref, "摘要提示词没有引用可处理的正文楼层，请使用原生 History 引用",
+                                            RecoveryFailureKind.PROMPT, retryable = false)
+                                    processingCandidate.sources.filter { it in actual }
+                                } else processingCandidate.sources
+                                HistoryMemory.segmentFromSources("历史摘要", item.outcome.text, sources, processor.workflow.id)
+                            } else null
                             outcomePublisher.prepare(item.ref, item.outcome,
                                 snapshot(stagedState.toMap(), stagedResults.toMap()).copy(messages = session.messages + replies),
                                 compiledModelTargets, processingEvent, automaticSegment, item.candidate.rawModelText,
                                 item.candidate.fullResponseText, item.candidate.reasoningSnapshot)
                         } catch (failure: NodeExecutionFailure) {
-                            recordFailure(failure)
+                            recordFailureOwned(failure)
                             continue
                         }
                         if (!item.replay) item.candidate.provenanceNote?.let { trace(item.ref, "warning", it) }
                         val publication = receipt.publication
                         val nextMemory = try { HistoryMemory.apply(stagedMemory, publication.historyWrites) }
                         catch (failure: IllegalArgumentException) {
-                            recordFailure(NodeExecutionFailure(item.ref, failure.message.orEmpty(), RecoveryFailureKind.CONFLICT, retryable = false))
+                            recordFailureOwned(NodeExecutionFailure(item.ref, failure.message.orEmpty(), RecoveryFailureKind.CONFLICT, retryable = false))
                             continue
                         } catch (failure: IllegalStateException) {
-                            recordFailure(NodeExecutionFailure(item.ref, failure.message.orEmpty(), RecoveryFailureKind.CONFLICT, retryable = false))
+                            recordFailureOwned(NodeExecutionFailure(item.ref, failure.message.orEmpty(), RecoveryFailureKind.CONFLICT, retryable = false))
                             continue
                         }
                         fun currentVersion(address: String): Int = maxOf(stagedHeads[address]?.version ?: 0,
@@ -655,11 +829,11 @@ class WorkflowEngine(
                                 appends.isNotEmpty() && (address in stagedHeads || stagedHistory[address].orEmpty().isNotEmpty()) &&
                                     appends.first().version <= currentVersion(address)
                             } || publication.headWrites.any { (address, head) -> head.version <= currentVersion(address) })) {
-                            recordFailure(NodeExecutionFailure(item.ref, "已接受宏版本与修复后的写入冲突",
+                            recordFailureOwned(NodeExecutionFailure(item.ref, "已接受宏版本与修复后的写入冲突",
                                 RecoveryFailureKind.CONFLICT, retryable = false))
                             continue
                         }
-                        val publicationContext = currentCoroutineContext()
+                        val publicationContext = writerSender ?: currentCoroutineContext()
                         publicationContext.ensureActive()
                         // Once accepted, its in-memory receipt and durable progress form one short
                         // cancellation-safe boundary. Model requests and preparation stay cancellable.
@@ -679,6 +853,28 @@ class WorkflowEngine(
                             } }
                             stagedInjections += publication.injectionAdds
                             stagedMemory = nextMemory
+                            // Recipes are metadata for this accepted receipt. They never publish
+                            // effects or remove a value from the live run's results.
+                            try {
+                                completedCapture?.accepted(item.ref,
+                                    prepared.firstOrNull { it.ref.key == item.ref.key }?.context?.takeUnless { item.replay },
+                                    receipt.outcome, publication)
+                            } catch (cancelled: CancellationException) { throw cancelled }
+                            catch (_: Exception) {
+                                // Capture failure retains the already accepted value in its branch.
+                            }
+                            if (semantics.independentEventLanes) {
+                                val stamp = WriterStamp(event, item.ref.workflow.id, item.ref.key, item.ref.workflow.queued, item.ref.priority)
+                                val keys = publication.macroAppends.keys + publication.headWrites.keys +
+                                    publication.headRemovals + publication.resultWrites.keys.map { "result.$it" } +
+                                    publication.stateWrites.keys.map { "state.$it" } +
+                                    publication.historyWrites.views.map { "history-view:${it.viewId}" } +
+                                    (publication.injectionAdds.map { InjectionIdentity(it.origin.resourceId, it.id) } +
+                                        publication.injectionRemovals).map { "injection:${it.resourceId}/${it.id}" }
+                                keys.forEach { addressWriters.getOrPut(it) { mutableListOf() }.add(stamp) }
+                            }
+                            preparationTerminal(item.ref.key, PreparationStatus.ACCEPTED)
+                            candidateWindows.remove(item.ref.key)
                             outcomes[item.ref.key] = receipt.outcome
                             executedOutput[item.ref.key] = stagedResults[item.ref.node.outputKey].orEmpty()
                             receipt.reply?.let { replies += it; orderReplies() }
@@ -705,7 +901,7 @@ class WorkflowEngine(
                         }
                         if (!item.replay) trace(item.ref, "done", "")
                     }
-                    published.flatMap { it.outcome.emittedEvents }.forEach { emittedEvents.addLast(it) }
+                    published.flatMap { it.outcome.emittedEvents }.forEach(::emit)
                 }
                 suspend fun attempt(item: Prepared): Pair<Completed?, NodeExecutionFailure?> = try {
                     perform(item) to null
@@ -728,6 +924,23 @@ class WorkflowEngine(
                     it.ref.action?.descriptor?.execution == ActionExecution.PURE_MODEL && it.ref.node.dependsOn.isEmpty() &&
                         it.ref.node.outputKey.isNotBlank()
                 }
+                // A special default has one final BODY producer. Its inputs are already frozen
+                // for this wave; unrelated handlers need not delay its durable acceptance.
+                val earlyDefault = if (semantics.earlyDefaultBodyPublication && prepared.size > 1 &&
+                    main.specialDefault && (!semantics.legacyTiles || main.bodySourceTileId == null) && !processingEvent) {
+                    val primary = DefaultCallRules.primary(main)
+                    prepared.singleOrNull { item -> item.ref.workflow.id == primary?.id &&
+                        item.ref.node.id == primary?.nodes?.singleOrNull()?.id &&
+                        item.ref.action?.descriptor?.execution == ActionExecution.PURE_MODEL &&
+                        item.ref.node.visible && item.ref.node.outputSlot == OutputSlot.BODY &&
+                        item.ref.node.dependsOn.isEmpty() && item.ref.node.outputKey.isNotBlank()
+                    }?.takeIf { candidate ->
+                        val writes = candidate.ref.node.declaredOutputAddresses(candidate.ref.action?.descriptor)
+                        prepared.filter { it !== candidate }.none { peer ->
+                            peer.ref.node.declaredOutputAddresses(peer.ref.action?.descriptor).any { it in writes }
+                        }
+                    }
+                } else null
                 if (earlyPublish) supervisorScope {
                     val received = Channel<Pair<Completed?, NodeExecutionFailure?>>(prepared.size)
                     val tasks = prepared.map { item -> async { received.send(attempt(item)) } }
@@ -738,20 +951,40 @@ class WorkflowEngine(
                     }
                     tasks.awaitAll()
                     received.close()
+                } else if (earlyDefault != null) supervisorScope {
+                    val received = Channel<Pair<Prepared, Pair<Completed?, NodeExecutionFailure?>>>(prepared.size)
+                    val tasks = prepared.map { item -> async { received.send(item to attempt(item)) } }
+                    val buffered = mutableMapOf<String, Pair<Completed?, NodeExecutionFailure?>>()
+                    repeat(prepared.size) {
+                        val (item, attempted) = received.receive()
+                        if (item.ref.key == earlyDefault.ref.key) {
+                            attempted.second?.let { recordFailure(it) }
+                            attempted.first?.let { publishCompleted(listOf(it)) }
+                            // usedAddresses now protects the accepted default from undeclared
+                            // writes returned later by a handler. Such a handler must fail.
+                        } else buffered[item.ref.key] = attempted
+                    }
+                    tasks.awaitAll()
+                    received.close()
+                    val remaining = prepared.filter { it.ref.key != earlyDefault.ref.key }.map { buffered.getValue(it.ref.key) }
+                    remaining.mapNotNull { it.second }.forEach { recordFailure(it) }
+                    publishCompleted(remaining.mapNotNull { it.first })
                 } else {
                     val attempted = supervisorScope { prepared.map { item -> async { attempt(item) } }.awaitAll() }
                     attempted.mapNotNull { it.second }.forEach { recordFailure(it) }
                     publishCompleted(attempted.mapNotNull { it.first })
                 }
             }
+            write {
             if (!legacy) for (workflow in freshWorkflows) {
                 val enabled = workflow.nodes.filter { it.enabled }.map { "${workflow.id}/${it.id}" }
+                val primary = workflow.id == DefaultCallRules.primary(main)?.id
                 val complete = workflow.id in admittedIds && enabled.any { it in outcomes } &&
-                    enabled.all { it in outcomes || it in inactiveKeys } &&
+                    enabled.all { it in outcomes || (!semantics.primaryReplyCompletion || !primary) && it in inactiveKeys } &&
                     enabled.none { it in explicitSkips || it in priorFailures }
                 if (complete && dispatchedCompletions.add(workflow.id)) {
                     if (workflow.id !in completedWorkflowIds) {
-                        val completionContext = currentCoroutineContext()
+                        val completionContext = writerSender ?: currentCoroutineContext()
                         completionContext.ensureActive()
                         withContext(NonCancellable) {
                             completionContext.ensureActive()
@@ -760,8 +993,20 @@ class WorkflowEngine(
                         }
                     }
                     val completedEvent = RuntimeEvents.workflowCompleted(workflow.id)
-                    if (completedEvent in plan.events) emittedEvents.addLast(completedEvent)
+                    if (completedEvent in plan.events) emit(completedEvent)
+                    if (semantics.primaryReplyCompletion && primary && replies.any {
+                            it.workflowId == workflow.id && it.outputSlot == OutputSlot.BODY && !it.deleted && it.text.isNotBlank()
+                        }) emit(RuntimeEvents.REPLY_COMPLETED)
                 }
+            }
+            if (semantics.independentEventLanes) freshWorkflows.forEach { workflow -> workflow.nodes.forEach { node ->
+                val key = "${workflow.id}/${node.id}"
+                preparationTerminal(key, when {
+                    key in outcomes -> PreparationStatus.ACCEPTED
+                    key in priorFailures || key in explicitSkips -> PreparationStatus.FAILED
+                    else -> PreparationStatus.INACTIVE
+                })
+            } }
             }
             return true
         }
@@ -775,9 +1020,140 @@ class WorkflowEngine(
             return true
         }
 
+        // A frame is one workflow's causal chain. Queue cohorts share a global gate;
+        // parallel frames never acquire it. All acceptance still goes through write().
+        val scheduledWorkflowIds = mutableSetOf<String>()
+        val queuedWaiting = mutableListOf<Pair<Int, CompletableDeferred<Unit>>>()
+        var queuedPriority: Int? = null
+        var queuedActive = 0
+        fun pumpQueue() {
+            if (queuedActive == 0) queuedPriority = queuedWaiting.minOfOrNull { it.first }
+            val ready = queuedWaiting.filter { it.first == queuedPriority }
+            queuedWaiting.removeAll(ready.toSet())
+            queuedActive += ready.size
+            ready.forEach { it.second.complete(Unit) }
+        }
+        suspend fun drainLanes(initialEvents: List<String>): Boolean = supervisorScope {
+            val received = Channel<SchedulerSignal>(Channel.UNLIMITED)
+            signals = received
+            var running = 0
+            var successful = true
+            write {
+                val initialNodes = initialEvents.flatMap { plan.events[it]?.waves.orEmpty().flatten() }.map { it.node }
+                initialNodes.forEach { maskedKeys += resultKeys(it) }
+                maskViews(initialNodes)
+            }
+            suspend fun activate(event: String) {
+                val frames = write {
+                    if (++eventCount > 32) {
+                        trace(null, "error", "事件链超过上限")
+                        successful = false
+                        emptyList()
+                    } else {
+                        val eventPlan = plan.events[event]
+                        val refs = eventPlan?.waves.orEmpty().flatten()
+                        val fresh = refs.map { it.workflow }.distinctBy { it.id }
+                            .filter { scheduledWorkflowIds.add(it.id) }
+                        // Mask the entire activation, including queued frames that have not
+                        // acquired a permit yet, before any peer freezes its prompt input.
+                        fresh.flatMap { it.nodes }.forEach { maskedKeys += resultKeys(it) }
+                        maskViews(fresh.flatMap { it.nodes })
+                        fresh.map { workflow ->
+                            val lane = if (workflow.queued) eventPlan!!.queuedWaves else eventPlan!!.parallelWaves
+                            val waves = lane.map { wave -> wave.filter { it.workflow.id == workflow.id } }.filter { it.isNotEmpty() }
+                            workflow to EventPlan(event, waves)
+                        }
+                    }
+                }
+                // Register the whole ready cohort together. Models waiting for real preparation
+                // prerequisites join only afterwards, so they cannot hold the injector's gate.
+                val entries = write {
+                    frames.associate { (workflow, frame) ->
+                        val waitKeys = frame.waves.flatten().filter { it.action?.descriptor?.usesModel == true }
+                            .filter { it.key !in preparationCycles }
+                            .flatMap { preparationDependencies[it.key].orEmpty() }
+                            .filterNot { it.startsWith("${workflow.id}/") }.toSet()
+                        val gate = CompletableDeferred<Unit>()
+                        if (!workflow.queued) gate.complete(Unit)
+                        else if (waitKeys.isEmpty()) queuedWaiting += workflow.priority to gate
+                        workflow.id to (waitKeys to gate)
+                    }.also { pumpQueue() }
+                }
+                for ((workflow, frame) in frames) {
+                    running++
+                    launch {
+                        var acquired = false
+                        var success = false
+                        try {
+                            val (waitKeys, gate) = entries.getValue(workflow.id)
+                            val failed = waitKeys.filter { key ->
+                                preparationTerminals[key]?.await() == PreparationStatus.FAILED
+                            }.toSet()
+                            if (workflow.queued && waitKeys.isNotEmpty()) write {
+                                queuedWaiting += workflow.priority to gate
+                                pumpQueue()
+                            }
+                            gate.await()
+                            acquired = workflow.queued
+                            val failedModels = frame.waves.flatten().filter { ref ->
+                                val own = frame.waves.flatten().associateBy { it.key }
+                                fun ancestors(key: String, seen: MutableSet<String> = mutableSetOf()): Set<String> {
+                                    val node = own[key]?.node ?: return emptySet()
+                                    return node.dependsOn.flatMap { id ->
+                                        val parent = "${workflow.id}/$id"
+                                        if (seen.add(parent)) listOf(parent) + ancestors(parent, seen) else emptyList()
+                                    }.toSet()
+                                }
+                                preparationDependencies[ref.key].orEmpty().any {
+                                    it in failed || it.startsWith("${workflow.id}/") && it !in ancestors(ref.key)
+                                } || ref.key in preparationCycles
+                            }.mapTo(mutableSetOf()) { it.key }
+                            success = executeEvent(event, frame,
+                                "${if (workflow.queued) "queued" else "parallel"}:${workflow.id}", failedModels)
+                        } catch (cancelled: CancellationException) {
+                            this@supervisorScope.cancel("调用已取消", cancelled)
+                            throw cancelled
+                        } catch (failure: Exception) {
+                            write { frame.waves.flatten().firstOrNull { it.key !in acceptedReceipts }?.let { ref ->
+                                val reason = failure.message?.take(160).orEmpty().ifEmpty { "调用准备失败" }
+                                priorFailures[ref.key] = RecoveryFailure(ref.key, ref.workflow.id, ref.node.id,
+                                    ref.node.title, RecoveryFailureKind.CONFIGURATION, reason, retryable = false)
+                                trace(ref, "error", reason)
+                            } }
+                        } finally {
+                            write { frame.waves.flatten().forEach { ref ->
+                                preparationTerminal(ref.key, if (success) PreparationStatus.INACTIVE else PreparationStatus.FAILED)
+                            } }
+                            if (acquired) write { queuedActive--; pumpQueue() }
+                            received.trySend(SchedulerSignal.Finished(success))
+                        }
+                    }
+                }
+            }
+            // Both activations are registered and masked before their workers start.
+            initialEvents.forEach { received.send(SchedulerSignal.Event(it)) }
+            while (running > 0 || !received.isEmpty) {
+                when (val signal = received.receive()) {
+                    is SchedulerSignal.Event -> activate(signal.name)
+                    is SchedulerSignal.Finished -> { running--; successful = successful && signal.success }
+                }
+            }
+            signals = null
+            received.close()
+            successful
+        }
+
+        try {
+        suspend fun abortDispatch(): RunResult {
+            if (!semantics.independentEventLanes) return failed()
+            val paused = partialResult()
+            progress()
+            return paused
+        }
         // History processing is a fixed pre-stage, using a captured eligible source.
-        if (processingCandidate != null) {
-            if (!drain(RuntimeEvents.HISTORY_PROCESS)) return failed()
+        if (processingCandidate != null && processor != null) {
+            if (!(if (semantics.independentEventLanes) drainLanes(listOf(RuntimeEvents.HISTORY_PROCESS))
+                else drain(RuntimeEvents.HISTORY_PROCESS))) return abortDispatch()
             val selected = processor.workflow.nodes.lastOrNull { it.enabled && it.outputKey == processor.outputKey &&
                 "${processor.workflow.id}/${it.id}" in executedOutput }
             if (legacy && selected != null) {
@@ -787,10 +1163,14 @@ class WorkflowEngine(
                 else trace(null, "skipped", "历史处理输出为空，保留原摘要")
             }
         }
-        // Preparation finishes before user dispatch; reply.completed runs once after the interaction chain.
-        if (!drain(RuntimeEvents.TURN_PREPARE)) return failed()
-        if (!drain(RuntimeEvents.USER_MESSAGE)) return failed()
-        if (replies.isNotEmpty() && !drain(RuntimeEvents.REPLY_COMPLETED)) return failed()
+        // New lanes wait only actual preparation prerequisites; old versions keep their phase barrier.
+        if (semantics.independentEventLanes) {
+            if (!drainLanes(listOf(RuntimeEvents.TURN_PREPARE, RuntimeEvents.USER_MESSAGE))) return abortDispatch()
+        } else {
+            if (!drain(RuntimeEvents.TURN_PREPARE)) return failed()
+            if (!drain(RuntimeEvents.USER_MESSAGE)) return failed()
+            if (replies.isNotEmpty() && !drain(RuntimeEvents.REPLY_COMPLETED)) return failed()
+        }
         currentCoroutineContext().ensureActive()
         if (priorFailures.isNotEmpty()) {
             val paused = partialResult()
@@ -817,6 +1197,11 @@ class WorkflowEngine(
         }
         return RunResult(stagedState.toMap(), stagedResults.toMap(), publishedReplies(), traces.toList(),
             RunStatus.SUCCESS, stagedOrigins.toMap(), stagedHistory.toMap(), stagedInjections.toList(), stagedDigests.toMap(),
-            unavailableResultKeys = maskedKeys.toSet(), historyMemory = stagedMemory, currentOnlyMacros = stagedHeads.toMap())
+            unavailableResultKeys = maskedKeys.toSet(), historyMemory = stagedMemory, currentOnlyMacros = stagedHeads.toMap(),
+            completedWorld = completedCapture?.completed(snapshot(stagedState.toMap(), stagedResults.toMap()).runtimeSnapshot()))
+        } finally {
+            commands.close()
+            withContext(NonCancellable) { writerJob?.join() }
+        }
     }
 }

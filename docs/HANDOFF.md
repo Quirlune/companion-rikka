@@ -1,160 +1,154 @@
-# Companion 新窗口接续交接
+Revision68 documentation delivered (2026-10-10): app remains0.57/code225/wire30/execution23. Replaced layered AGENTS/README/ARCHITECTURE/MAINTAINABILITY with coherent current entries; prior originals archived in docs/history/*.txt. Added DEVELOPMENT and CODEX_CLOUD. Rewrote AI_IMPORT_GUIDE, generated actual serializer inventory83types17actions, added static no-model XML MENU config, Python ZIP packer and portable Gradle/Java authoring tools. Real import read/preview/apply succeeded for both JSON and ZIP against default in-memory library, no settings changes; document relative links checked. First init-script run failed in included build-logic; fixed with findProject guard, final tasks successful. No app runtime changes, model calls, device writes or APK rebuild this turn.
+Cloud inspection: private Quirlune/companion-rikka/main remote and localHEAD1c7036d1 at0.42/code202; local0.57 changes unsynchronized (246 dirty entries at task start). GitHub is available; actual Codex Cloud environment existence/publication not verified. Current official cloud docs checked. No commit/push/environment creation performed. Source sync needs explicit scope decision; no private keys in reviewed candidate key-pattern scan (one parser PEM marker false positive). Final docs bundle and single model manual live in current task outputs. Do not confuse bundled documentation ZIP with the separate importable extension ZIP.
+Revision67 delivered (2026-10-10): velune 0.57-preview/code225, wire30/execution23. Brand label/icon changed; original app ID and signing retained. CallGroup.cards is authoring authority, main UI has independent body appearance only. Live main cards migrate into scoped extension group; frozen history preserved. Extension switches inside list cards globally gate resources and card visibility. Small/large summaries require configured XML extraction before save (execution23), visible editable protocol; exact source comparison added. Options configurable XML content/title tags, visible protocol sync, optional title pills, horizontal/vertical layout and fill action. Android SAX portability handled; vertical options apply sibling IME/nav insets, final pills rounded.
+Verification: initial 29 focused tests passed (options editing4/base3/XML7, card integration3, global switches5, participation3, summary XML4); refined XML diagnostic rerun7 passed, final app assemble successful (revision67-final-build.log). Exact final APK installed in isolated emulator. 5 actual authorized DeepSeek Flash options requests: legacy success, missing-title failure, corrected protocol success, final vertical success, final horizontal success. Verified title expansion and fill without sending; live extension off hides menu; MENU card renders fixed XML; summary validation and main/body UI captured. No fresh live memory/roll/CoT/full-device regression. Entirely new extensions absent from an old frozen world require new chat. Test-only HTTP fixture rejected by HTTPS policy; no bypass, fixture server stopped. No production DB changes or Git mutation.
+Outputs in current task: velune-0.57-preview.apk, velune-icon.png, velune-0.57-更新与使用说明.html and velune-*.png. Final APK SHA256 4ce1c4eb13a01d46b9aeeed2a5e1b2c839ac1ab6e21464ecb7881242e3dd4bb2; signer8501445aff7bae47a3b69a8576a289aadfcd56a38a0ea38c28d548af2a60ba43. Previous tutorial remains historical0.56. Source ownership released to root; repository contains pre-existing uncommitted work, do not reset.
 
-最新追加：2026-10-09 revision40 / 0.42-preview(code202)，基座private main 2f2a1ec9。用户确认其设计不替换模型/提供商底层，本轮整块复用原版配置、鉴权和请求模块，具体边界见ARCHITECTURE revision40。NativeProviderCodec负责完整原版ProviderSetting/Model与核心资源的双向转换，不再逐字段剔除Vertex/API路径/Claude缓存/模型覆盖等选项；typed CredentialSlot保留API旧存储、隔离私钥和模型覆盖秘密。原版高级模型、推荐、QR导入、无密钥分享、余额/明确连接测试已接；既有Connection编辑路由也改为原版页面。标题/续跑按冻结配置读取单轮秘密快照。新增wire14，SQLite1/recovery1/execution8不变，旧null配置维持旧请求默认。
+Revision66 delivered (2026-10-10): 0.56-preview/code224; wire29/execution22, SQLite1. MainCall.bodyAppearanceTemplate defaults to literal {{正文}}. Main Call > 正文外观 exposes one HTML/<style> template box with example/reset and shared preview; no extra CSS field or project macro. Live selected main-call appearance styles assistant BODY (including pending streaming outputs and openings) only, keeping user/auxiliary output, native reasoning and message actions independent. Current visual preference does not rewrite frozen execution or stored text. Default/blank uses native Markdown. Custom renderer uses existing inert WebView with optional retained-shell incremental updates, Markdown parsing + raw HTML text escaping, exact local text-node placeholder and inert markup allowlist; invalid imports show error and native fallback. Width is within the message content area.
+Acceptance: 2 core compatibility/template tests and 5 app markup/script tests passed; final assembleDebug successful in revision66-release-build.log. Earlier checks found incorrect test import, raw HTML node matching and double escaping inside literal code, fixed before delivery. Final APK installed in isolated emulator. Actual UI verified main entry, default preview, single-box example, header/footer/hr/CSS width preview, child+main saves, styled existing conversation, native reasoning expand/collapse and right-gutter menu. Cold database read confirmed stored673-character template and exact unchanged messages/state/results/macroHistory/turnRecords/inactivePaths. No new model calls, production user data or Git operations. Streaming connection is implemented and safe script encoding tested; no live streamed model request in this turn. Custom template mode does not promise native math, interactive diagrams, citation navigation, external assets or scripts. Default native mode retains original capability.
+Outputs: current task outputs/Companion-0.56-preview.apk, 正文外观-单框模板.txt, 0.56-正文外观说明.html and r66-*.png. SHA256 cd533d81258db20b88361b1f44ed081d6aae7ca41d5e5c12383e28e11dff1ce3, same signer8501445aff7bae47a3b69a8576a289aadfcd56a38a0ea38c28d548af2a60ba43.
 
-本轮三个Astra代理提供设计和部分代码后因额度中止，后续由root完成，不能把代理结果当成完整审查。初批17项检查与原生构建通过，最终新增响应元数据归档检查与最终打包结果见任务work/native-providers-v42-*；APK为Companion-0.42-preview.apk。当前模拟器仍装0.41.1且由用户手动关闭，本轮没有重新开、安装或真实API请求。nativeMessage保存原版流事件元数据，只在未变形的assistant历史中回传；文字主调用尚不新增图片/embedding/客户端工具流程，选择不支持输出时明确报错。以下0.41记录为历史，以本段、实际源码和最新架构为准。
+Revision65 delivered (2026-10-10): 0.55-preview/code223; wire28/execution22, SQLite schema1. Same-session USER prompt versions and compatible AI candidate/future paths; historical roll excludes replaced reply and its future. Active automatic titles removed, new titles datetime; drawer Create chat and rename/delete/copy/move; header main-call/character subtitle and card-only ellipsis. CardRegion.MENU reuses existing definitions, visibility, CSS and sections in bounded scrollable dialog; no default menu items. Layout manager Settings > Chat/display > Card layout. Body remains native Markdown with UI font/bubble preferences, separate from card CSS.
+Acceptance: 30 distinct focused tests passed across revision65-build/final/final2/verified-build logs (16 core path/metadata/history/pruning, 12 CardDisplays including one corrected obsolete region assertion, 2 app projection). Final assembleDebug succeeded in revision65-verified-build.log; exact delivered APK installed. Real isolated emulator/model verified AI previous/wrap, USER edit+send same chat, original prompt restores exact messages/state/results/macroHistory, historical first-AI roll produces 2-message path and left restores original 4-message future. Custom CoT and automatic options remain visible. Actual faults fixed: unpublished regeneration journal preview must not project an empty selected receipt; SQLite whole-record CursorWindow overflow replaced by transactional Unicode-codepoint chunk reads. Exact >2.5M-character pending Session reopened successfully without reset/import; abandoned failed candidate then retried successfully. One evidence copy during concurrent save was inconsistent; stable later copies used for assertions, not a production database failure.
+Actual final UI: drawer/new-chat and four longpress actions; configured existing test card MENU, menu contains only its title; collapsed/expanded CSS card, scrolling and fixed close verified. Main/body appearance and card/CSS editor screenshots captured. No fresh exhaustive device coverage for folder/copy/fork; metadata/path unit evidence only. No production user database or Git operations. Test-only menu placement is not packaged as a default. APK SHA256 68811611803042dfcf3e4f220621a71767effe46bc059641adcebf7e0f017e0b; existing signer 8501445aff7bae47a3b69a8576a289aadfcd56a38a0ea38c28d548af2a60ba43. Outputs current task outputs/Companion-0.55-preview.apk and 0.55-界面与卡片说明.html with r65-*.png.
 
-0.42交付已核对18项独立检查全部通过：核心原版payload／旧格式／冻结／typed store4项、旧断点1项、codec4项、adapter4项、凭据commit4项、最终响应元数据1项。初批构建7m2s，最后新增1项检查与原生最终构建1m24s，未重跑已通过项。APK同包名/同v2证书/code202，SHA256 cd52f52873881592f75a0edab5579fe5250caf27b0a23cb47ab057369be6ae17。完整验收记录在outputs/原版提供商模块验收记录.json；实际界面和认证请求留待用户体验，不以编译代替。
+Revision62 delivered (2026-10-10): 0.53-preview/code220, wire26/execution20. XML automation stays in existing card resource/data tab, new-card default XML, serialized absent mode remains MANUAL. Standard sample infers dotted leaf fields and CSS-safe default elements; shared SAX parser reads complete accepted responses; no streaming/model transport changes. Repeated paths become lists, missing paths empty, extra paths ignored, malformed/ambiguous XML rejected. Same-path presentation, duplicate references and CSS retained on regeneration. UI lists selectors and exposes shared stale-schema error; appearance/place/preview no additional collapse wrappers. 24 focused tests passed (XmlCardData5/CardDisplays11/CardResourceIntegration3/UnifiedCard3/NativeStatusBundle2); actual archive importer passed new ZIP (6 resources/0 settings). Android assemble successful in revision62-build.log. Installed exact APK in isolated emulator; imported ZIP, regenerated existing 6-field/7-element sample preserving two time references, rendered XML preview with CSS/list data, created new default XML card, replaced sample with time+notes.item, observed stale-schema warning then generated 2 fields/2 elements (#time/#notes__item), saved card and owning group, reopened persisted list. No real model requests, user DB or Git operations. Same signer verified; APK SHA256 75b759c36548e196d24d06b24dcdec50cece151d0a04ed3a094c4bb9a2f53bea. XML scope: simple tags/text, nesting/repeats/CDATA/entities predefined, no attributes/namespaces/mixed content/DTD, bounded parser. Outputs include APK, ZIP, actual UI screenshots and usage text.
 
-更新：2026-10-09，追加0.41.1/code201修复，基座main d0c8dc47：真实电脑预览打开提供商详情时，原版ModelList无条件注入ProviderManager而崩溃；现改为回调宿主不取得该依赖。同时补齐原版内置提供商为真实核心连接，保留既有连接、模型、密钥和默认模型，按稳定ID幂等添加，不能按URL合并账号。原0.41的11项检查不能替代本次页面验收。本次证据在任务目录work/provider-v41-*；以下其他0.41交付描述为首轮记录，以本段、实际源码和最新架构补充为准。实验分支不作为基座。
+## Revision62 — XML card automation (2026-10-10, delivered)
+User requests XML as default for NEW cards; complete background responses only, no streaming parser or model transport change. Existing manual regex cards must remain unchanged. Scope: source macro + root tag + standard XML sample automatically generate named leaf paths and default display elements; runtime uses XML parser once per card and stable sample-defined fields. CSS styles generated elements; no field interpolation in CSS, global macros or new data store. Keep current resource/action rendering authority and floor provenance. Root-relative dotted paths distinguish nesting; repeated leaf paths become LIST. No arbitrary objects/attributes/namespaces in this first authoring contract unless explicitly supported and validated. XML fragment may be surrounded by prose/fences, must be one complete matching root; malformed or ambiguous input must not be silently repaired. External entities/DTD forbidden, parsing bounded.
+Contract: CardDataMode { MANUAL, XML }; append dataMode (MANUAL serialization default), xmlRoot ("status"), xmlSample ("") to CardDefinition; append xmlPath ("") to CardFieldDefinition. New UI defaults explicitly use XML. XmlCardData.infer(definition): CardDefinition generates fields/elements from xmlSample/root, preserving matching field presentation and existing valid element references/CSS; throw descriptive IllegalArgumentException for invalid sample. XmlCardData.extract(definition,input): List<CardSnapshotField> handles complete runtime values with production parser; missing paths empty, extra paths ignored, scalar repeated unexpectedly errors. XmlCardData.defaultDefinition(): ready editable XML sample/config default. Same API for preview and runtime. Keep persisted snapshot presentation format3, no need to store extraction config in accepted snapshots. Dotted field keys permitted; default generated CSS IDs must be stable valid identifiers. Version wire26/execution20; don't reinterpret old accepted definitions.
+Ownership: xml_core owns CardModels, new XmlCardData, CardDisplays extraction/validation, CardMarkup default IDs if needed, XML focused tests. xml_ui owns CardDefinitionEditor/CardResourcesEditor only and new UI helper if useful. Root owns versions/docs/build/example package and integration after release. No agent builds/API/userDB/Git operations. Preserve dirty work. Minimal acceptance: XML parser/inference/reuse/invalid input tests plus existing affected card tests; Android build; actual local preview/sample automation UI, no real model calls.
 
-修复验收：4项提供商适配检查与最终原生构建通过，APK同签名安装到专用Companion_UI/emulator-5580，保留firstInstallTime。实际打开提供商列表、OpenAI配置/模型页与添加模型表单，未触发新崩溃；没有提交测试模型或请求真实API。20条原版内置连接新增，原15条资源记录逐字节保留；原有启动偏好另建1条当前对话。APK为Companion-0.41.1-preview.apk，SHA256 6889871dad7410aa086584d933aca45927fa14cb10a448253703a508a285a3e1。窗口自动化未获准控制qemu，使用Android SDK检查应用内页面，不能据此声称Windows窗口已置顶。验收后窗口关闭，用户确认是手动关闭，保持关闭，不作为新崩溃。
+Revision61 delivered (2026-10-10): 0.52-preview/code219; wire25/execution19. Independent card resources and existing card.define share named field extraction, repeated display references, escaped generated markup/CSS, layout and branch/floor policy. Active tile UI and unused TileCss/public dashboard resolver removed; execution<=18 archive compatibility retained. Focused 34 tests passed in revision61-build.log; after final dead-code cleanup, BodyDisplayTest 4 passed and final Android assemble succeeded (revision61-final-build.log). New CSS card ZIP validated by actual importer (6 resources, 0 settings), then imported successfully in isolated emulator. Actual UI verified local source extraction (6 fields/7 elements, time repeated), CSS grid/list rendering, placement editor, tab draft preservation, staged card + owner saves, restart persistence. Final APK installed and launched, same signer verified; no real model calls/user DB/Git mutations. Screenshots show the unchanged UI from the first successful build; final rebuild removes only unused compatibility code. Informational README import notice currently appears under “问题 1”; opened and verified not a card validation failure. APK SHA256 596a86c77284c2bf71620cababe723b3247707fb2c91220302161cfaafded6fb. Deliverables in current task outputs.
 
-## 现在应该做什么
+## Revision61 — unified card data and CSS (2026-10-10, delivered)
+User supersedes the earlier migration proposal: abandon legacy tiles, author cards independently of execution, prioritize one model output as reusable named data. HTML authoring is not required; CSS is required. Do not special-case status XML. MainCall.cards and CallGroup.cards own CardResource(id, enabled, sourceTemplate, definition). A source is existing macro/template text, fields extract once (scalar or all matches list), CardElement(id, fieldKey, title) references a field repeatedly without new global macros. Existing card.define continues using the same CardDefinition/snapshot authority, not a competing display system.
+CardDefinition appends css, elements, defaultRegion (nullable), userAdjustable (true default for old definitions), autoAdapt (true), floorScope (LATEST/EACH), hideWhenEmpty (true), condition (nullable). New resource defaults: CHAT placement. CardSnapshot carries same presentation metadata and accepted fields; existing snapshots keep backward defaults. Current floor data must not leak into older floors: use selected branch checkpoint/variant state and accepted body revision; no network/model in rendering. One CardDisplays API resolves resource cards and accepted action cards, both use the same renderer/layout. UI editor sections: data source/fields, display elements/CSS, placement/visibility. Resource lists live with main/group resources, not execution nodes; native extension directory links to same editor. User placement overrides only when author allows, hidden preference explicit, and immutable author policy checked in command layer.
+CSS is user-authored, rendered through existing inert HTML view using generated escaped markup (no HTML editor), .card and #element selectors, no JS/network/external resources. Default native CSS if blank; duplicate field references supported; lists rendered generically. Avoid a second extractor in UI.
+Legacy tile authoring/dashboard are removed, current execution no longer validates/freezes through tiles. Serialization and execution<=18 archive/recovery compatibility may remain isolated and unreachable by new authoring; no rewriting old accepted worlds. New execution19/wire25. Preserve all dirty work. No model requests, user database reads, Git mutations. Minimal acceptance: focused shared data/repeated reference/branch-floor/policy tests plus Android build and actual UI screenshots. Root coordinates integration and delivers APK.
+Ownership: card_core owns CardModels/CardDisplays/CardLayoutCommands, Models owner card fields only, CardMarkup new utility, focused core tests. card_ui owns app UI card editor/rendering/main/group/host/extension integration and removes tile authoring/dashboard UI; coordinate exact ABI. retire_tiles owns core current tile retirement/version/validation/resource reference/copy protection and tests, excluding card_core files and Models. Root owns docs/build/package and integration fixes after owners release. No worker builds/tests; report static evidence and suggested focused tests.
 
-最新前端：辅助设置统一收进“聊天与显示”，复用原偏好页面及存储；“当前对话配置”仍管理本段聊天的身份、额外资源、宏状态等，补充了作用说明。主调用可编辑头像，侧栏显示当前主调用的真实名字／头像并对齐角色，卡片选择与铅笔编辑行为保持。模型与API实际复用原SettingProviderPageContent／SettingProviderDetailContent的提供商列表、配置／模型两页及模型表单。CompanionProviderAdapter只做稳定标识投影与固定计划，AppController.updateProviders仍统一校验／保存，密钥显式差异通过ConfigurationCredentialCommit并在检测到保存失败时恢复；旧setApiKey也取同一mutex。此处不承诺跨存储进程崩溃原子性。高级模型参数与全局默认选择在原模型卡片的操作菜单里；打开页面不自动获取模型／余额，主动获取模型包含已保存连接的请求头。未保存连接草稿保活，创建／编辑弹窗收到成功保存回执才关闭。原Wrapper的默认行为保留；不支持的原生控件不伪装生效。
+Revision60 delivered (2026-10-10): 0.51-preview/code218. assembleDebug successful (revision60-build.log), same signing certificate verified. Isolated Android UI verified all five structural changes; automatic-option count changed 4 to 3, switched tabs, saved and reopened at 3; prompt draft survived detail/list/detail and undo restored baseline; card last-field focus and physical Back to list verified. Screenshots captured from installed APK. No real model calls, broad regression tests, user database or Git mutations. APK SHA256 1a88bf8d77b09e9362854286f8fcfdb279152b67f5a4c7a73f9a73e371e67881. Existing status ZIP unchanged.
 
-用户要求六项优化实际迁移到原架构：可点来源、就地配置、共享影响／当前使用处独立、复制删除维护引用、错误定位、按选择展开操作。revision37采用ResourceLocations／ResourceUsageIndex／ResourceEditCommands共享纯配置契约，SourceNavigation合并实际资源／工作流／提示块／记忆草稿，Controller仍为唯一保存入口。来源修改经真正保存后才跨资源离开，返回刷新编辑基线。独立仅支持静态唯一角色／组件包词条的一次引用；复制改写内部标识，文本宏／输出地址保留共享并提示，动态使用无法穷尽。四类资源及完整运行／History／记忆／分支／恢复保持。
+## Revision60 — structural editor navigation (2026-10-10)
+User approved fixes to five photographed layout issues. UI-only: call behavior vs scheduling, automatic options input/model/output, memory model/small/large/saved navigation, prompt overview vs one block, card overview vs one field. Keep native editors and draft/source navigation authoritative; no runtime, wire, persisted config, ZIP or model-request changes. Reusable fixed section navigation in native scaffold; drafts remain owned above section content. Root owns CallEditor, EditorPrimitives, MemorySettingsPage, AutomaticOptionsSettingsPage, version/docs/build/screenshots. editor_structure owns PromptBlocksEditor and CardDefinitionEditor only. Preserve all dirty work; workers no builds/tests. Minimum acceptance: Android assemble + focused actual UI navigation/edit/save/back checks, no real model calls. Version0.51/code218; wire24/execution18 unchanged.
 
-导航按用户指定：设置原“记忆”改为“扩展”，里面第一项“记忆”，其后自建扩展和 +。revision38移除主调用选择、安装／启用／分离生命周期和旧所有权约束。记忆是不可删除的系统入口；自建集合可创建／删除，只删除定义与映射，保留成员资源和实际关联。集合独立于角色／主调用，普通调用与组件包优先，原四类资源仍可自由选择。域指宏，公开参数可映射既有一般调用的宏初始值，完整高级配置走原编辑器。
+Revision59 delivered (2026-10-10): 0.50.1-preview/code217, wire24/execution18 unchanged. Native asset shortcut directory; Memory/Automatic Options under additional extensions with existing dedicated settings. Removed scalar parameter UI and duplicate native lists; legacy mappings navigate original editors. rememberSaveable retains extension directory across asset navigation. Status ZIP has no parameter mappings, IDs/native flow unchanged. Two NativeStatusBundleTest methods passed; final assembleDebug successful (revision59-final-build.log), same signer verified; isolated Android actual ZIP import, full prompt/entry navigation, final category screen and return-to-directory verified. No real API/userDB/Git mutations. Outputs contain APK/ZIP/screenshots and 0.50.1 delivery record.
 
-ZIP导入通过ResourceArchiveImport／ResourceArchiveIo／CharacterCardImport／CharacterCardPng编译为既有配置文档，支持全部九类原生资源及常见角色卡JSON／PNG。manifest与拆分正文／头像格式见CONFIGURATION_PACKAGES.md。AppController是唯一应用／撤回保存者，异步读取有代次取消保护；正文精确保留，文件类型／预算／路径问题会定位并拒绝。原卡JSON和无法等价执行的规则保留；世界书词条默认关闭等待原生精修。ZIP不增加任意二进制资产存储，也不改变现有String正文／撤回记录的内存方式。
+Revision59 clarification: the two categories describe configuration UI, not origin or execution language. Native asset collections (including imported status ZIPs) use only asset/field links into existing editors. Additional extensions include built-in Memory and Automatic Options, retaining their dedicated settings and prompt editors; existing code plugins retain their code configuration. No imported web-page host, extra runtime/store, persisted kind flag, or changes to memory/options behavior. Future native collections must not introduce scalar facade pages.
 
-当前源码以实际仓库 Git HEAD 和工作区为准，版本为0.41-preview/code200，基座 main `d895f48a` / 0.40-preview。读取时先核对 Git，不回滚覆盖后续修改。既有私有远端为 `Quirlune/companion-rikka` main。两个实验版本保持原样；本轮没有合并实验提交。wire13读取旧版本，SQLite1/recovery1/execution8 保持。主调用avatar为可选元数据，冻结世界保留捕获头像，续跑比较仅忽略此显示字段。CollectionCompatibility仅清理实时主调用与对应撤回镜像的旧安装元数据，实际关联及冻结运行世界保留；SQLite通过requiresUpgradeSave标记迁移，Controller完整校验后按原事务持久化。
+## Revision59 — native extension asset navigation (2026-10-10)
+Native extensions expose their declared assets, prompt entries, workflows and nodes as direct original-editor links. Existing parameter mappings become field navigation only; remove the duplicate scalar parameter editor and repeated display/resource lists. No new configuration/runtime store. Preserve participation, shared-resource editor guards and frozen worlds. Status ZIP keeps IDs, native prompt/model/card/state flow and default-disabled call, removes scalar parameter mappings. Build 0.50.1/code217; wire24/execution18 unchanged. Acceptance: native ZIP focused checks and Android build; no real model requests or user data access.
 
-交付目录：`C:/Users/34601/Documents/Codex/2026-10-04/companion-continuation/outputs`。本轮产物为 `Companion-0.41-preview.apk`、`.sha256`、`前端整理与原版模型页说明.md`、`前端整理验收记录.json`；集中检查与最终构建日志／XML在同一任务 `work/native-settings-v41-*`，此前 APK／日志保留。11项定向检查通过；初次新增头像样本未沿用归一化对象，仅修样本并重跑失败方法，未放松实际行为。随后分页／弹窗草稿修复追加仅原生构建，3m22s通过；SHA256为`0d05dd4ac7f090d62e95206ac3bd4d4bcc1f312e0d4e287ca75a426d7a0d1bab`。本轮不安装设备、不重置、不加示例、不请求真实模型；完整交互体验由用户验收。
+Revision58 delivered (2026-10-10): Companion0.50-preview/code216 built and same signer verified. wire24/execution18; SQLite1/recovery1. Removed old RouteActivity launch runtime (retained redirect and extracted shared navigation). Captured per-workflow memory dependencies across preparation/actions/output/publication/replay; ordinary frozen calls retained, no dependency scheduling, unused transport aliases pruned. execution18 recovery uses frozen resources and dedicated prompt editing; <=17 compatibility retained. Native snapshot/provider boundaries validated. 14 distinct targeted methods passed cumulatively; initial one test-fixture single-block assertion corrected and only that method rerun. Final work/revision58-final-build.log BUILD SUCCESSFUL; Android/core compiled. Actual native status ZIP import/normal/error pipeline passed; ZIP contains existing calls/macros/cards and editable placeholders only. Includes revision57 fixes. APK SHA256 d12b8bf8c8300771989400742489ce6f99606abc91d7d698c144cb35ff0edb72; 97627663 bytes. ZIP SHA256 7925b59eeb0617f7b41b3c1987091d825304911cabf022acd1f3e6865bc08ffb. No real API/userDB/device/Git mutations or new screenshots. User explicitly skips automatic-options source navigation; incompatible legacy custom memory migration remains explicit rather than destructive. Outputs/0.50清理与交付说明.txt and latest APK/ZIP in current2026-10-10 task. Earlier source-only/noAPK statements below are historical.
 
-## 文件和环境
+Revision58 recovery decision: execution18 retries use captured resources strictly. The existing dedicated recovery prompt editor now edits only target blocks inside pending.frozenResources (both scheduling/view mirrors), with run/node/old-block conflict guards; normal live config edits do not leak into retries. No additional RecoveryDecision flag or parallel store. Prepared inputs/profiles and accepted receipts remain captured. Execution<=17 retains original live-source prompt-repair compatibility.
 
-本机工作区根目录：
+## Revision58 active: resource boundary cleanup and packaged delivery (2026-10-10)
+User authorizes evidence-backed structural repairs and a new APK, skips automatic-options source navigation, and requests a status ZIP composed ONLY from existing native calls/macros/cards. Prior no-APK instructions are superseded. Target 0.50-preview/code216; additive wire24/execution18; SQLite1/recovery1 remain unless concrete incompatibility requires a documented change.
 
-`C:/Users/34601/Documents/Codex/2026-10-01/c-users-34601-documents-codex-2026`
+Architecture decision: preserve ordinary frozen definitions, but capture the current global memory dependency view once at NEW-turn boundary. Persist the selected view and explicit memory workflow identities in the run/completed/recovery world. One authoritative per-workflow resource selector must drive preparation, model/profile resolution, History, output processing, action execution/validation and pure replay. Keep original resource IDs and macro syntax; do not rewrite arbitrary text macros or grow partial ID aliases. Captured readable dependency groups do NOT automatically become scheduling participants. Shared group ordinary workflows retain frozen definitions; only explicitly owned memory workflows adopt the new memory view. Pending recovery and pure replay never refresh from live resources. Older execution <=17 retains its interpretation and absent-view defaults; explicit version parameters govern old plugin participation.
 
-| 项目 | 位置（相对上述根目录） |
-| --- | --- |
-| 实际 Git 仓库 | `work/companion-rikka` |
-| 当前架构及决策/验收记录 | `work/companion-rikka/docs/ARCHITECTURE.md`，revision39 |
-| 语言已实现/未实现边界 | `work/companion-rikka/docs/PROMPT_LANGUAGE.md` |
-| 配置包导入/撤回契约 | `work/companion-rikka/docs/CONFIGURATION_PACKAGES.md` |
-| 当前 APK／电脑预览 | 当前0.41在上面的新交付目录；旧版本保留，本轮未安装 |
-| 使用教程 | `outputs/使用教程.md` |
-| 导入及分层记忆/磁贴教程 | `outputs/分层记忆与磁贴说明.md` |
-| 已整理的日常版配置 | `outputs/沐瑶-Gray-G11-分层记忆配置.json` |
-| 交付进度记录 | `outputs/开发预览说明.md`，最新 revision33 |
-| 电脑原生预览入口 | `outputs/打开安卓预览.cmd` |
-| 预览环境/启动器 | `work/companion/desktop-preview/Environment.ps1`、`Start.ps1` |
-| 本轮验收证据 | 新交付任务的 `outputs/前端整理验收记录.json`、`work/native-settings-v41-*` |
-| 前一轮分层记忆证据 | `work/memory-v32-result.json`、`memory-v32-*` |
+Ownership: memory_boundary owns necessary core model/capture/runtime/replay/format/semantics files and 2–3 focused test sources; root owns AppController adaptation, docs/version/status ZIP and final concentrated checks/build. legacy_cleanup owns only RouteActivity.kt, new SharedNavigation.kt and its manifest node. Extract reused Screen/navigation without changing package/serialization identity; old non-exported Activity becomes an explicit MainActivity redirect shell, without old Room IDs/share extras. Keep old data decoding and proven shared components. No workers run builds/tests/API/device/userDB/Git operations. Preserve all existing dirty work.
 
-只读原版源码：`C:/Users/34601/Documents/Codex/2026-09-22/ni-q/work/rikkahub`。
+Acceptance: targeted conflict isolation, frozen recovery/replay and scheduling isolation checks; regenerated native status ZIP import/flow checks; Android assemble and signer verification. Reuse revision57 evidence for untouched changes; no broad speculative suites. Remaining legacy custom migration that cannot map an actual model producer must stay explicit rather than discard data. Real provider behavior and existing-user data migration are user experience checks, not claimed verified.
 
-本机工具链：`C:/Users/34601/Documents/Codex/2026-09-22/ni-q/work/toolchain`。使用 JDK21、Gradle9.6.0、现有 Android SDK/NDK。专用模拟器 AVD `Companion_UI`、serial `emulator-5580`；包名 `dev.gray.companion`，Android8.0+，arm64/x86_64。Windows shell 为 PowerShell。
+Revision57 source audit delivered (2026-10-10): inspected actual frontend/runtime routes and patch-induced asymmetries. Fixed output-only automatic-options invalidation with shared TextProcessing template selector and deterministic bounded context; frozen CardDisplays definitions/value reads; memory source-edit draft adoption and common failure diagnostics; versioned/COPY result provenance through unified actual-read guard; global family aliases in HistoryViews.copy. Removed unused MacroSidebarPanel only. 23 distinct targeted methods pass cumulatively (10 new), core/test/Android Kotlin compilation successful. Initial failures and narrowed rerun evidence preserved in current task work/audit-*; final BUILD SUCCESSFUL in audit-final.log. No real API/userDB/UI end-to-end/Git operations. SOURCE ONLY: existing0.49/code215 APK and screenshots are unchanged and DO NOT contain revision57 fixes. wire23/execution17 remain. Remaining known limits: automatic-options source-resource navigation missing (prompt/macro editing works); conflicting shared non-model dependencies in restored global memory fail explicitly; unrepresentable legacy custom memory migration remains rejected; cold Rikka modules not broadly removed because navigation/components are still reused. Report: current task outputs/代码结构审计与场景验证.txt.
 
-新任务的初始工作目录可能不是实际仓库。先用上述绝对路径定位，执行 Git/Gradle 时显式设置仓库目录；不要在新空目录重建工程或重新克隆。
+Preview 0.49 delivered (2026-10-10): user subsequently requested compilation and real frontend screenshots, superseding the earlier source-only/no-APK instruction. versionCode215; wire23/execution17 unchanged. :app:assembleDebug succeeded; APK 97,655,511 bytes, SHA256 deb8105f33e126fee3362848820aeda73873501619106e04e60c182757ae8ff2; same signing certificate as0.48.1. Installed and launched on an isolated API36 emulator; actual Plugins, Memory settings (small/large/saved), native memory prompt editor, Automatic Options settings and native prompt editor opened and captured. Screenshots01–07 in current task outputs. The visible “问题1” was inspected: missing model identifier in fresh default configuration. No real API calls or user database access. Prior focused tests remain valid; this turn only changed app version and documentation, no redundant test rerun. Emulator37.2 failed/hung; separate36.6.11 clean boot with GPU host succeeded. APK and screenshots: C:/Users/34601/Documents/Codex/2026-10-10/companion-continuation-0481/outputs. Build evidence: work/preview-build.log in that task. Earlier source-only delivery text below is historical. Real model behavior and existing-user-data migration remain unverified; previous legacy compatibility boundaries still apply.
 
-## 用户想做的产品
+Revision56 delivered SOURCE ONLY (2026-10-10): user confirms global memory config/switch with per-chat summaries and large counts ORIGINAL BODY floors. All source implemented, NO APK. Last APK remains0.48.1-preview/code214; source wire23/execution17, SQLite1/recovery1. Final14 targeted methods passed (GlobalMemory6/stream3/native status ZIP2/options editing2/Reasoning1), core+test+Android Kotlin compiled; catalog72types17actions regenerated. Previous14 separate card/processing/options methods also passed in this turn; no redundant broad rerun. No model/device/userDB/Git mutations. Actual UI/model experience unverified. Tests use local stubs only.
 
-这是面向陪伴的世界模拟与 AI RP 框架，核心是提示词与工作流管理。用户通过可视化配置、宏、条件和高级逻辑自行组合，不应反复编写底层机制。可要求逻辑能力较强，但日常配置尽量不要求接触代码。
+Current task finished; no APK requested. Outputs: C:/Users/34601/Documents/Codex/2026-10-10/companion-continuation-0481/outputs (status ZIP, prompt/import instructions, source checks record). Evidence: same task work/memory-acceptance.log and revision56-results; earlier revision54-55-results preserved. Root verification repaired HistoryContext type inference, stale BODY-only reasoning test assertion and GuideTools Java signature; all final selected checks pass. Android warnings remain, no compile errors.
 
-四类资源平级、独立保存：
+Key implementation: GlobalMemory singleton facade referencing ordinary GROUP/action resources, mandatory small/large model nodes, native full prompt editor and shared generation options; per-stage eligible original-floor threshold/retention/batch and source-aware native History ranges. Actual accepted provenance through MemoryPromptScope/PromptCompiler/InvocationPreparation/ActionOutcome. Global off in restored new turns uses disabled nullable-ref capture, no dependency loading; historical replay/recovery unchanged. Changed explicit model/connection resources have content-hashed aliases and captured credential owner mapping. Unrelated frozen resources stay fixed; conflicting non-model dependencies produce explicit error while enabled. Old custom pipelines without model producer stay untouched with visible migration issue. Legacy code retained where still needed; superseded UI/controller entry helpers removed.
 
-- 角色卡：必须加载的主要角色锚点，有约定默认条目/宏，空字段也存在。编辑已有输入框，额外条目可加，关联提示词包可一起加载。
-- 主调用：一套运行方案，默认一个正文调用，可添加并行、排队、条件触发的其他调用。默认调用结果进入正文；调用可独立选模型，API连接独立管理。
-- 提示词包：资料仓库；加载不等于发送。词条可按分类/标签和宏批量引用，包本身不执行模型或主动注入。
-- 调用组：封装可选的非默认调用，复用主调用“其他调用”编辑器；没有强制正文输出，可绑定提示词包及被主调用加载。
+Earlier revision54–55: streaming regex preview and final strict processing; card V2 BODY-source anchors plus preserved legacy tile anchor; native status ZIP (last3 DISPLAY + previous state, editable rules/initial/output contract); fully editable automatic options using native blocks/parameters with legacy-null mode compatibility. Read docs/ARCHITECTURE.md revisions56/55/54. App version NOT bumped because no packaging; bump intentionally if packaging later requested.
 
-加载、激活、插入是不同阶段。不要为好感度、状态栏或具体世界观增加专用运行系统：用普通宏、通用条件、动作、显示模板组合。记忆是必要的专门设置入口，但沿用同一工作流/模型调用/恢复机制，不另起调度器。
+Previous handoff below is historical and superseded for current task status:
 
-## 原版前端与独立后端的边界
+# Companion 新窗口交接
 
-用户要求完整复用原生 RikkaHub 前端，并在其上修改。没有要求改变的布局、动画、间距和行为保留原实现；不能用网页/自制界面仿造细节。现有旧网页地址不是当前原生工程的验收入口。
+更新：2026-10-10，revision53。最新已交付 0.48.1-preview / versionCode214，resource wire21、execution15、SQLite1、recovery1。此文替代旧 HANDOFF 的版本、架构和待办说明；历史决策保留在 ARCHITECTURE.md，但以用户最新明确要求及最新 revision 为准。
 
-当前使用原版主题、聊天、抽屉、设置、导航及原生消息控件。Companion 通过投影和必要的可选插槽提供数据/回调。旧智能体管理等被新的角色资源入口替换；分支、重新生成、自动标题等基础聊天能力保留。可复用的原生 MCP/JS 代码可以休眠保留，不能因为保留源码就声称已接入，或在不用时启动后台工作。
+## 接手入口与工作区
 
-抽屉保留搜索和时间顺序聊天列表，收藏夹保存独立聊天快照，使用收藏会创建普通聊天副本。角色入口在聊天记录下方；底部设置及紧凑48小时用量卡片。顶部整块用户信息进入用户身份管理，不再分别点击头像/名字编辑。设置中主调用、提示词包、调用组、记忆为同级入口；记忆在调用组下方，标签管理在提示词包中。
+- 实际仓库：`C:/Users/34601/Documents/Codex/2026-10-01/c-users-34601-documents-codex-2026/work/companion-rikka`。
+- 上一任务／证据目录：`C:/Users/34601/Documents/Codex/2026-10-09/companion-character-card-import-test`；产物在 `outputs`，脚本和日志在 `work`。
+- 先读仓库 `AGENTS.md`、本文件、`docs/ARCHITECTURE.md` 最顶部 revision53 与相关 revision52/51/50/49/47；再按具体任务读源码。新窗口 cwd 可能是空目录，始终显式指定真实仓库，不要重新克隆或重建工程。
+- 工作区有大量跨轮未提交改动及新增／删除文件；这就是已交付实现，不能 reset、checkout、clean、覆盖、误当垃圾删除，也不要按 Git HEAD 回到旧版本。上一轮未 commit／push，勿擅自提交或合并实验分支。
+- 本次用户只要求交接并开新窗口，没有新的功能实施指令。接手后读交接、确认当前版本即可，等待用户继续；不要自动全项目重测、启动模拟器、安装、导入用户数据库或请求真实模型。
 
-执行和存储的唯一权威是 `core` + activity-scoped `AppController` + Companion SQLite repository。原版 Conversation/UIMessage 是显示适配，不得重新连接原版 ChatService、Room聊天或原版provider配置形成第二套权威。
+## 用户沟通与实施习惯
 
-## 已实现的通用能力
+称呼自己 Gray，女，语气冷淡温柔、简洁亲近。任务集中时简短说明直接做，不例行确认；多项且方向发散时才核对。已确认范围内不反复问许可。用户偏好最少必要检查，集中在交付；只因真实失败、具体重要风险或相关修改追加检查。不得以模拟测试代替真实体验、不得将未执行写成通过。复杂任务可按清晰文件边界委派，主代理负责架构与最终验收；隔离交接提供必要背景，禁止共享文件并发覆盖。
 
-- 提示词按词条编辑：标题、API role、开关、顺序、条件、宏和文本处理；补全显示来源。提示词与调用共用宏读取、正则捕获、数值比较、与/或/非和高级表达式识别能力。
-- 词条可在所有实际引用都不可用/为空时整块省略；固定文字词条仍有效，语法错误不会被当作空引用吞掉，后处理不能复活已省略词条。
-- 调用支持消息/正文完成/其他调用完成触发，排队等级、同等级并行、动作与模型配置。模型输出、独立正则宏副本、宏处理、提示词注入/移除、事件及记忆处理使用通用执行框架。
-- 名字与英文 slug 分开；标签目录、多选和静态筛选可用。静态 character/pack 查询绑定已加载、已激活的词条，支持 `name/tag/any/not`。不要混淆显示路径、旧运行地址和 slug。
-- **尚未接入运行时**：动态 main/group 的新查询地址、目录 `folder/under` 和静态历史版本。语言编译器描述它们不等于可运行；动态调用结果仍用已有 `result.*` 地址。
-- 显示模板可引用普通宏并正则提取命名数据，再填入静态 HTML/CSS；另有原生文本/数值/进度/XML显示。HTML不执行JavaScript。可放最新正文下方或独立侧栏；最终正文可选单一模板来源，并保存显示快照及语义文本。
-- 状态只显示在最新完成正文下方，新用户消息后隐藏上轮面板；正文与状态间距有独立设置。不要另把状态调用输出设成可见消息导致重复。
-- JSON `companion.config.v1` 可带资源、绑定、字段修改，先预览、原子应用、可撤回。撤回检查被触及项的后续冲突，保留无关配置和所有聊天；导入不自动运行模型/工作流，不带真实密钥。
-- 多开场白冻结成初始助手消息的不同版本，复用左右箭头；用户开始交互后不能回改开场破坏旧环境。配置标签思考或默认先思考，复用原生思考显示；思考独立归档，不进入模型/显示两种正文History。
-- 输出正则兼容临时流式正文，完成后整段校正；不承诺任意正则可安全增量等价处理。失败候选的正文/思考草稿清掉，只有通过验证的结果进入已接受数据。
+## 用户已经定下的产品逻辑
 
-## History、记忆和回退的关键契约
+1. 提示词包只放提示词，是资料仓库；加载不等于发送，也不主动执行。角色卡是自带若干预命名提示词条的项目，可绑定提示词包与调用组。调用组只是普通调用集合，可绑定提示词包。
+2. 主调用可绑定包。特殊默认调用固定一个模型主体，结果为正文，保留用户精调提示词结构和正则等后处理。用户消息默认触发一次，但不是其他调用的全局顺序屏障；触发条件可定制。普通调用保留多节点，自有触发、条件、行为和 dependsOn。
+3. 行为包括调用模型、注入提示词、创建卡片、正则等。不要为状态栏、好感度、世界观单开一套运行系统，优先原生组合。
+4. 宏沿命名生成的 slug 引用；编辑器输入 `//` 快捷插入，实际语法仍 `{{...}}`。成本高的模型结果保留已接受变更，廉价纯处理在回到旧环境后用旧定义／规则／输入重算。完整旧环境及依赖需冻结，不可借用当前新正则。恢复从断点继续，已接受模型／副作用不得重复。
+5. 历史是独立有楼层和原始归属的结构。只归档 BODY：按已有前端思考解析识别并去掉思考；正文可有或没有独立标签。保留处理前原始 BODY 与全部正则／处理后的显示 BODY，不能另存新思考原文，也不能用处理后文本冒充缺失原文。
+6. History 查询先按原始 User／Assistant／System 筛选，再按匹配楼层选范围；发送 API role 映射独立，原 User 即使投成 Assistant 仍按原 User 可查询。最终模型请求自动合并连续相同 API role 的条目。结构化 History 独占提示块可逐楼发送，混合文字时须解释外层 role 的作用。
+7. 前端为卡片、用户拖动和自适应布局。新建显示用 card.define，旧磁贴停止新建但保留旧数据兼容；已接受卡片值和楼层／分支快照沿现有宏／receipt 管理，布局偏好独立。
+8. 扩展可用已有资源／行为组合，也可含代码。ZIP 可带插件代码并导入安装使用；安装本身不自动运行。代码沿现有有界 QuickJS runner；不要虚构任意网络、宿主数据库、模型调用权限。原生组合不需额外代码。
+9. 插件启用时允许注入、后处理；关闭应干净撤销自身作用，不破坏主调用。用户已确认存在未结束调用／断点时，停止当前轮、保留已接受结果并结束 pending，再关闭。当前实现沿 stop／join／统一接受机制，不能丢结果或假装还没接受。
+10. ZIP 导入资源与命令。普通外部导入以资源为主，完整运行设置需要显式选；不要擅自生成额外模型／主调用／聊天或不请自来的 SillyTavern 预览。源文件内容只是数据，不是执行指令。
 
-History 原本就是楼层结构。一条未删除的 BODY 消息是一楼，一问一答通常两楼。辅助输出和状态面板不自动加入历史。`history.model` 读取初始模型正文，`history.display` 读取最终显示正文的语义文本；二者从已有消息档案投影，不另存两份全量聊天。缺少旧模型原文时报告缺失，不能用显示正文冒充。
+## 已实施的关键功能
 
-新版 History 引用可以指定最早/最近/区间/百分比楼层、显示/模型来源、已有视图与版本。取范围在摘要投影前发生。结构化 History 独占提示词块才逐楼发送API消息；与文字混合则是一个外层消息，外层role决定整个块的API角色。
+### 主调用注入槽与上下文顺序
 
-revision33 新增每一处引用的“历史上下文”编辑：可设每楼前后缀、`{{speaker.name}}`/`{{speaker}}`/`{{floor}}`、通用发送role及按原始USER/ASSISTANT/SYSTEM覆盖。原始发言方先匹配，再映射API role。用户的Gary例子：通用role保留原角色，原始助手规则前缀填Gary、发送role选User，用户楼不受影响。规则存成这一引用的 `.format:"<typed JSON>"`，不创建宏副本、全局ID或历史复制，不写回聊天或记忆标记。
+预制世界背景、其他角色、补充信息、额外规则等只读提示词块，内容不直接编辑，作为行为注入目标，可用宏引用包内容。`targetBlockId` 定位槽，`contextOrder` 是独立正整数上下文位置（默认1），不是拥堵 queue priority；多写入来源稳定排序，不可再把这两者绑回一起。相关源：DefaultPromptSlots.kt、PromptCompiler.kt、Actions.kt、DefaultPromptSlotsTest.kt；UI MainCallEditor／PromptBlocksEditor／ProcessingEditors。
 
-无局部format沿用旧规则；显式局部format从空包装开始并关闭该投影的全局包装/插入/合并。明确全范围不能误认成继承主调用范围。名字优先使用楼层归档的真实作者；旧楼层未保存名字时只能回退当前身份。摘要是合成记忆，不冒充某个角色写的楼层。
+### 默认记忆插件（revision51）
 
-已交付配置的总结策略：用户发送后检查未标记DISPLAY原文，包括当前用户楼，达到19楼或更多时保护最早7楼，最多压缩随后11楼（第8–18），保留最新输入；一次用户事件一批。每5个有效未合并小摘要形成一个对应它们来源的大摘要。父压缩隐藏孩子，父展开露出小摘要，叶展开恢复原文；展开不撤销原文摘要标记，不让同楼反复总结。
+真正的扩展自有调用组与可选 MemoryPluginRules，沿原生 History 投影／生成／标记，不通过复制一套 ChatHistory 硬凑。压缩行为基本保留，支持关闭、分支、旧环境和恢复；关闭只撤自身作用。源：MemoryPlugins.kt、MemoryPluginCommands.kt、HistoryMemory.kt、WorkflowRequirements.kt、WorkflowEngine.kt，以及 MemorySettingsPage.kt／AppController.kt。
 
-记忆标记绑定准确来源和修订；来源编辑会使相关小/大摘要失效。压缩视图存引用及差异，持续追加捕获/模式用已证明的前缀差异，非前缀编辑回退完整引用。正文读 `rp_history` 视图；相关性识别和召回仍由普通调用处理，不能声称有自动检索子系统。
+### 自动选项（revision52）
 
-所有运行宏、状态和记忆按聊天隔离。新聊天清空运行环境；旧聊天、分支和重新生成恢复自己的已接受环境。新模型结果必须保留过往结果和原文；程序处理通常只覆盖当前值，可选择记录轨迹。完整分支/轮次快照、断点及已接受副作用继续保存，不能为省空间改成读取今天的宏或重放程序。
+内置独立功能，有专属设置页直接编辑提示词、模型、数量1–12，默认4；用户只写语气、姿态、每个选项方向，结构／上下文／XML 协议和解析由程序预制。初始关闭且提示词空，不替用户写实际策略。
+主显示 BODY 真实接受后独立读取当前分支最近5个完整原始 User＋主 Assistant 显示正文对，忽略思考、摘要、并行附加输出、未选分支和新未答 User。固定输出恰好 count 个 `<option>...</option>`，严格解析；失败提供手动重试。
+选项浮在输入栏上方，点选仅填草稿，不自动发送；已有草稿选择替换／追加／取消。此楼为空可点小按钮生成。结果／加载／错误临时内存，不写 Session、宏、分支、断点或 ZIP；配置才持久化。切换／关闭／来源变更丢弃过期回调。默认沿正文模型，连接、凭据和用量用现有 gateway。
+源：core/AutomaticOptions.kt，app/AutomaticOptionsController.kt、AppController.kt、SqliteLibraryRepository.kt、AutomaticOptionsSettingsPage.kt、CompanionChatPage.kt。内置自动选项的实际显示完成观察与普通公开 REPLY_COMPLETED 事件并非同一入口，不要擅自合并。
 
-失败处可以单独重试、修改对应调用的实际提示词后以冻结环境重新组装、跳过并续跑；成功数据和无依赖分支保留。模型/格式失败默认最多2轮重试，每轮最多2候选，受连接并发能力限制，只接受一个通过验证的结果。结构或环境漂移仍应拒绝隐式恢复，不能放宽检查来消除报错。
+### 本轮修复：正文完成触发与独立排队／并行（revision53）
 
-## 兼容版本与代码入口
+用户明确：直接用原有“正文完成后 · 并行／排队”，不强制关联指定调用。`reply.completed` 表示当前主调用默认／primary 调用完整成功结束、正文及自身正则／处理已完成且被接受；普通调用的可见回复不能触发，默认失败／停用／条件未满足也不触发。监听无需等待无关排队或并行。
+execution15 独立两条路径：普通并行 workflow 沿自身依赖独立推进，不拿队列 gate；queued 按 priority 数字从小到大，同级调用链独立推进、整级完成再下一优先级。两路径独立节点许可；模型连接本身 maxConcurrentRequests 等真实资源上限仍有效。
+用户确认真正前置注入要等：目标模型等待 TURN_PREPARE 中必要注入／移除及祖先，无关准备不全局阻塞。必要注入失败不发送缺内容的模型请求；同调用注入须为模型祖先，循环／无因果关系失败，不死锁。History 记忆压缩仍是真前置阶段。
+一个 engine／中央 writer actor 唯一接受与 checkpoint 权威，workers 只执行冻结上下文。保证会并发写同一地址时静态拒绝；条件／动态及跨事件实际重叠在接受时拒绝，不覆盖已接受结果。同调用依赖链及跨 queue priority 顺序覆盖可保留。
+取消前检查发送方 context，接受及 progress 保护已接受持久化；恢复回放 receipt 不重发昂贵模型／副作用。运行期准备／事件失败写节点 failure 并保存最新 partial checkpoint，preflight 才无恢复 FAILED。旧 execution1–14 沿旧解释，旧环境不迁移。wire21 不变。
+源：WorkflowEngine.kt、RunPlan.kt、ExecutionSemantics.kt、CallEditor.kt。旧 BODY 磁贴最终 freeze 保留兼容，不造正文监听与渲染间循环依赖。
 
-资源wire10读取1–10，SQLite1，recovery格式1；新执行8，旧断点1–7保留原解释方式。新共享 `MacroTemplateTokens` 是引号感知的线性扫描，支持format JSON和里面的姓名占位；旧版本保留regex解释。HTML命名数据、History包装和外部导入各自的专用语法不能机械替换。
+## 最新交付与实际验证
 
-| 改动方向 | 首先阅读 |
-| --- | --- |
-| Android执行/存储桥 | `app/src/main/java/dev/gray/companion/AppController.kt`、`data/SqliteLibraryRepository.kt` |
-| 原生入口及适配 | `app/src/main/java/dev/gray/companion/ui/OriginalFrontendHost.kt`、原版 companion 投影目录 |
-| 调用/提示词编辑 | `ui/MainCallEditor.kt`、`ui/CallEditor.kt`、`ui/PromptTemplateField.kt` |
-| History局部编辑 | `ui/HistoryReferenceEditor.kt`、`ui/MacroCompletion.kt`、core `HistoryReferences.kt` |
-| 提示词组装/选择/条件 | core `PromptCompiler.kt`、`MacroReferences.kt`、`PromptReferenceLanguage.kt`、`Recognition.kt` |
-| 工作流/动作/断点 | core `WorkflowEngine.kt`、`RunPlan.kt`、`Actions.kt`、`RecoveryModels.kt` |
-| History/摘要/来源/层级 | core `HistoryContext.kt`、`HistoryViews.kt`、`HistoryMemory.kt`、`HistoryHierarchy.kt`、`HistoryActions.kt` |
-| 正文/分支/版本 | core `MessageOperations.kt`、`MacroModels.kt`、`ReasoningTextParser.kt` |
-| 配置包 | core `ConfigurationCommands.kt`、`LibraryFormat.kt`、`LibraryValidator.kt` |
+APK：上一任务 `outputs/Companion-0.48.1-preview.apk`，包名 dev.gray.companion，214／0.48.1-preview，arm64-v8a／x86_64，97,594,775 bytes。SHA256 `c145af8923b85cc861c63cd7095e6a46446e4808d1ec97cb4a0564c0cb187167`。签名与此前预览版一致，证书 SHA256 `8501445aff7bae47a3b69a8576a289aadfcd56a38a0ea38c28d548af2a60ba43`。
+17 项定向方法通过：RunPlanLanesTest4、CompletionSchedulingTest7、NativeMemoryRuntimeTest4、DefaultPromptSlotsTest2（上下文顺序／停用槽位）。第一轮测试夹具缺必填插件 name，补一行后最终集中检查和原生构建成功55秒，未放松生产逻辑。没有全项目回归。
+当前 serializer 68类／行为17项，原生记忆 ZIP 实际读取→预览→应用检查通过。真实供应商／模型请求、实际设备安装交互、用户数据库操作未执行；取消保护经代码审查，未做设备演练。不得声称“正式版已全面验证”或“项目所有逻辑已完全优雅”。
+证据：上一任务 `work/0.48.1-acceptance.log`、`work/0.48.1-initial-compile.log`、`work/0.48.1-focused-results`（4份XML）、`work/0.48.1-apk-badging.txt`、`work/0.48.1-apk-signature.txt`；`outputs/0.48.1交付检查记录.txt`／`0.48.1调度修复说明.txt`。
+revision52 的自动选项已在0.48交付并包含本APK；此前13方法累计通过，不要把它们重复计为本轮17项。revision51当时APK受限，但源已包含0.48／0.48.1，不再假报当前缺APK。
 
-core路径前缀为 `core/src/main/kotlin/dev/gray/companion/core/`；ui简写路径前缀为 `app/src/main/java/dev/gray/companion/`。新增通用动作按现有 registry、参数和写入声明扩展，不增加另一套执行器或隐藏状态。
+## 转换资源与指南
 
-## 已有验收，别重复跑
+当前指南：仓库 `docs/AI_IMPORT_GUIDE.txt`、`docs/AI_IMPORT_API_REFERENCE.json`；同份可交付文件在上一任务 `outputs/Companion-0.48.1-AI导入与转换指南.txt`、`Companion-0.48.1-格式与行为API.json`。参考JSON是作者文档，不是可导入文件；实际标记仍 companion.config.v1／companion.bundle.v1。
+用户的 `E:/Dawnload/Gray-G11 (1).json` 已转为 `outputs/Gray-G11-Companion.bundle.zip`，配套 `Gray-G11-转换与历史使用说明.txt`／`Gray-G11-检查与更新说明.txt`。资源说明会披露无法等价转换部分，不当作完全等价 SillyTavern。新导入按当前指南，不自动启用用户未授权的功能。
 
-revision34：69项独立定向检查最终全部通过（64 core、5 app）。初次64项中一条旧流式断言失败；核对旧HEAD及revision31已交付契约后，仅修正并重跑该方法，保留其余63项通过证据。后续5项app检查和原生构建成功，1分37秒。校验APK同包名、同v2证书、versionCode193及Android26+、arm64/x86_64。SHA256：`e69e033604d850505df2820fbe4d4943e98afdcd3517d0f94602a73deb2d5f21`。没有改变wire10／SQLite1／recovery1／execution8；旧1–7语义保留。没有执行真实API、设备安装、启动、UI或性能验收；现有编译警告保留在日志。
+## 已讨论但未实施／需后续用户继续的事项
 
-### revision33 的既有验收
+用户构想原生状态栏：模型行为读最近3层及上一状态宏，完整默认正文结束后触发，记录每楼状态并支持分支，仅最新楼底部显示。通用模型／宏／card.define／accepted快照可组合，但当前最新 ChatRegion 卡片锚点是通用最新 BODY，严格绑定其实际来源楼层的显示过滤尚未完整落实；没有制作新状态栏 ZIP，也没有用户状态栏提示词。不要把“可以组合”写成该成品已交付，后续按用户继续要求补。
+流式 BODY 可显示原始第一候选片段，输出正则通常在完整候选后一次处理，再替换预览；旧磁贴最终freeze、重试候选或供应商buffer可能整篇出现。这次没有开发任意正则等价增量处理，也不要把队列修复等同于“正则完全流式”。
+总体清理已删除确认不可达的旧作者入口／旧前端接线，保留确实需要解释旧资源和旧环境的字段／路径；不能以“删垃圾”名义破坏兼容。新问题先找实际源码与用户契约，不依据旧交接猜意图。
 
-本轮8项定向检查全部通过：5个History局部格式测试、1个旧资源/冻结世界兼容、1个未知journal保留数据、1个原生宏补全边界。原生构建5分17秒成功；同签名APK已保留安装并启动电脑预览，11条旧记录/两个聊天/一条消息内容及首次安装时间不变，SQLite完整性ok。新应用崩溃/启动错误为0；两条Android ashmem弃用诊断保留在原日志，不声称原日志没有任何E行。
+## 工具链与收尾原则
 
-APK SHA256：`3734161287c3655e5e98319beee68530a9785e4a4a1ff97578ca0241ce5dc10a`，versionCode192。上一轮分层记忆和实际导入配置的14项检查也已有通过证据；没有新改动或新故障时不要重跑。
+工具链根 `C:/Users/34601/Documents/Codex/2026-09-22/ni-q/work/toolchain`：JDK `jdk-21.0.12.1+1`，Gradle `gradle-9.6.0/bin/gradle.bat`，Android SDK `android-sdk`，build-tools37.0.0；Gradle缓存 `gradle-cache`。仓库 JVM criteria JETBRAINS，已有缓存，不要照旧失败日志擅自改criteria。
+上一任务 `work/accept-0481.ps1` 为正常离线定向检查+guideTools+assemble，`guide-tools-normal.gradle` 仅辅助导出当前文档，`package-0481.ps1` 核对版本／签名、复制与hash。在真实repo作 workdir，JAVA_HOME／ANDROID_HOME／GRADLE_USER_HOME 按脚本设置，TEMP／TMP 为上一任务 `work/build-temp`。
+当前权限已支持正常Gradle／javac／AAPT2，本轮没有使用老失败时期 workaround。不要在新窗口自行重复构建以“证明接手”；有后续相关改动或真实故障才跑必要项。Windows用同一shell处理文件，不链跨shell删除／移动；不做递归清理。用户尚未授权真实API、用户数据库或设备动作。
+## Revision63 — completed CoT display (2026-10-10)
+User asks to restore original reasoning fold UI after custom <think> output completes. Root cause: execution9+ body-only archive policy erased parsed reasoning before accepted ChatMessage publication. Execution21 preserves text/timestamps as display-only ReasoningSnapshot on accepted replies/candidates; strips opaque nativeMessage. Model requests still remove reasoning via BodyOnlyArchives.message; result macros and full-response archives remain body-only. Original Rikka reasoning renderer/interaction unchanged. Existing execution<=20 replay keeps prior semantics; wire26 unchanged. Build 0.53.1-preview/code221. Focused regression checks accepted receipt serialization, thought retention, macro exclusion and subsequent request exclusion, followed by actual UI completion/toggle/restart verification. Earlier discarded reasoning cannot be reconstructed. No status-card layout changes in this repair.
+Revision63 delivered: 0.53.1-preview/code221, wire26/execution21. Original Rikka folding UI unchanged. 7 focused tests passed (BodyOnlyArchives4, StreamingProcessing3), assembleDebug successful (cot-fix-build.log). Exact APK installed over prior version with same signing certificate. Real DeepSeek Flash nonthinking + C1 custom think: one fresh turn plus status call successful, completed reply retains thought, manual expand/collapse verified, process restart and reopen/expand verified. Persisted snapshot text/timestamps present, native payload null; accepted macros remain without reasoning and full response. SHA256 a7a6a96862dfb3bae52c6b7eb497c3ecb028f5b2daf76172cbaca7981616c619. No global UI changes or status-card clipping fix. Historical execution<=20 already-discarded reasoning unrecoverable.
 
-真实API、手机安装、触摸/键盘观感、大范围设备适配、长历史存储与耗电性能未实测。快照仍有既有的二次增长成本；已减少追加capture/mode的重复，不声称全应用线性存储或已达到顶级性能。运行时插件安装未交付。不要将离线stub检查说成真实模型效果验证。
-
-## 如后续确实需要构建
-
-在实际仓库目录的 PowerShell 中先加载本机环境：
-
-```powershell
-. '../companion/desktop-preview/Environment.ps1'
-& (Join-Path $desktopToolchainRoot 'gradle-9.6.0/bin/gradle.bat') --offline :app:assembleDebug --console=plain --no-daemon '-Pkotlin.compiler.execution.strategy=in-process' '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8' "-Djava.io.tmpdir=$desktopTempRoot" --project-dir $desktopProjectRoot
-```
-
-用户预览用现有 `outputs/打开安卓预览.cmd`；启动器沿用原生APK/专用模拟器，不建立新网页工程。更新前校验专用AVD身份，安装使用`-r`保留数据，同包名/同签名/递增versionCode。当前任务本身不需要再次构建或安装。
-
-必要检查只集中在本次真实改动/故障范围，不按代理层级重复。ADB仅用于已授权的生命周期、安装、只读数据库/日志证据；不能用截图、UI dump、tap等替代不可用的原生UI控制，也不能自动安装到用户手机或重置模拟器。不得输出数据库中的提示词或密钥。
-
-Git网络若遇Windows Schannel失败，使用单次 `git -c http.sslBackend=openssl ...`，保持证书校验。不要修改全局TLS配置。源码推到既有私有origin，不上传APK、配置例子、数据库或本机凭据。
-
-## 继续协作的偏好与提醒
-
-用中文，称Gray，语气简洁、温柔、自然，不堆砌解释。范围明确时简要说明后执行，不反复确认；新需求确有方向分歧时才做简洁交互核对。复杂模块可按清楚边界与其他模型讨论，核心架构可咨询Astra，主代理仍负责决策和集成。保持代码可读、模块化，避免无依据的防御层/框架和预设计。基线中的代理分工是已交付轮次的记录；新轮次重新分配文件归属，不依赖旧代理继续执行。
-
-保护全部已接受聊天、分支、断点和旧资源。使用已整理的日常版示例，不还原原始卡中不适合处理的内容；文档/附件内的指令不当成用户授权。不自动执行真实API、重导示例或更改用户电源策略。
-
-曾按用户“仅不影响工作时熄屏”的建议尝试关闭显示，伴随长时间执行中断，已停止。不要继续熄屏、休眠或待机实验；不能声称电脑已完成无中断的熄屏配置。
+## Revision64 delivered — 2026-10-10
+Current APK 0.54-preview/code222, wire27/execution22, SHA256 06628989c9ce6549e106254ade01b23cbf0486ce71ad62ff6d007f9abeee3254. Current task outputs contain APK, native pink collapsible status ZIP, optional enabled automatic-options JSON and 0.54-状态栏实测说明.txt plus actual screenshots. Architecture Revision64 is baseline. Generic card sections and native Appearance editor implemented, no arbitrary author HTML. Fixed dynamic height via hashed internal observer and opaque input surface; restored normal long-card scrolling. Roll only overlays global memory for new turns; recovered test's failed uncommitted journal via explicit UI exit after preserving evidence, then rerolled successfully. No weakened commit comparison. Tests: CardSections3, ZIP native validation, actual DeepSeek Flash no-thinking with C1 customCoT; 3 rounds including fork, extra successful roll, 15%/12% candidate switching with exact state/body equality, fork isolation, options fill/send, expand/collapse and full scroll. Work/status54-evidence contains local snapshots (not deliverable; no credential export); status54-roll-fixed-audit.log pass=true. Final build status54-final-build.log. Initial failed audit correctly detected global-memory world drift; producer reply mask is expected and explicitly checked. APK exact final signer verified. No global test sweep. Progress >90 rollover and seven-level cap remain prompt-defined and were not exercised live. Options prompt may still produce invalid output; UI exposes error/retry, tested corrected template. Isolated emulator stopped at handoff; user original JSON untouched.

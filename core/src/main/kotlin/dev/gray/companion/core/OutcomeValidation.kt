@@ -1,5 +1,7 @@
 package dev.gray.companion.core
 
+import kotlinx.coroutines.CancellationException
+
 internal class NodeExecutionFailure(
     val ref: PlannedNode,
     val detail: String = "",
@@ -15,18 +17,57 @@ internal data class ValidatedCandidate(val outcome: ActionOutcome, val rawModelT
 
 /** Pure candidate checks. No state, versions, replies or events are published here. */
 internal class OutcomeValidator(private val library: Library, session: Session) {
-    private val tiles = (library.mainCalls.firstOrNull { it.id == session.mainCallId }?.tiles.orEmpty() +
-        library.loadedCallGroups(session).flatMap { it.tiles }).filter { it.enabled }
+    private val initialSession = session
+    private fun tiles(resources: Library, session: Session) =
+        (resources.mainCalls.firstOrNull { it.id == session.mainCallId }?.tiles.orEmpty() +
+            resources.loadedCallGroups(session).flatMap { it.tiles }).filter { it.enabled }
 
-    fun hasDirectContract(address: String): Boolean = tiles.any {
-        MacroOutputContracts.sourceAddress(it) == address
+    fun hasDirectContract(address: String, context: ActionContext? = null): Boolean =
+        ExecutionSemantics(context?.executionVersion ?: ExecutionSemantics.CURRENT).legacyTiles &&
+        tiles(context?.library ?: library, context?.session ?: initialSession).any {
+            MacroOutputContracts.sourceAddress(it) == address
+        }
+
+    /** A manual recovery candidate bypasses the model gateway, so parse it once before processing. */
+    fun validateManual(ref: PlannedNode, context: ActionContext, text: String): ActionOutcome {
+        val library = context.library ?: ExecutionResources.forWorkflow(library, ref.workflow.id, context.executionVersion)
+        val body = if (ExecutionSemantics(context.executionVersion).bodyOnlyArchives &&
+            ref.action?.descriptor?.usesModel == true) try {
+            ReasoningTextParser.parse(text, ref.node.reasoningParsing ?: library.reasoningParsing).text
+        } catch (failure: ReasoningFormatFailure) {
+            throw NodeExecutionFailure(ref, failure.message.orEmpty(), RecoveryFailureKind.OUTPUT_FORMAT)
+        } else text
+        if (ExecutionSemantics(context.executionVersion).bodyOnlyArchives &&
+            ref.action?.descriptor?.execution == ActionExecution.PURE_MODEL && body.isBlank())
+            throw NodeExecutionFailure(ref, "模型候选缺少正文内容", RecoveryFailureKind.OUTPUT_FORMAT)
+        return validate(ref, context, ActionOutcome(body))
     }
 
     fun validate(ref: PlannedNode, context: ActionContext, outcome: ActionOutcome): ActionOutcome {
+        val library = context.library ?: ExecutionResources.forWorkflow(library, ref.workflow.id, context.executionVersion)
+        if (ref.node.actionId == "card.define") {
+            CardDefinitions.validateNode(ref.node, "node.${ref.node.id}", context.executionVersion)
+                .firstOrNull { it.error }?.let {
+                    throw NodeExecutionFailure(ref, it.message, RecoveryFailureKind.CONFIGURATION, retryable = false)
+                }
+            if (outcome.hasEffects()) throw NodeExecutionFailure(ref, "卡片行为只能发布自身结果",
+                RecoveryFailureKind.CONFIGURATION, retryable = false)
+            CardDisplays.validateOutcome(ref.node, outcome.text, context)?.let {
+                throw NodeExecutionFailure(ref, it, RecoveryFailureKind.OUTPUT_FORMAT)
+            }
+        }
         if (ref.action?.descriptor?.execution == ActionExecution.PURE_MODEL && outcome.hasEffects())
             throw NodeExecutionFailure(ref, "纯模型动作返回了状态、宏、注入或事件副作用",
                 RecoveryFailureKind.CONFIGURATION, retryable = false)
-        val processedText = if (ref.node.outputProcessing.isEmpty()) outcome else try {
+        val summaryTag = GlobalMemory.summaryXmlTag(library, ref.workflow.id, ref.node.id, context.executionVersion)
+        val processedText = if (summaryTag != null) {
+            if (!SummaryXml.validTag(summaryTag)) throw NodeExecutionFailure(ref, "摘要 XML 标签名无效",
+                RecoveryFailureKind.CONFIGURATION, retryable = false)
+            try { outcome.copy(text = SummaryXml.extract(outcome.text, summaryTag)) }
+            catch (failure: IllegalArgumentException) {
+                throw NodeExecutionFailure(ref, failure.message.orEmpty(), RecoveryFailureKind.OUTPUT_FORMAT)
+            }
+        } else if (ref.node.outputProcessing.isEmpty()) outcome else try {
             require(outcome.stateWrites.isEmpty() && outcome.macroWrites.isEmpty() &&
                 outcome.activationWrites.isEmpty())
             val resolver = MacroResolver(library, requireNotNull(context.session), context.input, context.executionVersion)
@@ -37,7 +78,7 @@ internal class OutcomeValidator(private val library: Library, session: Session) 
         } catch (_: Exception) {
             throw NodeExecutionFailure(ref, "文本处理失败", RecoveryFailureKind.OUTPUT_FORMAT)
         }
-        val processed = try { RegexOutputCopies.derive(ref.node, processedText) }
+        val processed = try { if (summaryTag != null) processedText else RegexOutputCopies.derive(ref.node, processedText) }
         catch (failure: OutputFormatException) {
             throw NodeExecutionFailure(ref, failure.message.orEmpty(), RecoveryFailureKind.OUTPUT_FORMAT)
         } catch (failure: IllegalArgumentException) {
@@ -50,7 +91,8 @@ internal class OutcomeValidator(private val library: Library, session: Session) 
             values[canonical] = value
         }
         processed.stateWrites.forEach { (key, value) -> values["state.$key"] = value }
-        for (tile in tiles) {
+        for (tile in if (ExecutionSemantics(context.executionVersion).legacyTiles)
+            tiles(library, context.session ?: initialSession) else emptyList()) {
             val source = MacroOutputContracts.sourceAddress(tile) ?: continue
             val text = values[source] ?: continue
             val problem = MacroOutputContracts.validate(tile, text) ?: continue
@@ -60,4 +102,17 @@ internal class OutcomeValidator(private val library: Library, session: Session) 
         }
         return processed
     }
+
+    /** A visible draft only. The accepted candidate still passes strict full-output validation. */
+    fun previewBody(ref: PlannedNode, context: ActionContext, rawBody: String): String? {
+        if (rawBody.length > MAX_PREVIEW_BODY_LENGTH) return null
+        val processed = try { validate(ref, context, ActionOutcome(rawBody)) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { return null }
+        val copy = ref.node.regexOutputCopy
+        return if (copy.enabled && copy.display && ref.node.outputSlot == OutputSlot.BODY)
+            processed.macroWrites["result.${copy.outputKey}"] else processed.text
+    }
+
+    private companion object { const val MAX_PREVIEW_BODY_LENGTH = 1_000_000 }
 }

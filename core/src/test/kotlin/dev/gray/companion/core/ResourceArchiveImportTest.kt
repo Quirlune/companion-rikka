@@ -16,6 +16,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ResourceArchiveImportTest {
+    @Test fun unexpectedReadFailuresDoNotEchoExceptionContents() = staging { directory ->
+        val result = ResourceArchiveImport.read(object : java.io.InputStream() {
+            override fun read(): Int = throw java.io.IOException("private-input-must-not-appear")
+        }, directory)
+        assertNull(result.document)
+        assertEquals("import", result.issues.single().path)
+        assertFalse(result.issues.single().message.contains("private-input-must-not-appear"))
+    }
+
     private fun zip(vararg files: Pair<String, ByteArray>): ByteArray = ByteArrayOutputStream().also { output ->
         ZipOutputStream(output).use { archive -> files.forEach { (name, data) ->
             archive.putNextEntry(ZipEntry(name)); archive.write(data); archive.closeEntry()

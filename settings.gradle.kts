@@ -34,7 +34,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "rikkahub"
+rootProject.name = "velune"
 include(":app")
 include(":highlight")
 include(":ai")

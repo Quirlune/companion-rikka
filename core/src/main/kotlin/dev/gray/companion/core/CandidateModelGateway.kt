@@ -4,9 +4,10 @@ package dev.gray.companion.core
 internal class CandidateModelGateway(
     private val delegate: ModelGateway,
     private val parsing: ReasoningParsingConfig,
+    private val executionVersion: Int = ExecutionSemantics.CURRENT,
     private val onReasoning: suspend (ReasoningSnapshot) -> Unit = {}
 ) : ModelGateway {
-    data class Capture(val body: String, val fullText: String, val reasoning: ReasoningSnapshot?)
+    data class Capture(val body: String, val fullText: String?, val reasoning: ReasoningSnapshot?)
     private val captures = mutableListOf<Capture>()
     private var requests = 0
     val requestCount: Int get() = synchronized(captures) { requests }
@@ -28,7 +29,10 @@ internal class CandidateModelGateway(
         val streamed = StringBuilder()
         var previousReasoning: ReasoningSnapshot? = parser.reasoning
         previousReasoning?.let { onReasoning(it) }
-        val response = delegate.generateResponseAttempt(profile, messages) { delta ->
+        val bodyMessages = if (ExecutionSemantics(executionVersion).bodyOnlyArchives)
+            messages.map { BodyOnlyArchives.message(it, executionVersion) } else messages
+        val requestMessages = ModelRequestMessages.prepare(bodyMessages, executionVersion)
+        val response = delegate.generateResponseAttempt(profile, requestMessages) { delta ->
             if (delta is ModelDelta.Text) streamed.append(delta.text)
             val text = parser.accept(delta)
             val reasoning = parser.reasoning
@@ -48,7 +52,9 @@ internal class CandidateModelGateway(
             else -> ReasoningTextParser.parse(response.text, parsing, response.reasoning ?: parser.nativeSnapshot)
         }
         parsed.reasoning?.let { onReasoning(it) }
-        synchronized(captures) { captures += Capture(parsed.text, response.text, parsed.reasoning) }
-        return parsed
+        synchronized(captures) { captures += Capture(parsed.text,
+            BodyOnlyArchives.fullResponse(response.text, executionVersion),
+            BodyOnlyArchives.displayReasoning(parsed.reasoning, executionVersion)) }
+        return BodyOnlyArchives.response(parsed, executionVersion)
     }
 }

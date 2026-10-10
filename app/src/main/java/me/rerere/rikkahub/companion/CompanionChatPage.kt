@@ -1,7 +1,12 @@
 package me.rerere.rikkahub.companion
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.MaterialTheme
@@ -10,6 +15,11 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -26,18 +36,27 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.gray.companion.AppController
+import dev.gray.companion.AutomaticOptionsUiState
+import dev.gray.companion.core.AutomaticOption
+import dev.gray.companion.core.AutomaticOptionsLayout
+import dev.gray.companion.core.AutomaticOptions
 import dev.gray.companion.core.RecoveryDecision
 import dev.gray.companion.core.RecoveryDecisionKind
 import dev.gray.companion.core.RecoveryFailure
 import dev.gray.companion.core.Role
 import dev.gray.companion.core.OutputSlot
 import dev.gray.companion.core.MessageOperations
+import dev.gray.companion.core.CardDisplays
+import dev.gray.companion.core.CardRegion
 import me.rerere.ai.ui.UIMessagePart
-import dev.gray.companion.ui.MacroTileDashboard
+import dev.gray.companion.core.BodyAppearanceTemplates
+import dev.gray.companion.ui.StyledBody
 import dev.gray.companion.ui.FrozenHtmlBody
-import dev.gray.companion.ui.MacroSidebarPanel
+import dev.gray.companion.ui.CardMenuItems
+import dev.gray.companion.ui.CardMenuDialog
+import dev.gray.companion.ui.menuCards
+import dev.gray.companion.ui.CardRegionDisplay
 import dev.gray.companion.ui.RecoveryFooter
-import dev.gray.companion.ui.hasMacroSidebar
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlin.time.Duration.Companion.milliseconds
@@ -61,6 +80,9 @@ fun CompanionChatPage(
     targetMessageId: String? = null,
     onTargetConsumed: () -> Unit = {},
     onRecoveryEditPrompt: (RecoveryFailure) -> Unit = {},
+    optionsState: AutomaticOptionsUiState? = null,
+    onGenerateOptions: () -> Unit = {},
+    onOpenOptionsSettings: () -> Unit = {},
 ) {
     val library by controller.library.collectAsStateWithLifecycle()
     val busy by controller.busy.collectAsStateWithLifecycle()
@@ -101,28 +123,42 @@ fun CompanionChatPage(
 
     val appearanceSettings = LocalSettings.current
     val displaySession = if (activeBusy) controllerState.generationPreview ?: session else session
-    val sidebarAvailable = remember(library, displaySession) { hasMacroSidebar(library, displaySession) }
-    var sidebarOpen by remember(session.id) { mutableStateOf(false) }
-    val history = remember(displaySession.messages, displaySession.turnRecords) { projectCompanionHistory(displaySession) }
-    val statusBodyNodeId = remember(displaySession.messages, history.nodes, history.logicalMessageIds) {
-        val bodyIndex = displaySession.messages.indexOfLast {
-            !it.deleted && it.role == Role.ASSISTANT && it.outputSlot == OutputSlot.BODY
-        }
-        val userIndex = displaySession.messages.indexOfLast { !it.deleted && it.role == Role.USER }
-        if (bodyIndex <= userIndex || bodyIndex < 0) null else {
-            val bodyId = displaySession.messages[bodyIndex].id
-            history.nodes.lastOrNull { node -> history.logicalMessageIds[node.currentMessage.id] == bodyId }?.id
-        }
+    val menuAvailable = remember(library, displaySession) {
+        menuCards(library, displaySession).isNotEmpty()
     }
-    val frozenHtml = remember(history.bodyDisplays) {
-        history.bodyDisplays.filterValues { it.html != null }.mapValues { (id, display) ->
+    var openedCardId by remember(session.id) { mutableStateOf<String?>(null) }
+    val history = remember(displaySession.messages, displaySession.turnRecords, displaySession.inactivePaths) { projectCompanionHistory(displaySession) }
+
+    // Visual preferences stay live; execution receipts and model history are never rewritten.
+    val bodyTemplate = library.mainCalls.firstOrNull { it.id == session.mainCallId }
+        ?.bodyAppearanceTemplate ?: BodyAppearanceTemplates.DEFAULT
+    val pendingOutputs = if (active) controllerState.pendingOutputs else emptyList()
+    val bodyContent = remember(history, displaySession.messages, bodyTemplate, pendingOutputs) {
+        val content = history.bodyDisplays.filterValues { it.html != null }.mapValues { (id, display) ->
             @Composable { FrozenHtmlBody(display, id.toString()) }
+        }.toMutableMap()
+        if (BodyAppearanceTemplates.isCustom(bodyTemplate)) {
+            val bodies = displaySession.messages.filter {
+                !it.deleted && it.role == Role.ASSISTANT && it.outputSlot == OutputSlot.BODY
+            }.map { it.id }.toSet()
+            history.nodes.forEach { node ->
+                node.messages.forEach { message ->
+                    if (history.logicalMessageIds[message.id] in bodies) {
+                        val markdown = message.parts.filterIsInstance<UIMessagePart.Text>().joinToString("\n\n") { it.text }
+                        content[message.id] = @Composable { StyledBody(bodyTemplate, markdown, message.id.toString()) }
+                    }
+                }
+            }
+            pendingOutputs.filter { it.outputSlot == OutputSlot.BODY && it.text.isNotEmpty() }.forEach { output ->
+                val id = pendingOutputId(session.id, output)
+                content[id] = @Composable { StyledBody(bodyTemplate, output.text, id.toString()) }
+            }
         }
+        content
     }
     val presentation = remember(appearanceSettings, library, session.characterId, session.mainCallId) {
         projectCompanionSettings(appearanceSettings, library, session)
     }
-    val pendingOutputs = if (active) controllerState.pendingOutputs else emptyList()
     val projection = remember(presentation, displaySession, pendingOutputs, history) {
         projectCompanionChat(appearanceSettings, library, displaySession, pendingOutputs, history.nodes, presentation)
     }
@@ -132,6 +168,28 @@ fun CompanionChatPage(
         ChatInputState().also { it.setMessageText(drafts[session.id].orEmpty()) }
     }
     var editingCoreMessageId by remember(session.id) { mutableStateOf<String?>(null) }
+    val acceptedOptionsSourceKey = remember(library, session) { AutomaticOptions.source(library, session)?.key }
+    val optionsSourceKey = acceptedOptionsSourceKey.takeUnless { activeBusy && controllerState.generationPreview != null }
+    val currentOptions = optionsState?.takeIf {
+        active && optionsSourceKey != null && it.sessionId == session.id && it.sourceKey == optionsSourceKey
+    }
+    var pendingOption by remember(session.id, optionsSourceKey, library.automaticOptions) { mutableStateOf<AutomaticOption?>(null) }
+    fun optionStillCurrent(text: AutomaticOption): Boolean {
+        val latest = controller.library.value
+        val latestSession = latest.sessions.firstOrNull { it.id == session.id } ?: return false
+        val latestOptions = controller.automaticOptions.value
+        return !input.isEditing() && latest.automaticOptions.enabled && latest.selectedSessionId == session.id &&
+            latest.automaticOptions == library.automaticOptions && latestOptions.sessionId == session.id &&
+            latestOptions.sourceKey == optionsSourceKey && text in latestOptions.options &&
+            optionsSourceKey != null && AutomaticOptions.source(latest, latestSession)?.key == optionsSourceKey &&
+            text in currentOptions?.options.orEmpty()
+    }
+    fun fillOption(text: AutomaticOption, append: Boolean = false) {
+        if (!optionStillCurrent(text)) return
+        if (append) input.appendText((if (input.textContent.text.isBlank()) "" else "\n") + text.content)
+        else input.setMessageText(text.content)
+        pendingOption = null
+    }
     LaunchedEffect(session.id, input) {
         snapshotFlow { input.textContent.text.toString() }.collect { drafts = drafts + (session.id to it) }
     }
@@ -162,12 +220,16 @@ fun CompanionChatPage(
                 if (messageId == null) {
                     snackbar.showSnackbar("编辑目标已失效，请重新选择消息")
                 } else {
-                    val failure = controller.editMessage(session.id, messageId, text).firstOrNull { it.error }
+                    val original = session.messages.firstOrNull { it.id == messageId }
+                    val failure = if (original?.role == Role.USER) {
+                        if (controller.editUserAndSend(session.id, messageId, text)) null
+                        else controller.error.value ?: "消息未发送，请重试"
+                    } else controller.editMessage(session.id, messageId, text).firstOrNull { it.error }?.message
                     if (failure == null) {
                         editingCoreMessageId = null
                         input.clearInput()
                         drafts = drafts - session.id
-                    } else snackbar.showSnackbar(failure.message)
+                    } else snackbar.showSnackbar(failure)
                 }
             } else {
                 val failure = if (answer) {
@@ -196,7 +258,16 @@ fun CompanionChatPage(
                         drawerState = drawerState,
                         bigScreen = bigScreen,
                         previewMode = messageOutline,
-                        onClickMenu = { messageOutline = !messageOutline },
+                        onClickMenu = {},
+                        companionMenu = true,
+                        companionMenuEnabled = menuAvailable,
+                        companionMenuContent = { close ->
+                            CardMenuItems(library, displaySession, { openedCardId = it }, close)
+                        },
+                        companionSubtitle = listOfNotNull(
+                            library.mainCalls.firstOrNull { it.id == session.mainCallId }?.name,
+                            library.characters.firstOrNull { it.id == session.characterId }?.name,
+                        ).joinToString(" / "),
                         onNewChat = onNewSession,
                         onUpdateTitle = { title ->
                             scope.launch {
@@ -205,11 +276,35 @@ fun CompanionChatPage(
                             }
                         },
                         onOpenDrawer = onOpenDrawer,
-                        onOpenMacroSidebar = if (sidebarAvailable) ({ sidebarOpen = true }) else null,
                     )
                 },
                 bottomBar = { hazeState ->
+                    Column(Modifier.background(MaterialTheme.colorScheme.background)) {
+                    CardRegionDisplay(library, displaySession, CardRegion.INPUT)
+                    val verticalOptions = library.automaticOptions.layout == AutomaticOptionsLayout.LEFT_VERTICAL
+                    @Composable fun OptionsPanel(vertical: Boolean) {
+                    if (active && library.automaticOptions.enabled) AutomaticOptionsStrip(
+                        vertical = vertical,
+                        options = currentOptions?.options.orEmpty(),
+                        loading = currentOptions?.loading == true,
+                        error = currentOptions?.error,
+                        sourceReady = optionsSourceKey != null,
+                        promptReady = library.automaticOptions.blocks != null || library.automaticOptions.prompt.isNotBlank(),
+                        editing = input.isEditing(),
+                        onSelect = { text ->
+                            if (optionStillCurrent(text)) {
+                                if (input.textContent.text.isBlank()) fillOption(text) else pendingOption = text
+                            }
+                        },
+                        onGenerate = onGenerateOptions,
+                        onSettings = onOpenOptionsSettings,
+                    )
+                    }
+                    if (!verticalOptions) OptionsPanel(false)
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+                    if (verticalOptions) Box(Modifier.imePadding().navigationBarsPadding()) { OptionsPanel(true) }
                     ChatInput(
+                        modifier = Modifier.weight(1f),
                         state = input,
                         loading = activeBusy,
                         settings = settings,
@@ -244,7 +339,12 @@ fun CompanionChatPage(
                         onSendClick = { submit(answer = true) },
                         onLongSendClick = { submit(answer = false) },
                         textOnly = true,
+                        editDescription = if (session.messages.firstOrNull { it.id == editingCoreMessageId }?.role == Role.USER)
+                            "发送后生成新版本，原提示词与回复仍保留"
+                        else "修改回复文本，不重算世界状态",
                     )
+                    }
+                    }
                 },
                 chatList = { padding, hazeState ->
                     ChatList(
@@ -262,7 +362,7 @@ fun CompanionChatPage(
                     },
                     onEdit = { uiMessage ->
                         val messageId = history.logicalMessageIds[uiMessage.id]
-                        val original = session.messages.firstOrNull { it.id == messageId && !it.deleted }
+                        val original = session.messages.firstOrNull { it.id == messageId && !it.deleted && it.role in setOf(Role.USER, Role.ASSISTANT) && it.outputSlot == OutputSlot.BODY }
                         if (original == null) scope.launch { snackbar.showSnackbar("消息已失效，请重试") }
                         else if (original.authoredOpening && (activeBusy || !MessageOperations.canSelectOpening(session, original.id)))
                             scope.launch { snackbar.showSnackbar("对话开始后请新建聊天修改开场白") }
@@ -301,6 +401,7 @@ fun CompanionChatPage(
                             val issues = when (choice) {
                                 is CompanionBranchChoice.Generation -> controller.deleteGenerationVariant(
                                     session.id, choice.turnId, choice.variantId)
+                                is CompanionBranchChoice.User -> controller.deleteMessage(session.id, choice.messageId)
                                 is CompanionBranchChoice.Text -> controller.deleteMessage(session.id, choice.messageId)
                                 is CompanionBranchChoice.Opening -> controller.deleteMessage(session.id, choice.messageId)
                                 null -> null
@@ -315,6 +416,8 @@ fun CompanionChatPage(
                             val issues = when (choice) {
                                 is CompanionBranchChoice.Generation -> controller.selectGenerationVariant(
                                     session.id, choice.turnId, choice.variantId, choice.messageId, choice.revisionId)
+                                is CompanionBranchChoice.User -> controller.selectUserVersion(
+                                    session.id, choice.messageId, choice.revisionId)
                                 is CompanionBranchChoice.Text -> controller.selectTextRevision(
                                     session.id, choice.messageId, choice.revisionId)
                                 is CompanionBranchChoice.Opening -> if (activeBusy || !MessageOperations.canSelectOpening(session, choice.messageId)) {
@@ -327,9 +430,11 @@ fun CompanionChatPage(
                             else issues.firstOrNull { it.error }?.let { snackbar.showSnackbar(it.message) }
                         }
                     },
-                    readOnly = activeBusy,
+                    readOnly = !active || activeBusy || pendingRecovery != null,
+                    compactBranchActions = true,
+                    messageActionsEnabled = { !input.isEditing() },
                     enableTts = false,
-                    assistantTextContent = frozenHtml,
+                    assistantTextContent = bodyContent,
                     branchSelectionEnabled = { node ->
                         val opening = history.branchChoices[node.id]?.firstOrNull() as? CompanionBranchChoice.Opening
                         opening == null || (!activeBusy && MessageOperations.canSelectOpening(session, opening.messageId))
@@ -338,9 +443,10 @@ fun CompanionChatPage(
                         scope.launch { snackbar.showSnackbar("对话开始后请新建聊天选择开场白") }
                     },
                     afterMessage = { node ->
-                        if (node.id == statusBodyNodeId) MacroTileDashboard(
-                            library, displaySession, settings.displaySetting.companionBodyStatusGapDp.toInt()
-                        )
+                        val messageId = node.messages.getOrNull(node.selectIndex)?.id?.let { history.logicalMessageIds[it] }
+                        val body = displaySession.messages.firstOrNull { it.id == messageId && !it.deleted && it.role == Role.ASSISTANT && it.outputSlot == OutputSlot.BODY }
+                        if (body != null) CardRegionDisplay(library, displaySession, CardRegion.CHAT,
+                            body, allowLegacyFloor = !activeBusy)
                     },
                     footer = {
                         RecoveryFooter(
@@ -377,6 +483,66 @@ fun CompanionChatPage(
                     )
                 },
             )
-        if (sidebarOpen && sidebarAvailable) MacroSidebarPanel(library, displaySession) { sidebarOpen = false }
+        openedCardId?.let { id ->
+            CardMenuDialog(library, displaySession, id) { openedCardId = null }
+        }
+        pendingOption?.takeIf { active && it in currentOptions?.options.orEmpty() }?.let { text ->
+            AlertDialog(onDismissRequest = { pendingOption = null }, title = { Text("输入框已有草稿") },
+                text = { Text("用这个选项替换草稿，还是追加到草稿后？") },
+                confirmButton = { TextButton(onClick = { fillOption(text) }, enabled = !input.isEditing()) { Text("替换") } },
+                dismissButton = { Row {
+                    TextButton(onClick = { fillOption(text, append = true) }, enabled = !input.isEditing()) { Text("追加") }
+                    TextButton(onClick = { pendingOption = null }) { Text("取消") }
+                } })
+        }
+    }
+}
+
+@Composable
+private fun AutomaticOptionsStrip(
+    options: List<AutomaticOption>, loading: Boolean, error: String?, sourceReady: Boolean,
+    promptReady: Boolean, editing: Boolean, onSelect: (AutomaticOption) -> Unit,
+    vertical: Boolean,
+    onGenerate: () -> Unit, onSettings: () -> Unit,
+) {
+    var expanded by remember(options) { mutableStateOf<AutomaticOption?>(null) }
+    val panelModifier = if (vertical) Modifier.width(144.dp).heightIn(max = 300.dp).verticalScroll(rememberScrollState()) else Modifier.fillMaxWidth()
+    Column(panelModifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("自动选项", style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+            if (loading) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                Text("  正在生成", style = MaterialTheme.typography.labelSmall)
+            }
+            TextButton(onClick = onSettings) { Text("设置") }
+        }
+        @Composable fun OptionChip(option: AutomaticOption) {
+            AssistChip(onClick = {
+                if (option.title != null) expanded = if (expanded == option) null else option else onSelect(option)
+            }, shape = androidx.compose.foundation.shape.RoundedCornerShape(50),
+                modifier = if (vertical) Modifier.fillMaxWidth() else Modifier.widthIn(max = 320.dp),
+                label = { Text(option.title ?: option.content, maxLines = if (option.title == null) 3 else Int.MAX_VALUE,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, enabled = !editing)
+        }
+        if (vertical) options.forEach { OptionChip(it) }
+        else if (options.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(options) { OptionChip(it) }
+        }
+        expanded?.takeIf { it in options }?.let { option ->
+            Text(option.content, style = MaterialTheme.typography.bodyMedium,
+                modifier = if (vertical) Modifier else Modifier.heightIn(max = 180.dp).verticalScroll(rememberScrollState()))
+            TextButton(onClick = { onSelect(option) }, enabled = !editing) { Text("填入输入框") }
+        }
+        error?.takeIf { it.isNotBlank() }?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        if (editing) Text("编辑历史消息时不能填入选项。", style = MaterialTheme.typography.bodySmall)
+        if (!promptReady) {
+            Text("请先填写选项的语气与方向。", style = MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick = onSettings) { Text("填写提示词") }
+        } else if (options.isEmpty() || error != null) {
+            OutlinedButton(onClick = onGenerate, enabled = sourceReady && !loading) { Text(if (error != null) "重新生成选项" else "生成选项") }
+            if (!sourceReady) Text("正文准备好后可以生成选项。", style = MaterialTheme.typography.bodySmall)
+        }
     }
 }

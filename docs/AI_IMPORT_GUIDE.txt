@@ -1,0 +1,167 @@
+velune 扩展与资源作者指南
+适用：0.57-preview / versionCode 225，revision67，2026-10-10
+资源 wire=30；执行语义 execution=23；配置 companion.config.v1；ZIP companion.bundle.v1。
+
+这是给首次接触项目的 AI 与作者的当前指南，不是导入文件。产品名称是 velune；companion.* 格式标记、dev.gray.companion.core 命名空间和应用身份保留以兼容更新，不要擅自改名。
+本指南替换旧 revision56 的叠加补丁式说明。旧备份、已接受回复与冻结执行环境依然按原版本解释；“当前写法”不表示可以删除旧字段、迁移历史或重新执行副作用。
+
+1. 先选择正确产物
+
+资源转换：角色资料 -> characters；共享词条 -> packages。原文有提示词，不等于授权新增模型请求、模型连接、聊天、记忆或全局开关。保留用户原文、顺序和含义；普通词条 isTemplate=false，避免原文中的 {{...}} 意外展开。
+原生扩展：ConfigurationExtension 引用普通资源，常见为一个 GROUP；CallGroup 持有 workflows、stateDefaults、cards 和绑定的提示词包。宿主已有编辑器、调度器、宏与卡片渲染器负责运行。
+代码扩展：同一 ConfigurationExtension 可增加 code，工作流通过 plugin.run 调用受限 JavaScript 文本处理。它不是浏览器页面插件，也没有任意设置页、DOM、网络、文件、宿主模型或数据库 API。
+内置记忆和自动选项：各有原生设置与全局权威开关，不要另造普通插件来假扮内置功能。
+
+读取路径：先本文件；再 AI_IMPORT_API_REFERENCE.json 中需要的类型与 actions；改代码前再读 AGENTS.md、docs/VELUNE_WORK.md 与相关源码。API JSON 是 serializer 字段/枚举/默认值和 ActionRegistry 目录，不是 JSON Schema，也不是完整语义校验器。optional=true 只表示可以省略，不保证其默认值构成有效资源。typedDefaults 中的自动 ID 占位文字必须换成真实稳定 ID。
+
+2. 三种文档不能混用
+
+A. 推荐 config JSON：根仅 format、label、resources、commands。
+{"format":"companion.config.v1","label":"我的扩展","resources":{"groups":[],"extensions":[]}}
+resources 是对象，其中每种资源是数组；commands 是可选命令数组。不要添加根 version、schemaVersion、settings、automaticOptions、metadata 或自定义字段。
+
+资源数组 / manifest 或 command kind：
+characters / character；mainCalls / mainCall；packages / package；groups / group；personas / persona；tags / tag；profiles / profile；connections / connection；extensions / extension。
+注意 config 的 tags 对应原生 Library.promptTags；MAIN/GROUP 等大写仅用于 ExtensionResourceRef.kind。
+
+B. ZIP：根目录 manifest.json。最小清单：
+{"format":"companion.bundle.v1","label":"示例","files":[{"path":"status.config.json","kind":"config"}]}
+manifest 根仅 format、label、files；files 每项仅 path、kind、可选 id。kind 可为上述单资源种类，或 config、native、character-card、text、avatar、documentation。id 只适用于独立资源/角色卡，且必须与文件中的 id 一致。
+config 文件内放配置根；kind=group 等文件内直接放该资源对象，不再套 resources。
+
+包内路径以 ZIP 根为准，用相对正斜杠路径；禁止绝对路径、父级跳转、大小写冲突及重复路径。manifest 须在根目录，不能多包一层文件夹。所有成员均须有明确用途；仅标 text 并不能免除未引用文件错误。
+字符串附件写为 {"$text":"prompts/rules.txt"}，头像字段可用 {"$avatar":"images/avatar.png"}。标记对象只能有一个键；manifest 为附件分别声明 text/avatar，且必须由资源真实引用。只在 ZIP 装配阶段解析；单独导入 config JSON 时对应字段须为实际字符串/头像对象。文本采用 UTF-8。README 标 documentation，只供阅读、不创建资源；“说明文档未导入”是非错误提示。
+原生备份不能和其他配置主文档混装。不要将无关脚本、库、图片或操作系统文件打进 ZIP。
+
+C. 完整 Library 原生备份含 schemaVersion 和会话等字段，属于备份/恢复用途；其 schemaVersion 当前30。不要用它伪造运行记录或承载一个普通扩展。外国角色卡 JSON/PNG/CHARX 只有真实导入器识别的格式可转换；外国供应商设置、脚本和自定义前端字段不因此变成本项目字段。
+
+3. ID、引用与配置命令
+
+显式给资源及被引用的 workflow/node/block/card/entry 稳定 ID；重导入相同 ID 表示更新目标，不要每次随机换 ID。id、slug、name/title 含义不同。slug 是查询标识，非空时用小写字母开头及小写字母/数字/_/-；name/title 是显示文字。character/package namespace 共享唯一域；保留原有引用，不凭显示名称猜 ID。
+所有引用须闭合，完整候选图通过 LibraryValidator 才能应用。配置预览和应用是独立阶段；先查 issues 中 error=true，不能以“JSON 能解析”替代验证。
+
+commands 的真实 op：
+- put：{"op":"put","kind":"group","value":{"id":"my_group","name":"我的组","workflows":[]}}
+- mergePatch：{"op":"mergePatch","kind":"group","id":"my_group","patch":{"name":"新名称"}}
+- remove：{"op":"remove","kind":"group","id":"my_group"}
+- bind：{"op":"bind","kind":"character","id":"角色真实ID","packages":["包ID"],"groups":["组ID"]}
+- select：{"op":"select","key":"automaticOptions","value":{"enabled":false,"count":4}}
+mergePatch/remove/bind 用 id 或唯一 slug 二选一，不能同时给出；并非所有资源都有 slug。mergePatch 递归合并对象、整体替换数组，null 删除键，最终仍须通过 serializer 和图校验；不可修改 id。bind 列表是替换，不是追加；group 只能绑定 packages，character/mainCall 可绑定 packages/groups。
+select 仅支持 selectedProfileId、selectedPersonaId、reasoningParsing、titleConfig、automaticOptions、memoryConfig。没有 op=config.set；内部记录名称不能当导入指令。普通资源包不改本机全局设置，只有用户明确要求时才使用 select。不要导入 API 密钥、会话记录或自动发消息。
+
+4. 扩展所有权和启停
+
+当前最小声明：
+{"id":"my_extension","name":"我的扩展","enabled":false,"resources":[{"kind":"GROUP","id":"my_group"}]}
+ConfigurationExtension 真实字段：id、name、resources、parameters、code、memory、enabled、mainScopeId。name 必填；resources 成员只含 kind/id，kind 为 CHARACTER、MAIN、PACKAGE、GROUP。enabled 是可空兼容字段，新包明确 false，用户在扩展列表卡片内打开全局开关。新扩展通常不填 mainScopeId；它主要用于旧 MainCall 卡片迁移后保留原主调用范围。
+原生扩展由资源链接进入已有编辑器；不是一套可编写自定义插件页面的 UI API。parameters 是旧字段映射，编辑的是成员资源本身而非独立参数值；新作者优先直接编辑原生资源。parameters 的真实形状及白名单见 ExtensionModels/ExtensionFieldRegistry。
+
+启用的新原生/代码扩展可跨主调用使用，无需给每个主调用安装；关闭阻止新执行与注入并立即隐藏所属卡片，但不会抹除已接受回复、状态、宏历史或分支。一个组被多个扩展拥有时，至少一个可用 owner 开启即可使用；被关闭扩展拥有的组不会因手动绑定而绕过开关。无扩展所有权的独立手动资源仍可用。
+内置记忆以 Library.memoryConfig.enabled 为权威，自动选项以 Library.automaticOptions.enabled 为权威。不要用一般 extension.enabled 代替这两个开关。
+null enabled、Session.enabledExtensionIds、MainCall.extensionBindings/Origins 是旧数据兼容合同，不是新包启用指南。迁移只作用于 live 定义，旧冻结 worlds 不重写。旧聊天冻结世界未包含全新扩展时，需要新建聊天；不能承诺导入后立刻出现在所有旧分支。进行中的运行按捕获合同处理，关闭不能被宣传为回滚已接受输出。
+
+5. 卡片归属、数据、CSS 和 MENU
+
+新数据卡片放 CallGroup.cards；扩展引用 GROUP 一次。MainCall 的新编辑入口只负责正文 bodyAppearanceTemplate，不能把 cards、正文模板或旧 tiles 混为一个系统。MainCall.cards 仍可解码以迁移旧 live 卡片；不要写新主调用卡片。旧 card.define 节点仍支持，与资源卡共用字段、布局和快照规则。
+CardResource：id、enabled、sourceTemplate、definition。sourceTemplate 可为完整 XML 字面量或现有宏模板；运行时在实际聊天/分支上下文解析，不发起模型请求。definition 的核心字段见示例及 API。
+
+XML 模式必须显式 dataMode="XML"，xmlRoot="status"，xmlSample 为完整标准样例。序列化缺省仍为 MANUAL，只有新建 UI 默认选择 XML。不要省略 dataMode 后期待自动推断。
+编辑器“生成字段与显示元素”使用 XmlCardData.infer；导入器不会替作者补齐 fields/elements。直接构造 JSON 时必须把标准样例对应的字段与元素也写入。样例改动后字段不匹配会拒绝保存/显示，需重新生成。
+叶路径相对根，<status><mood>...</mood><notes><item>...</item></notes></status> 对应 mood、notes.item。字段 key 必须等于 xmlPath；样例中重复叶路径或重复祖先推断为 LIST。缺少运行值显示为空，额外路径忽略，标量字段意外重复报错。要让只有一个值的运行列表稳定工作，在标准样例中展示两个重复项。
+字段类型 TEXT/NUMBER/PROGRESS/LIST；数字必须有限，PROGRESS maximum>minimum。字段1–32个，标题1–128字符，路径≤256字符，各简单标签≤64字符；不支持属性、命名空间、混合正文与子元素、DTD/外部实体。支持简单嵌套、重复、CDATA 和 XML 转义。完整输入≤1,048,576字符、节点≤8192、深度≤32、每叶文本≤16384字符、列表≤256项。
+卡片解析器可从周围说明/围栏中定位唯一完整根，但建议模型只输出干净 XML。多个同名根、损坏标签不静默修补。不在流式半截响应上解析。
+
+fields 每个 key/title 必填；XML 用 xmlPath，MANUAL 可用 source/pattern/captureGroup。elements 为显示引用：{"id":"mood","fieldKey":"mood"}；同一个字段可多次显示，只需不同 element.id，不产生新宏。id 使用 ASCII 字母或下划线开头，后续字母数字/_/-，≤128字符且唯一。默认英文路径 notes.item 生成 notes__item；其他路径可能生成哈希 ID，冲突加后缀。使用实际 elements 中的 ID，不能凭中文字段名猜 CSS。
+sections：{"id":"details","title":"详细状态","initiallyExpanded":false}；element.sectionId 指该分区，无 sectionId 的元素在外层。分区与元素 ID 不冲突，最多32分区/128元素。
+CSS 选择器：.card、.card-title、.card-element、.field-title、.field-value、.field-list、.field-progress、.field-more、.card-section、.card-section-title、.card-section-content，以及 #实际元素或分区ID。
+例如 .card{padding:16px} #mood .field-value{font-size:20px}。
+生成的字段文本会 HTML 转义。CSS 不进行字段/宏插值，不允许 JS、外部资源、url()/@import/@font-face、反斜杠转义或标签；最大65536字符。可写静态样式，不是任意 HTML/网页引擎。
+
+presentation=CARD 可放 CHAT/SIDEBAR/INPUT/MENU；SIDE_PANEL 可放 SIDEBAR/MENU；STRIP 可放 CHAT/INPUT/MENU。defaultRegion 指默认位置；MENU 是聊天右上角省略号中的卡片列表，不是新增菜单动作 API。该菜单默认没有作者未定义的内容。
+userAdjustable 控制用户能否调整布局，autoAdapt 为窄宽适应，minimumWidthDp 是120–1200dp的紧凑断点，不是固定宽度；floorScope=LATEST/EACH，hideWhenEmpty=true 可隐藏空内容，condition 控制可见性。用户覆盖位置在 Session.cardPlacements，扩展导入不要编造 Session。
+CHAT 楼层卡遵守正文修订与分支来源；旧数据不能冒充新楼状态。已接受 card.define 快照随回执保留，不能靠改 live 模板重写旧结果。不同区域和资源卡应交给 CardDisplays 统一解析。
+card.define 需要 cardDefinition，visible=false、outputProcessing=[]、regexOutputCopy.enabled=false。只是需要可编辑状态展示时优先使用 CallGroup.cards，避免增加无必要的执行节点。
+
+6. 可直接导入的完整最小示例
+
+同目录 examples/native-xml-status.config.json 是完整配置，含2个资源：一个无工作流的调用组与一个默认关闭的原生扩展。组有 XML 状态卡、两个字段、列表、可折叠分区、CSS，defaultRegion=MENU。无 JS、模型、连接、主调用、聊天或 select 设置。
+直接导入 JSON；在扩展列表打开“XML 状态卡示例”，进入包含它的新聊天，点击右上角省略号可见“状态”。它显示固定演示 XML；不会自动从角色或历史推测状态。实际使用时在原生卡片编辑器修改来源，或添加下面的显式模型流程。
+生成同等 ZIP：
+python docs/examples/pack_native_xml_status.py /可写目录/native-xml-status.bundle.zip
+打包脚本只使用 Python 标准库，拒绝覆盖已存在文件。JSON 示例才是事实来源；ZIP 只增加 manifest，不改资源。
+
+7. 从静态卡片扩展到原生后台状态流程
+
+最小关系：扩展 -> GROUP -> workflow(model.generate -> macro.process)；组中 CardResource.sourceTemplate="{{state.my_status}}"。将 my_status 的初始完整 XML 放 group.stateDefaults。用户填写规则和模型后再启用流程。初始 XML 应与卡片 xmlSample 同一结构。
+Workflow.trigger="reply.completed" 表示主调用默认调用成功并接受正文之后触发，不等待无关并行调用；普通附加可见输出不会冒充主回复完成。需要另一个调用完成后再运行时用 afterWorkflowId，它优先于 trigger，等价 workflow.completed:<workflowId>。
+节点依赖使用 dependsOn 中同一 workflow 的 node ID；跨 workflow 用 afterWorkflowId，不把 workflow ID 塞进 dependsOn。model.generate 输出设唯一 outputKey="my_status_generated"，visible=false；下一 macro.process 节点依赖它，inputTemplate="{{result.my_status_generated}}"，macroProcess={"key":"state.my_status","mode":"SET"}，另设唯一 outputKey。arguments 的值必须是字符串，即使 descriptor 类型为 NUMBER/BOOLEAN。
+注意资源卡解析失败只表示显示错误，不替宏写入提供事务性 XML 校验。如果要求“坏 XML 不覆盖上一状态”，在保存 macro.process 前加入 card.define 校验节点，依赖链为生成 -> card.define -> 保存；其 cardDefinition 使用同一有效 XML 结构，visible=false。card.define 会产生自己的已接受卡片，不是纯无显示校验；这类流程应以该动作卡为显示来源，避免同时布置资源卡造成重复。不要在验证前写入上一状态。
+模型节点 blocks 显式提供任务、输出协议、History 与上一状态，includeHistory=false 避免重复自动历史。输出协议如“仅输出唯一 <status>，含 mood 和 notes/item，不带属性，文本作 XML 转义”。保留用户任务原文，不暗中补写角色策略。
+
+queued=false 是并行路径，各依赖链独立推进；queued=true 按 priority 从小到大分级，同级可并行，该级完成才到下一等级。priority 不决定上下文顺序。模型连接的并发限额仍有效。声明/实际写冲突会拒绝，不能靠多个无依赖节点写同一个 state/result 抢最终值。
+turn.prepare 用于主模型编译前所需注入；prompt.inject 必须定位真实模型节点/槽，必要依赖完成后模型才编译。reply.completed 不适合注入本轮已发送的主模型请求。event.emit 只能发自定义事件，不能伪造 turn.prepare、user.message、reply.completed、history.process 或 workflow.completed: 保留事件。
+
+8. 提示块与宏
+
+WorkflowNode 常用：id、actionId、dependsOn、blocks、inputTemplate、outputKey、visible、includeHistory、enabled、arguments、generation。generation 的 profileId 为空可继承 workflow/全局模型；参数留空继承。不要在普通扩展中硬编码用户凭据或替换全局选中模型。
+PromptBlock 常用：id、title、template、role=SYSTEM/USER/ASSISTANT、enabled、position=BEFORE_HISTORY/IN_HISTORY/AFTER_HISTORY、depth、processing、condition/recognition。所有注入与历史投影完成后，当前 execution 自动合并相邻相同最终 API role，中间一个换行，省略纯空白消息；原始历史角色与楼层不变。不要开启旧 history.mergeMessages 来模拟此行为。
+
+常用文本引用：{{input}}、{{user.name}}、{{user.prompt}}、{{character.name}}、{{character.profile}}、{{pack.namespace.key}}、{{state.my_status}}、{{result.my_status_generated}}。静态词条分类 {{category.category}} 与运行结果分类 {{results.category}} 不同。
+完整 typed 宏语法及允许字段以 PromptReferenceLanguage/MacroReferences 为准；不要把点分路径当 JS 属性或任意 JSONPath。// 只是编辑器插入助手入口，不是运行时语法。
+历史例子（以下为模板文本，放进 JSON 字符串时再 JSON 转义）：
+{{type:builtin.in:history.name:messages.source:display}}
+{{type:builtin.in:history.name:messages.source:display.from:end-3.through:end-1}}
+{{type:builtin.in:history.name:messages.speaker:assistant.from:end-3.through:end-1}}
+{{type:builtin.in:history.name:messages.speaker:user.from:start-2.through:start-4}}
+{{type:builtin.in:history.name:messages.speaker:user.format:"{\"apiRole\":\"ASSISTANT\"}"}}
+speaker 只用于 builtin history messages/context，取 user/assistant/system。先按原 speaker 过滤，再从匹配池选 from/through，最后投影最终 API role；source:display/model 独立选择文本版本，model 不等于 assistant。{{floor}} 保留原 BODY 楼层编号。未指定范围但指定 speaker 时读取全部匹配来源，不继承主历史范围。结构化 History 独占普通块，不混字面说明；需要普通字符串可用 {{history.text}} 等相应文本来源。
+
+普通 PromptEntry 默认 isTemplate=false；true 才把文本当模板递归处理。不要为了引用已有词条而批量把用户词条改为模板。历史已发布版本是字面快照。版本选择不能凭空制造未记录或 current-only 来源的旧版本。
+接收槽是 PromptBlock(injectionSlot=true,template="",processing=[],slotReferences=[完整单个宏引用...])；不是一个含 {{slot}} 的普通字符串。slotReferences 不混字面文字或结构化 History。prompt.inject 的 targetBlockId 用真实 block.id，contextOrder 为正整数，决定槽内上下文顺序，与 queued/priority 无关。注入内容已解析为字面值，不再递归展开。
+
+正则使用 RE2J，不支持 PCRE/JS lookbehind、反向引用等完整语法。JSON 中反斜杠须再次转义。TextProcessStep 的 REGEX_EXTRACT 可用 requireMatch=true 拒绝未匹配；输出正则副本/text.extract 有自己的严格规则，不能互相类推。
+Condition.expression 是受限只读 DSL，不是 JS；复杂字段和动作参数必须查 API descriptor 与对应 validator，不能把动作名当成通用远程 API。
+
+9. JavaScript 扩展的真实边界
+
+扩展 code={"runtime":"javascript","version":1,"source":"function execute(context) { return context.input.trim(); }"}。
+通过节点 actionId="plugin.run"、arguments={"pluginId":"扩展ID"} 调用。扩展须参与当前执行上下文。JS 只需全局同步 execute(context)，不要 export default、ES module、async/Promise。
+context 有 pluginId、input、state、results、messages；messages 为最多32条 BODY，含 role/text/speakerName，state/results 是字符串映射。输入是节点 inputTemplate 及 inputProcessing 后的值，不保证自动等于用户输入。返回字符串或 {text:"..."}，不会返回宿主 state patch、页面、模型调用或文件写入。
+源代码≤64KiB、序列化捕获上下文≤256KiB（内部含 code）、state/results 各≤256项、输出≤128KiB；Android 每次新 QuickJS，默认1000ms、16MiB内存、256KiB栈。传入 JS 的上下文深冻结，code 对象移除，Date/Math.random 禁用，无网络、模型、凭据、文件或可变宿主绑定。
+需要写状态、注入或调用模型时组合普通原生 workflow actions。卡片 CSS/正文外观模板也不能替代码扩展突破沙盒。导入仅保存，不能视为执行成功。
+
+10. 内置摘要与自动选项的 XML 合同
+
+记忆：全局唯一 memoryConfig 引用 ConfigurationExtension.memory；实际小/大摘要 workflows 在其 GROUP 中，生成摘要仍保存各 Session.historyMemory，不跨聊天共用。规则按原 BODY 楼层计数，用户和助手各一层；小摘要保留尾部和保护最早楼层，大摘要聚合完整小摘要且不能拆开来源。不要手写 HistorySourceRef/指纹来伪造来源。
+GlobalMemoryConfig.smallSummaryXmlTag / largeSummaryXmlTag 默认 summary；execution23 的实际摘要生产模型必须输出唯一完整且非空的该标签，如 <summary>摘要正文</summary>。标签内部只支持纯文本、XML 转义/CDATA，不允许属性、嵌套、DTD/外部实体；输入≤1,048,576字符。允许周围文本不意味着允许第二份同名摘要。缺失/重复/空/非法标签导致 OUTPUT_FORMAT，不保存该摘要。
+可见的摘要提示词协议引用 {{state.memory_summary_xml_tag}}。编辑标签时同步检查提示块，不能依赖隐藏系统提示修补输出。当前摘要先做 XML 校验提取，旧正则副本不应先剥掉根；execution≤22 冻结流程保留旧行为。xmlValidationVersion 是 live 协议迁移标记，不是关闭验证按钮。不要为新包设置凭据别名/旧工作流迁移字段。
+
+自动选项是全局辅助 UI，结果临时存在内存，不写会话/宏/ZIP，也不自动发送。count 1–12，historyTurns 1–50对已完成用户/主助手 DISPLAY BODY，默认5。blocks 非null时发送实际保存的提示块与输入，不暗补删掉的 History 或 SYSTEM。generation/reasoningParsing/inputTemplate/inputProcessing/outputProcessing 使用原生模型编辑字段；旧 prompt/modelProfileId 在 blocks=null 保留原兼容方式。
+当前字段：titlesEnabled、items=[{contentTag,titleTag},...]、layout=ABOVE_HORIZONTAL/LEFT_VERTICAL。count 是数量权威；不足 items 使用默认 option/title，缩减数量时可保留未使用的后续配置。不同标签按名称匹配，同名按出现顺序分配，各标签出现次数必须精确；有标题时按每项 title 再 content 消耗同名值。
+输出是并列元素，不套额外根：<title>询问近况</title><option>今天过得怎样？</option>。配置独立名字时使用实际 contentTag/titleTag。不能带属性、嵌套、说明、代码围栏、注释、DTD/外部实体或处理指令；文本中的 &、<、> 作 XML 转义。完整UTF-8回复≤64KiB，单项内容≤2000字符，标题≤120字符且都非空；不显示半成功选项。
+items=[] 且 titlesEnabled=false 保留旧重复 <option> 的兼容解析，不要把新的自定义 XML 能力投射到旧解析器。无标题显示内容，有标题显示完整标题，点击展开内容再填入草稿；横排在输入上方，竖排在左侧。已有草稿仍走替换/追加确认。
+提示协议用可见 {{state.automatic_options_protocol}}，数量可用 {{state.automatic_options_count}}；协议更新按钮只更新指定格式块，不替用户清空任务/风格。删改协议后输出不匹配应报错，不能描述成模型无条件遵守新标签。
+
+11. 正文外观与历史兼容
+
+MainCall.bodyAppearanceTemplate 默认字面 {{正文}}，空白/默认使用原生 Markdown。自定义单框 HTML/<style> 模板通过受限 inert renderer，把实际正文插入合法文本节点，占位不等于任意全局宏。它只改变助手正文外观，不接管原生思考、消息动作、用户消息、卡片 CSS 或普通附加输出。不要宣称自定义模式支持任意脚本、外链资源、原生数学/交互图/引用跳转的全部能力。
+旧 tiles/bodySourceTileId/bodyTextTemplate、ExtensionBinding、旧摘要与自动选项兼容字段可能仍在 serializer 目录；“可以读”不等于当前新资源应该写。回放必须遵守捕获 executionVersion，不把新模板、开关资源或解析规则追溯套到历史。
+
+12. 最少验证与维护入口
+
+先静态确认：引用闭合、enabled=false、无模型/密钥/聊天意外新增、fields 与 xmlSample 一致、ZIP 所有附件被引用。再用真实导入器预览/应用到内存默认库，最终由用户检查实际 UI。不要重复跑全量模型或设备测试来验证纯资源包。
+仓库自带可复现的离线 Java 工具，需项目 Java21/Gradle/core 依赖环境：
+bash ./gradlew --no-configuration-cache -I docs/examples/authoring-tools.init.gradle :core:authoringCatalog
+bash ./gradlew --no-configuration-cache -I docs/examples/authoring-tools.init.gradle :core:validateExtension -PextensionFile=docs/examples/native-xml-status.config.json
+Windows 对应 gradlew.bat。打包后将 extensionFile 换为 ZIP 路径，可同时验证传输层。authoringCatalog 从当前实际 serializers/ActionRegistry 重生成目录；validateExtension 只在临时目录和内存默认库调用 ResourceArchiveImport.read -> ConfigurationCommands.preview -> apply，不读生产库、不发模型请求。这个轻量工具故意拒绝头像；含头像包应走支持头像的现有真实导入测试/应用。工具不会证明模型遵守输出协议、设备布局或运行时分支效果。
+
+源码定位（core 路径为 core/src/main/kotlin/dev/gray/companion/core）：
+- 导入/命令/严格字段：ResourceArchiveImport.kt、ResourceArchiveIo.kt、ConfigurationCommands.kt、ResourceKindCatalog.kt、LibraryValidator.kt。
+- 数据类型：Models.kt、ExtensionModels.kt、CardModels.kt；版本 LibraryFormat.kt、ExecutionSemantics.kt。
+- 扩展启停/迁移：PluginParticipation.kt、ExtensionLiveMigration.kt、ExtensionCommands.kt、CompletedWorlds.kt。
+- 卡片：XmlCardData.kt、CardDisplays.kt、CardMarkup.kt、CardLayoutCommands.kt；测试 XmlCardDataTest、CardResourceIntegrationTest、CardSectionsTest、GlobalExtensionSwitchTest。
+- 调用/提示词：Actions.kt、RuntimeEvents.kt、PromptCompiler.kt、PromptReferenceLanguage.kt、MacroReferences.kt；实际 actions 字段以 API JSON 为准。
+- 摘要/选项：GlobalMemory.kt、SummaryXml.kt、OutcomeValidation.kt、AutomaticOptions.kt、AutomaticOptionsXml.kt；测试 SummaryXmlTest、AutomaticOptionsXmlTest。
+- 代码扩展：PluginCodeExecutor.kt 与 app 内 QuickJsPluginExecutor；UI 从 app/src/main/java/dev/gray/companion/ui 的 ExtensionPages/CardResourcesEditor/CardDefinitionEditor/MemorySettingsPage/AutomaticOptionsSettingsPage 追踪。
+新功能先遵守 docs/ARCHITECTURE.md 和 docs/DEVELOPMENT.md 的边界：原生资源权威、接受回执、分支来源、冻结执行语义。修改字段时同步 serializer 目录与示例；修改语义时检查版本隔离。未经用户授权不迁移生产数据、调用付费模型、提交 Git 或扩大到新的插件协议。
+

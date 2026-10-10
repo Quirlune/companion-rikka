@@ -1,24 +1,15 @@
 package dev.gray.companion.core
 
-/** Shared pure evaluation for current dashboards and frozen final BODY publication. */
-data class ResolvedMacroDisplay(val tile: MacroTile, val value: String, val error: String?,
+/** Compatibility reader for execution 1–18 tile displays and frozen BODY publication. */
+internal data class ResolvedMacroDisplay(val tile: MacroTile, val value: String, val error: String?,
     val waiting: Boolean = false, val html: String? = null)
 
 object MacroDisplay {
-    fun configuredTiles(library: Library, session: Session): List<MacroTile> {
+    fun configuredTiles(library: Library, session: Session, executionVersion: Int = ExecutionSemantics.CURRENT): List<MacroTile> {
+        if (!ExecutionSemantics(executionVersion).legacyTiles) return emptyList()
         val main = library.mainCalls.firstOrNull { it.id == session.mainCallId }
         return main?.tiles.orEmpty() + library.loadedCallGroups(session, main).flatMap { it.tiles }
     }
-
-    fun resolve(library: Library, session: Session, placement: MacroTilePlacement): List<ResolvedMacroDisplay> {
-        val resolver = MacroResolver(library, session)
-        return configuredTiles(library, session).filter { it.enabled && it.placement == placement }
-            .map { evaluate(library, session, it, resolver) }
-            .filter { !it.tile.hideWhenEmpty || it.value.isNotEmpty() || it.error != null || it.waiting }
-    }
-
-    fun evaluate(library: Library, session: Session, tile: MacroTile): ResolvedMacroDisplay =
-        evaluate(library, session, tile, MacroResolver(library, session))
 
     private fun evaluate(library: Library, session: Session, tile: MacroTile, resolver: MacroResolver): ResolvedMacroDisplay {
         val rendered = resolver.render(tile.template)
@@ -54,7 +45,8 @@ object MacroDisplay {
     }
 
     internal fun freezeBody(library: Library, session: Session, main: MainCall, reply: ChatMessage, executionVersion: Int = ExecutionSemantics.CURRENT): BodyFreezeResult {
-        val tile = configuredTiles(library, session).singleOrNull { it.id == main.bodySourceTileId }
+        if (!ExecutionSemantics(executionVersion).legacyTiles) return BodyFreezeResult(message = reply)
+        val tile = configuredTiles(library, session, executionVersion).singleOrNull { it.id == main.bodySourceTileId }
             ?: return BodyFreezeResult(error = "正文磁贴未加载或不存在")
         if (!tile.enabled || tile.placement != MacroTilePlacement.CHAT ||
             tile.kind !in setOf(MacroTileKind.TEXT, MacroTileKind.HTML))

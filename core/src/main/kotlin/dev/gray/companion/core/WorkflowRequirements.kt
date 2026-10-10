@@ -7,9 +7,10 @@ object WorkflowRequirements {
         val modelActions = actions.filter { it.usesModel }.mapTo(mutableSetOf()) { it.id }
         val main = library.mainCalls.firstOrNull { it.id == session.mainCallId }
         val workflows = main?.configuredWorkflows().orEmpty() + library.loadedCallGroups(session, main).flatMap { it.workflows }
-        return workflows.filter { it.enabled }.flatMap { workflow ->
+        val executionVersion = session.executableWorld?.executionVersion ?: ExecutionSemantics.CURRENT
+        return workflows.filter { it.enabled && MemoryPlugins.workflowActive(library, session, it.id, executionVersion) }.flatMap { workflow ->
             workflow.nodes.filter { it.enabled && it.actionId in modelActions }.map { node ->
-                node.generation.resolve(library, workflow)
+                node.generation.resolve(ExecutionResources.forWorkflow(library, workflow.id, executionVersion), workflow)
             }
         }.distinctBy { it?.id }
     }
@@ -18,6 +19,9 @@ object WorkflowRequirements {
         val modelActions = actions.filter { it.usesModel }.mapTo(mutableSetOf()) { it.id }
         val main = library.mainCalls.firstOrNull { it.id == session.mainCallId }
         val workflows = main?.configuredWorkflows().orEmpty() + library.loadedCallGroups(session, main).flatMap { it.workflows }
-        return workflows.any { workflow -> workflow.enabled && workflow.nodes.any { it.enabled && it.actionId in modelActions } }
+        val executionVersion = session.executableWorld?.executionVersion ?: ExecutionSemantics.CURRENT
+        return workflows.any { workflow -> workflow.enabled &&
+            MemoryPlugins.workflowActive(library, session, workflow.id, executionVersion) &&
+            workflow.nodes.any { it.enabled && it.actionId in modelActions } }
     }
 }

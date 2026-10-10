@@ -33,7 +33,7 @@ private data class ResourceAssociationCounts(
 )
 
 private fun Library.resourceAssociationCounts(): ResourceAssociationCounts {
-    val characterCounts = characters.associate { it.id to it.boundPackageIds.size }.toMutableMap()
+    val characterCounts = characters.associate { it.id to it.boundPackageIds.size + it.boundGroupIds.size }.toMutableMap()
     val mainCounts = mainCalls.associate { it.id to it.boundPackageIds.size + it.boundGroupIds.size }.toMutableMap()
     val packageCounts = packages.associate { it.id to 0 }.toMutableMap()
     val groupCounts = groups.associate { it.id to it.boundPackageIds.size }.toMutableMap()
@@ -43,6 +43,7 @@ private fun Library.resourceAssociationCounts(): ResourceAssociationCounts {
     }
 
     characters.forEach { card -> card.boundPackageIds.distinct().forEach { increment(packageCounts, it) } }
+    characters.forEach { card -> card.boundGroupIds.distinct().forEach { increment(groupCounts, it) } }
     mainCalls.forEach { main ->
         main.boundPackageIds.distinct().forEach { increment(packageCounts, it) }
         main.boundGroupIds.distinct().forEach { increment(groupCounts, it) }

@@ -50,6 +50,7 @@ import me.rerere.rikkahub.ui.theme.LocalDarkMode
 fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImport: () -> Unit, externalError: String?) {
     val library by controller.library.collectAsStateWithLifecycle()
     val state by controller.state.collectAsStateWithLifecycle()
+    val automaticOptions by controller.automaticOptions.collectAsStateWithLifecycle()
     val importPreview by controller.configurationImport.collectAsStateWithLifecycle()
     val usage by controller.usage.collectAsStateWithLifecycle()
     val usageError by controller.usageError.collectAsStateWithLifecycle()
@@ -60,7 +61,6 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val toaster = rememberToasterState()
-    var saveSessionId by remember { mutableStateOf<String?>(null) }
     var usageDays by remember { mutableIntStateOf(7) }
     var usageRefreshedAt by remember { mutableLongStateOf(0L) }
     val usageAsOf = remember(usage, usageRefreshedAt) { System.currentTimeMillis() }
@@ -122,15 +122,47 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
             finally { saving = false }
         }
     }
-    fun saveMemory(ownerId: String, processor: HistoryProcessor, onSaved: () -> Unit) {
+    fun applyMemoryCommand(command: (Library) -> ExtensionEditResult, onResult: (Boolean) -> Unit) {
+        if (saving) { onResult(false); return }
+        saving = true
+        scope.launch {
+            var accepted = false
+            try {
+                accepted = report(controller.updateMemoryConfiguration(command))
+            } finally { saving = false; onResult(accepted) }
+        }
+    }
+    fun setMemoryEnabled(enabled: Boolean) {
+        if (saving) return
+        val expected = library.memoryConfig ?: return
+        saving = true
+        scope.launch {
+            try { report(controller.setMemoryEnabled(expected, enabled)) }
+            finally { saving = false }
+        }
+    }
+    fun setExtensionEnabled(definition: ConfigurationExtension, enabled: Boolean) {
         if (saving) return
         saving = true
         scope.launch {
-            try {
-                if (report(controller.updateLibrary { current -> current.copy(mainCalls = current.mainCalls.map { main ->
-                    if (main.id == ownerId) main.copy(history = main.history.copy(processor = processor)) else main
-                }) })) onSaved()
-            } finally { saving = false }
+            try { report(controller.setExtensionEnabled(definition, enabled)) }
+            finally { saving = false }
+        }
+    }
+    fun setAutomaticOptionsEnabled(enabled: Boolean) {
+        if (saving) return
+        saving = true
+        scope.launch {
+            try { report(controller.saveAutomaticOptions(library.automaticOptions.copy(enabled = enabled))) }
+            finally { saving = false }
+        }
+    }
+    fun saveAutomaticOptions(config: AutomaticOptionsConfig) {
+        if (saving) return
+        saving = true
+        scope.launch {
+            try { if (report(controller.saveAutomaticOptions(config))) navigator.popBackStack() }
+            finally { saving = false }
         }
     }
     fun selectCharacter(id: String) { scope.launch {
@@ -154,19 +186,17 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
             usageRefreshedAt = System.currentTimeMillis()
         }
     }
+    var cardLayoutOpen by remember { mutableStateOf(false) }
+    var cardLayoutSaving by remember { mutableStateOf(false) }
     LaunchedEffect(externalError) { externalError?.let { snackbar.showSnackbar(it) } }
-    LaunchedEffect(state.titleError) { state.titleError?.let { snackbar.showSnackbar(it) } }
 
     @Composable
     fun CurrentDrawer() {
                         OriginalDrawer(
                             library = library, usage = usage, usageError = usageError, usageAsOf = usageAsOf,
                             settings = settings,
-                            onPinSession = { id -> scope.launch { report(controller.toggleSessionPin(id)) } },
                             onSelectSession = { id -> scope.launch { if (report(controller.selectSession(id))) { drawer.close(); navigator.clearAndNavigate(Screen.Chat(controller.library.value.selectedSessionId ?: "active")) } } },
                             onNewChat = ::newChat,
-                            onOpenFavorites = { open(Screen.History) },
-                            onOpenSearch = { open(Screen.MessageSearch) },
                             onSelectCharacter = ::selectCharacter,
                             onCreateCharacter = { edit(Editing(EditorKind.CHARACTER, newId())) },
                             onEditCharacter = { id -> library.characters.firstOrNull { it.id == id }?.let { edit(Editing(EditorKind.CHARACTER, it.id)) } },
@@ -174,15 +204,31 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                             onMainCalls = { open(Screen.CompanionResources(ResourceKind.MAIN.routeIndex)) },
                             onUsage = { usageDays = 7; open(Screen.CompanionUsage) },
                             onEditUser = { open(Screen.CompanionPersonas) },
-                            onSaveChat = { saveSessionId = it },
                             onRenameSession = { id, title -> scope.launch { report(controller.renameSession(id, title)) } },
-                            onRegenerateTitle = { id -> scope.launch { report(controller.regenerateTitle(id)) } },
+                            onCopySession = { id -> scope.launch { report(controller.copySession(id)) } },
+                            onMoveSession = { id, folder -> scope.launch { report(controller.moveSession(id, folder)) } },
+                            onCreateFolder = { name -> scope.launch { report(controller.createFolder(name)) } },
+                            onRenameFolder = { id, name -> scope.launch { report(controller.renameFolder(id, name)) } },
+                            onDeleteFolder = { id -> scope.launch { report(controller.deleteFolder(id)) } },
                             onDeleteSession = { id -> update { lib ->
                                 val remaining = lib.sessions.filterNot { it.id == id }
                                 val next = lib.copy(sessions = remaining, selectedSessionId = lib.selectedSessionId.takeUnless { it == id } ?: remaining.firstOrNull()?.id)
                                 if (remaining.isEmpty()) next.startNewConversation() else next
                             } },
                         )
+    }
+
+    if (cardLayoutOpen) library.sessions.firstOrNull { it.id == library.selectedSessionId }?.let { current ->
+        CardLayoutPanel(library, current, canEdit = !state.busy && current.pendingRun == null && !cardLayoutSaving,
+            onChange = { next ->
+                if (!cardLayoutSaving) {
+                    cardLayoutSaving = true
+                    scope.launch {
+                        try { report(controller.updateCardLayout(current.id, current.cardPlacements, next)) }
+                        finally { cardLayoutSaving = false }
+                    }
+                }
+            }, onDismiss = { cardLayoutOpen = false })
     }
 
     SharedTransitionLayout {
@@ -211,7 +257,9 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                     }, onRecoveryEditPrompt = { failure ->
                                         val pending = library.sessions.firstOrNull { it.id == key.id }?.pendingRun
                                         if (pending != null) open(Screen.CompanionRecoveryPrompt(key.id, pending.id, failure.nodeKey))
-                                    })
+                                    }, optionsState = automaticOptions,
+                                    onGenerateOptions = controller::generateAutomaticOptions,
+                                    onOpenOptionsSettings = { open(Screen.CompanionAutomaticOptions) })
                             }
                             entry<Screen.MessageSearch> {
                                 CompanionSearchPage(controller) { sessionId, messageId -> scope.launch {
@@ -241,8 +289,15 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                             }
                             entry<Screen.CompanionSession> { SessionConfigScreen(library, { navigator.popBackStack() }, ::save, saving,
                                 onManagePersonas = { navigator.navigate(Screen.CompanionPersonas) }) }
-                            entry<Screen.CompanionChatDisplay> { CompanionChatDisplaySettingsPage() }
+                            entry<Screen.CompanionChatDisplay> { CompanionChatDisplaySettingsPage { cardLayoutOpen = true } }
+                            entry<Screen.CompanionAutomaticOptions> {
+                                AutomaticOptionsSettingsPage(library, ::saveAutomaticOptions, { navigator.popBackStack() }, saving)
+                            }
                             entry<Screen.CompanionMemory> { memoryKey ->
+                                LaunchedEffect(library.memoryConfig) {
+                                    if (library.memoryConfig?.extensionId == null)
+                                        report(controller.updateMemoryConfiguration(GlobalMemory::ensureGlobal))
+                                }
                                 SourceNavigationProvider(library, onOpenLocation = { location ->
                                     val destination = sourceEditorScreen(location, library)
                                     if (destination is Screen.CompanionMemory) navigator.navigate(destination) { popUpTo(memoryKey) { inclusive = true } }
@@ -251,7 +306,7 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                         navigator.navigate(destination)
                                     }
                                 }, onApplyExternal = ::applySourceEdit, focus = memoryKey.focus, issues = state.issues) {
-                                MemorySettingsPage(library, controller.actionDescriptors, ::saveMemory, { navigator.popBackStack() }, saving)
+                                MemorySettingsPage(library, ::applyMemoryCommand, { navigator.popBackStack() }, saving)
                                 }
                             }
                             entry<Screen.CompanionReasoning> {
@@ -273,11 +328,6 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                 if (report(controller.restoreSavedChat(id))) navigator.clearAndNavigate(Screen.Chat(controller.library.value.selectedSessionId ?: "active"))
                             } }) }
                             entry<Screen.CompanionUsage> { UsageDetailScreen(usage, usageAsOf, usageDays, { usageDays = it }, usageError) }
-                            entry<Screen.CompanionTiles> { TileSettingsPage(library) { kind, id -> navigator.navigate(Screen.CompanionTileEditor(kind, id)) } }
-                            entry<Screen.CompanionTileEditor> { key -> TileOwnerEditor(key.kind, key.id, library, { tiles -> save { current ->
-                                if (key.kind == "main") current.copy(mainCalls = current.mainCalls.map { if (it.id == key.id) it.copy(tiles = tiles) else it })
-                                else current.copy(groups = current.groups.map { if (it.id == key.id) it.copy(tiles = tiles) else it })
-                            } }, { navigator.popBackStack() }, saving) }
                             entry<Screen.CompanionResources> { key ->
                                 Column(Modifier.fillMaxSize()) {
                                     val kind = ResourceKind.fromRouteIndex(key.kind)
@@ -302,12 +352,8 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                             }
                             entry<Screen.SettingProviderDetail> { key ->
                                 CompanionProviderDetailPage(key.providerId, library, saving, controller::getCredential, ::commitProviders,
-                                    onEditProfile = { edit(Editing(EditorKind.PROFILE, it)) },
                                     onSelectDefault = { id -> update { it.copy(selectedProfileId = id) } },
                                     onBack = { navigator.popBackStack() })
-                            }
-                            entry<Screen.SettingModels> {
-                                ChatTitleSettingsPage(library, { config -> save { it.copy(titleConfig = config) } }, { navigator.popBackStack() }, saving)
                             }
                             entry<Screen.SettingTheme> { SettingThemePage() }
                             entry<Screen.SettingPreferencesTheme> { SettingPreferencesThemePage() }
@@ -320,16 +366,21 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                 ConfigurationExtensionsPage(library, saving,
                                     onApply = ::applyCommand,
                                     onOpenResource = { resource ->
+                                        val memory = GlobalMemory.extension(library)?.takeIf { it.memory?.groupId == resource.id && resource.kind == ExtensionResourceKind.GROUP }
                                         val kind = when (resource.kind) {
                                             ExtensionResourceKind.CHARACTER -> EditorKind.CHARACTER
                                             ExtensionResourceKind.MAIN -> EditorKind.MAIN
                                             ExtensionResourceKind.PACKAGE -> EditorKind.PACKAGE
                                             ExtensionResourceKind.GROUP -> EditorKind.GROUP
                                         }
-                                        edit(Editing(kind, resource.id))
+                                        if (memory != null) navigator.navigate(Screen.CompanionMemory(focus = ResourceLocation(resource), visitId = newId()))
+                                        else edit(Editing(kind, resource.id))
                                     },
                                     onBack = { navigator.popBackStack() },
-                                    onOpenMemory = { navigator.navigate(Screen.CompanionMemory()) }, onOpenLocation = ::openLocation)
+                                    onOpenMemory = { navigator.navigate(Screen.CompanionMemory()) }, onOpenLocation = ::openLocation,
+                                    onSetMemoryEnabled = ::setMemoryEnabled, onOpenAutomaticOptions = { open(Screen.CompanionAutomaticOptions) },
+                                    onSetAutomaticOptionsEnabled = ::setAutomaticOptionsEnabled,
+                                    onSetExtensionEnabled = ::setExtensionEnabled)
                             }
                             entry<Screen.CompanionRecoveryPrompt> { key ->
                                 val node = controller.recoveryNode(key.sessionId, key.runId, key.nodeKey)
@@ -339,8 +390,9 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                         Text("断点或对应调用已改变，请返回聊天查看当前状态。", Modifier.padding(16.dp))
                                     }
                                 } else androidx.compose.runtime.key(key.runId, key.nodeKey) {
-                                    val referenceLibrary = library.copy(selectedSessionId = key.sessionId)
-                                    val session = referenceLibrary.sessions.firstOrNull { it.id == key.sessionId }
+                                    val capturedBlocks = remember(key.runId, key.nodeKey) { node.blocks }
+                                    val referenceLibrary = controller.recoveryPromptLibrary(key.sessionId, key.runId, key.nodeKey)
+                                    val session = referenceLibrary.sessions.firstOrNull { it.id == referenceLibrary.selectedSessionId }
                                     val main = referenceLibrary.mainCalls.firstOrNull { it.id == session?.mainCallId }
                                     val workflows = main?.configuredWorkflows().orEmpty() +
                                         session?.let { referenceLibrary.loadedCallGroups(it).flatMap { group -> group.workflows } }.orEmpty()
@@ -350,11 +402,11 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                             saving = true
                                             scope.launch {
                                                 try {
-                                                    if (report(controller.saveRecoveryPrompt(key.sessionId, key.runId, key.nodeKey, blocks))) navigator.popBackStack()
+                                                    if (report(controller.saveRecoveryPrompt(key.sessionId, key.runId, key.nodeKey, blocks, capturedBlocks))) navigator.popBackStack()
                                                 } finally { saving = false }
                                             }
                                         }
-                                    }, { navigator.popBackStack() }, title = "${node.title} · 提示词", saving = saving, tags = library.promptTags)
+                                    }, { navigator.popBackStack() }, title = "${node.title} · 断点提示词", saving = saving, tags = referenceLibrary.promptTags)
                                 }
                             }
                             entry<Screen.CompanionEditor> { key ->
@@ -412,13 +464,15 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                         GroupEditor(initial, library.packages, { value -> save { it.copy(groups = it.groups.replaceOrAdd(value) { it.id }) } }, back, saving, controller.actionDescriptors, library.profiles, library)
                                     }
                                     EditorKind.PROFILE -> {
-                                        val initial = remember(key) { library.profiles.firstOrNull { it.id == key.id } ?: ModelProfile(id = key.id, apiConnectionId = library.connections.firstOrNull()?.id) }
-                                        ProfileEditor(initial, library.connections, { value -> save { it.copy(profiles = it.profiles.replaceOrAdd(value) { it.id }, selectedProfileId = it.selectedProfileId ?: value.id) } }, back, saving)
+                                        val connectionId = library.profiles.firstOrNull { it.id == key.id }?.apiConnectionId
+                                        if (connectionId != null) CompanionProviderDetailPage(connectionId, library, saving,
+                                            controller::getCredential, ::commitProviders,
+                                            onSelectDefault = { id -> update { it.copy(selectedProfileId = id) } }, onBack = back)
+                                        else Column { SettingsHeader("模型", back); Text("请在模型与 API 中选择连接和模型。", Modifier.padding(16.dp)) }
                                     }
                                     EditorKind.CONNECTION -> {
                                         if (library.connections.any { it.id == key.id })
                                             CompanionProviderDetailPage(key.id, library, saving, controller::getCredential, ::commitProviders,
-                                                onEditProfile = { edit(Editing(EditorKind.PROFILE, it)) },
                                                 onSelectDefault = { id -> update { it.copy(selectedProfileId = id) } }, onBack = back)
                                         else CompanionProvidersPage(library, saving, ::commitProviders,
                                             onOpenProvider = { navigator.navigate(Screen.SettingProviderDetail(it.toString())) }, onBack = back)
@@ -431,7 +485,6 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                 )
                 SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
             }
-            saveSessionId?.let { id -> SaveChatDialog(library, id, { session, folder -> scope.launch { report(controller.saveChat(session, folder)) } }, { open(Screen.History) }, { saveSessionId = null }) }
             if (configurationIssues.isNotEmpty()) SourceIssuesSheet(library, configurationIssues, ::openLocation) { configurationIssues = emptyList() }
             importPreview?.let { preview ->
                 ConfigurationImportSheet(preview, importBusy,
@@ -454,12 +507,8 @@ private fun <T> List<T>.replaceOrAdd(value: T, id: (T) -> String): List<T> =
     if (any { id(it) == id(value) }) map { if (id(it) == id(value)) value else it } else this + value
 
 private fun sourceEditorScreen(location: ResourceLocation, library: Library): Screen {
-    if (location.resource.kind == ExtensionResourceKind.MAIN) {
-        val main = library.mainCalls.firstOrNull { it.id == location.resource.id }
-        val processors = listOfNotNull(main?.history?.processor?.workflow?.id, main?.history?.processor?.aggregationWorkflow?.id)
-        if (location.workflowId in processors || location.section?.startsWith("history.processor") == true || location.section == "processor")
-            return Screen.CompanionMemory(visitId = newId(), focus = location)
-    }
+    if (location.resource.kind == ExtensionResourceKind.GROUP && GlobalMemory.extension(library)?.memory?.groupId == location.resource.id)
+        return Screen.CompanionMemory(visitId = newId(), focus = location)
     val kind = when (location.resource.kind) {
         ExtensionResourceKind.CHARACTER -> EditorKind.CHARACTER
         ExtensionResourceKind.MAIN -> EditorKind.MAIN
@@ -483,7 +532,7 @@ private fun CompanionSettingsPage(onExport: () -> Unit, onImport: () -> Unit, un
             } }
             item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("连接与界面") }) {
                 item(onClick = { navigator.navigate(Screen.SettingProvider) }, headlineContent = { Text("模型与 API") }, leadingContent = { Icon(HugeIcons.ServerStack01, null) })
-                item(onClick = { navigator.navigate(Screen.CompanionChatDisplay) }, headlineContent = { Text("聊天与显示") }, supportingContent = { Text("思考解析、输入、磁贴与界面偏好") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
+                item(onClick = { navigator.navigate(Screen.CompanionChatDisplay) }, headlineContent = { Text("聊天与显示") }, supportingContent = { Text("思考解析、输入、卡片与界面偏好") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
             } }
             item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("资源备份") }) {
                 item(onClick = onImport, headlineContent = { Text("导入资源") }, leadingContent = { Icon(HugeIcons.ImageUpload, null) })
@@ -495,17 +544,17 @@ private fun CompanionSettingsPage(onExport: () -> Unit, onImport: () -> Unit, un
 }
 
 @Composable
-private fun CompanionChatDisplaySettingsPage() {
+private fun CompanionChatDisplaySettingsPage(onOpenCardLayout: () -> Unit) {
     val navigator = LocalNavController.current
     SettingPageLayout(title = "聊天与显示") {
         item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("聊天") }) {
             item(onClick = { navigator.navigate(Screen.CompanionReasoning) }, headlineContent = { Text("思考解析") }, leadingContent = { Icon(HugeIcons.Brain02, null) })
             item(onClick = { navigator.navigate(Screen.QuickMessages) }, headlineContent = { Text("快捷输入") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
-            item(onClick = { navigator.navigate(Screen.CompanionTiles) }, headlineContent = { Text("显示磁贴") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
-            item(onClick = { navigator.navigate(Screen.SettingModels) }, headlineContent = { Text("自动标题") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
+            item(onClick = { navigator.navigate(Screen.CompanionAutomaticOptions) }, headlineContent = { Text("自动选项") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
         } }
         item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("显示与偏好") }) {
             item(onClick = { navigator.navigate(Screen.SettingPreferencesGeneral) }, headlineContent = { Text("通用偏好") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
+            item(onClick = onOpenCardLayout, headlineContent = { Text("卡片布局") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
             item(onClick = { navigator.navigate(Screen.SettingPreferencesUI) }, headlineContent = { Text("界面显示") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
             item(onClick = { navigator.navigate(Screen.SettingPreferencesTheme) }, headlineContent = { Text("主题") }, leadingContent = { Icon(HugeIcons.Sun01, null) })
             item(onClick = { navigator.navigate(Screen.SettingPreferencesNetwork) }, headlineContent = { Text("网络") }, leadingContent = { Icon(HugeIcons.ServerStack01, null) })

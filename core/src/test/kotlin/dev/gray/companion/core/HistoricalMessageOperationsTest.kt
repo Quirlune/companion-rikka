@@ -52,7 +52,7 @@ class HistoricalMessageOperationsTest {
         assertEquals(listOf("u1", "reply-B", "u2", "reply-future"), source.messages.map { it.id })
 
         val base = MessageOperations.regenerationBase(source, firstUser.id).session!!
-        assertNotEquals(source.id, base.id)
+        assertEquals(source.id, base.id)
         assertEquals("two", base.state["world"])
         assertEquals(listOf("beta"), base.macroHistory["story"]!!.map { it.text })
         val candidate = MessageOperations.prepareRegeneration(base, firstUser.id).session!!

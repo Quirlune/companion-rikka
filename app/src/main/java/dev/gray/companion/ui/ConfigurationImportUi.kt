@@ -45,19 +45,24 @@ internal fun ConfigurationImportSheet(
         ) {
             item { Text(preview.label, style = MaterialTheme.typography.titleLarge) }
             item { Text("请检查将要改变的资源与设置，确认后才会写入。", style = MaterialTheme.typography.bodySmall) }
-            if (!preview.undoable) item {
+            preview.issues.filter { it.path == "import.source" || it.path == "import.summary" }.forEach { summary ->
+                item { Text(summary.message, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+            if (!preview.undoable && preview.issues.any { it.path == "import.chats" }) item {
                 Text("此文件包含聊天或运行记录；可预览并导入，但配置撤回不能回退聊天。",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (preview.changes.isEmpty() && preview.settings.isEmpty()) item {
-                Text("无配置资源差异。", style = MaterialTheme.typography.bodyMedium)
+            if (preview.changes.isEmpty() && preview.settings.isEmpty() && preview.issues.none { it.error }) item {
+                Text(if (preview.undoable) "无配置资源差异。" else "此备份没有新增配置资源；聊天与收藏见上方摘要。",
+                    style = MaterialTheme.typography.bodyMedium)
             }
             items(preview.changes, key = { "${it.kind}:${it.id}" }) { change -> ConfigurationChangeCard(change) }
             items(preview.settings, key = { "setting:${it.key}" }) { setting -> ConfigurationSettingCard(setting) }
             if (preview.issues.isNotEmpty()) item {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("检查结果", style = MaterialTheme.typography.titleSmall)
-                    preview.issues.forEach { issue ->
+                    preview.issues.filterNot { it.path == "import.source" || it.path == "import.summary" }.forEach { issue ->
                         Text("${issue.path}: ${issue.message}", style = MaterialTheme.typography.bodySmall,
                             color = if (issue.error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
                     }

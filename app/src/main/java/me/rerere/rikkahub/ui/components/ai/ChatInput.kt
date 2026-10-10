@@ -151,6 +151,7 @@ fun ChatInput(
     voiceState: VoiceSessionState = VoiceSessionState(),
     onStopVoiceMode: () -> Unit = {},
     textOnly: Boolean = false,
+    editDescription: String = "修改文本不会重算世界状态",
 ) {
     val toaster = LocalToaster.current
     val assistant = settings.getCurrentAssistant()
@@ -292,6 +293,7 @@ fun ChatInput(
                         completionProviders = completionProviders,
                         onSendMessage = { sendMessage() },
                         textOnly = textOnly,
+                        editDescription = editDescription,
                     )
 
                     Row(
@@ -488,6 +490,7 @@ private fun TextInputRow(
     completionProviders: List<ChatCompletionProvider>,
     onSendMessage: () -> Unit,
     textOnly: Boolean = false,
+    editDescription: String = "修改文本不会重算世界状态",
 ) {
     val settings = LocalSettings.current
     val filesManager: FilesManager? = if (textOnly) null else koinInject()
@@ -514,7 +517,7 @@ private fun TextInputRow(
                     Column {
                         Text(text = stringResource(R.string.editing))
                         if (textOnly) Text(
-                            text = "修改文本不会重算世界状态",
+                            text = editDescription,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

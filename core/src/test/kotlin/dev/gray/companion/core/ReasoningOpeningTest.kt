@@ -116,14 +116,16 @@ class ReasoningOpeningTest {
         val result = WorkflowEngine().run(lib, before(), "hello", gateway) { updates += it }
         assertEquals(result.traces.toString(), RunStatus.SUCCESS, result.status)
         assertEquals(2, calls)
-        assertEquals("bad", updates.filter { !it.replace }.joinToString("") { it.text })
+        // Extraction has no valid partial match, so the failed first candidate has no BODY preview.
+        assertFalse(updates.filter { !it.replace }.any { it.text.isNotEmpty() })
         val clear = updates.indexOfFirst { it.replace && it.text.isEmpty() && it.reasoningSnapshot == null }
         assertTrue(clear >= 0)
         assertTrue(updates.take(clear).any { it.reasoningSnapshot?.text?.contains("first secret") == true })
         assertFalse(updates.drop(clear + 1).filter { !it.replace }.any { it.reasoningSnapshot != null || it.text.isNotEmpty() })
         val accepted = updates.last { it.replace }
         assertEquals("accepted", accepted.text)
-        assertEquals("retry secret", accepted.reasoningSnapshot!!.text)
+        // Current BODY-only semantics keep reasoning in live updates, never accepted replies.
+        assertNull(accepted.reasoningSnapshot)
         assertEquals(" <ok>accepted</ok> ", result.replies.single().rawText)
         assertEquals("accepted", result.replies.single().text)
 

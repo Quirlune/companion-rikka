@@ -13,7 +13,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import dev.gray.companion.core.*
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.FloppyDisk
@@ -21,12 +20,6 @@ import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.UIAvatar
 import me.rerere.rikkahub.ui.theme.CustomColors
-import me.rerere.ai.core.ReasoningLevel
-import me.rerere.ai.provider.CustomBody
-import me.rerere.ai.provider.CustomHeader
-import me.rerere.rikkahub.ui.components.ai.ReasoningButton
-import me.rerere.rikkahub.ui.pages.assistant.detail.CustomBodies
-import me.rerere.rikkahub.ui.pages.assistant.detail.CustomHeaders
 
 @Composable
 private fun EntryForm(entry: PromptEntry, index: Int, count: Int, onChange: (PromptEntry) -> Unit, onUp: () -> Unit, onDown: () -> Unit, onRemove: () -> Unit, onDuplicate: () -> Unit, canMove: Boolean = true, initiallyExpanded: Boolean = false, macro: String? = null, siblings: List<PromptEntry> = emptyList(), tags: List<PromptTag> = emptyList(), owner: ExtensionFieldRef? = null) {
@@ -43,9 +36,10 @@ private fun EntryForm(entry: PromptEntry, index: Int, count: Int, onChange: (Pro
         if (entry.condition != null) "有条件" else null
     ).joinToString(" · ").ifBlank { "尚未填写内容" }
     EditorSection("条目 ${index + 1} · ${entry.title.ifBlank { entry.key.ifBlank { "新条目" } }}", summary, initiallyExpanded || sourceNavigation?.focus?.entryId == entry.id) {
-        EditorTitleRow("${entry.title} / ${entry.slug}", { rename = true })
+        EditorTitleRow("${entry.title} / ${entry.slug}", { rename = true }) {
+            PromptTagSelector(tags, entry.tagIds, compact = true) { onChange(entry.copy(tagIds = it)) }
+        }
         LegacyAddressLine(macro ?: "character.${entry.key}")
-        PromptTagSelector(tags, entry.tagIds) { onChange(entry.copy(tagIds = it)) }
         TextFieldLine("分类（可选）", entry.category, { onChange(entry.copy(category = it)) })
         PromptTemplateField("内容", entry.text, references, { onChange(entry.copy(text = it)) }, minLines = 3, owner = owner)
         var advanced by remember(entry.id) { mutableStateOf(false) }
@@ -152,30 +146,38 @@ internal fun CharacterEditor(initial: CharacterCard, packages: List<PromptPackag
         }
         if (avatarEditorOpen) CharacterAvatarEditor(card, { avatarProcessing = it }) { card = card.copy(avatar = it) }
         EditorTitleRow("${card.name} / ${card.slug}", { renameCard = true })
+        HorizontalDivider()
         EditorSection("卡片信息", card.namespace.ifBlank { card.description.lineSequence().firstOrNull()?.take(48) ?: "说明与命名空间" }) {
             TextFieldLine("说明", card.description, { card = card.copy(description = it) }, minLines = 2)
             LegacyAddressLine("character.${card.namespace}.*")
         }
+        HorizontalDivider()
         Text("基础设定", style = MaterialTheme.typography.titleMedium)
         CharacterFields.definitions.forEach { field ->
             val entry = card.entries.first { it.key == field.key }
             var renameBase by remember(entry.id) { mutableStateOf(false) }
-            EditorTitleRow("${entry.title.ifBlank { field.title }} / ${entry.slug}", { renameBase = true })
+            HorizontalDivider()
+            EditorTitleRow("${entry.title.ifBlank { field.title }} / ${entry.slug}", { renameBase = true }) {
+                PromptTagSelector(library?.promptTags.orEmpty(), entry.tagIds, compact = true) { selected ->
+                    card = card.copy(entries = card.entries.map { if (it.id == entry.id) it.copy(tagIds = selected) else it })
+                }
+            }
             if (renameBase) NamingDialog("${field.title}名称", entry.title.ifBlank { field.title }, entry.slug,
                 card.entries.filterNot { it.id == entry.id }.map { it.title }, card.entries.filterNot { it.id == entry.id }.map { it.slug },
                 { renameBase = false }) { title, slug ->
                 card = card.copy(entries = card.entries.map { if (it.id == entry.id) it.copy(title = title, slug = slug) else it })
                 renameBase = false
             }
-            PromptTagSelector(library?.promptTags.orEmpty(), entry.tagIds) { selected ->
-                card = card.copy(entries = card.entries.map { if (it.id == entry.id) it.copy(tagIds = selected) else it })
-            }
             PromptTemplateField(field.title, entry.text, greetingReferences, { text ->
                 card = card.copy(entries = card.entries.map { if (it.id == entry.id) it.copy(text = text) else it })
             }, minLines = 3, owner = ExtensionFieldRef(ExtensionResourceKind.CHARACTER, card.id, ExtensionField.ENTRY_TEXT, entryId = entry.id))
             Text(field.hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             SelectionContainer { Text("{{character.${field.key}}}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
-            if (field.key == "profile") {
+        }
+        HorizontalDivider()
+        EditorSection("开场消息", "${1 + card.alternateGreetings.size} 个选项 · 仅用于新对话",
+            initiallyExpanded = sourceFocus?.resource == sourceResource &&
+                (sourceFocus.section == "greeting" || sourceFocus.section?.startsWith("alternateGreetings") == true)) {
                 PromptTemplateField("首选开场消息（仅新对话）", card.greeting, greetingReferences,
                     { card = card.copy(greeting = it) }, minLines = 3)
                 card.alternateGreetings.forEachIndexed { index, greeting -> key(index) {
@@ -189,17 +191,32 @@ internal fun CharacterEditor(initial: CharacterCard, packages: List<PromptPackag
                 OutlinedButton(onClick = { card = card.copy(alternateGreetings = card.alternateGreetings + "") }) { Text("添加备选开场") }
                 Text("新建对话时冻结开场选项，不请求模型；发送用户消息前可在聊天中用左右箭头切换。已聊过的开场不会随后修改。",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
         }
         val boundNames = card.boundPackageIds.map { id ->
             packages.firstOrNull { it.id == id }?.let { it.name.ifBlank { it.namespace } } ?: id
         }
-        EditorSection("关联提示词包", boundNames.joinToString("、").ifBlank { "暂无绑定" }) {
+        HorizontalDivider()
+        Text("关联资源", style = MaterialTheme.typography.titleMedium)
+        EditorSection("关联提示词包", boundNames.joinToString("、").ifBlank { "暂无绑定" },
+            initiallyExpanded = sourceFocus?.resource == sourceResource && sourceFocus.section == "boundPackageIds") {
             Text("一起加载；引用后才进入提示词。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             ResourceBindingList(packages.map { it.id to it.name.ifBlank { it.namespace } }, card.boundPackageIds) {
                 card = card.copy(boundPackageIds = it)
             }
         }
+        val groups = library?.groups.orEmpty()
+        val boundGroupNames = card.boundGroupIds.map { id ->
+            groups.firstOrNull { it.id == id }?.name?.ifBlank { "未命名调用组" } ?: "未找到调用组"
+        }
+        EditorSection("关联调用组", boundGroupNames.joinToString("、").ifBlank { "暂无绑定" },
+            initiallyExpanded = sourceFocus?.resource == sourceResource && sourceFocus.section == "boundGroupIds") {
+            Text("使用这个角色时一起加载组中的调用、提示词包、宏和卡片；调用按各自触发条件执行。",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            ResourceBindingList(groups.map { it.id to it.name.ifBlank { "未命名调用组" } }, card.boundGroupIds) {
+                card = card.copy(boundGroupIds = it)
+            }
+        }
+        HorizontalDivider()
         val extras = card.entries.filterNot { CharacterFields.isBasic(it.key) }
         key(extrasRevealKey) {
             EditorSection("附加条目", "${extras.size} 项 · ${extras.take(2).joinToString("、") { it.key.ifBlank { "未命名" } }}", initiallyExpanded = extrasRevealKey > 0) {
@@ -360,77 +377,5 @@ internal fun WorkflowForm(workflow: Workflow, index: Int, count: Int, actions: L
             }, { promptRequest = null }, tags = tags, owner = request.location)
         }
     }
-    }
-}
-@Composable
-internal fun ProfileEditor(initial: ModelProfile, connections: List<ApiConnection>, onSave: (ModelProfile) -> Unit, onBack: () -> Unit, saving: Boolean = false) {
-    var profile by remember(initial.id) { mutableStateOf(initial) }
-    var temperature by remember(initial.id) { mutableStateOf(profile.temperature?.toString().orEmpty()) }
-    var topP by remember(initial.id) { mutableStateOf(profile.topP?.toString().orEmpty()) }
-    var maxTokens by remember(initial.id) { mutableStateOf(profile.maxTokens?.toString().orEmpty()) }
-    var numericError by remember { mutableStateOf(false) }
-    var connectionError by remember { mutableStateOf(false) }
-    EditorPage("模型配置", onBack, {
-        val parsedTemperature = temperature.toFloatOrNull()
-        val parsedTopP = topP.toFloatOrNull()
-        val parsedMaxTokens = maxTokens.toIntOrNull()
-        numericError = (temperature.isNotBlank() && (parsedTemperature == null || parsedTemperature !in 0f..2f)) ||
-            (topP.isNotBlank() && (parsedTopP == null || parsedTopP !in 0f..1f)) ||
-            (maxTokens.isNotBlank() && (parsedMaxTokens == null || parsedMaxTokens <= 0))
-        connectionError = connections.none { it.id == profile.apiConnectionId }
-        if (!numericError && !connectionError) onSave(profile.copy(temperature = parsedTemperature, topP = parsedTopP, maxTokens = parsedMaxTokens))
-    }, dirty = profile != initial || temperature != initial.temperature?.toString().orEmpty() ||
-        topP != initial.topP?.toString().orEmpty() || maxTokens != initial.maxTokens?.toString().orEmpty(), saving = saving) {
-        TextFieldLine("名称", profile.name, { profile = profile.copy(name = it) })
-        TextFieldLine("模型 ID", profile.model, { profile = profile.copy(model = it) })
-        val connectionChoices = listOf<String?>(null).map { it to "请选择 API 连接" } + connections.map { it.id to it.name.ifBlank { it.protocol.name } } +
-            if (profile.apiConnectionId != null && connections.none { it.id == profile.apiConnectionId }) listOf(profile.apiConnectionId to "未找到连接：${profile.apiConnectionId}") else emptyList()
-        ChoiceLine("API 连接", profile.apiConnectionId, connectionChoices) { profile = profile.copy(apiConnectionId = it); connectionError = false }
-        if (connections.isEmpty()) Text("先在模型连接页创建 API 连接，再选择它。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (connectionError) Text("请先选择一个 API 连接。", color = MaterialTheme.colorScheme.error)
-        TextFieldLine("温度（留空使用默认）", temperature, { temperature = it })
-        TextFieldLine("Top P（留空使用默认）", topP, { topP = it })
-        TextFieldLine("最大输出 token（留空使用默认）", maxTokens, { maxTokens = it })
-        if (numericError) Text("温度须在 0–2、Top P 须在 0–1，最大输出 token 须为正整数；也可留空。", color = MaterialTheme.colorScheme.error)
-        val nativeReasoning = ReasoningLevel.valueOf(profile.reasoning.name)
-        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("推理等级")
-            ReasoningButton(reasoningLevel = nativeReasoning, onUpdateReasoningLevel = {
-                profile = profile.copy(reasoning = ModelReasoning.valueOf(it.name))
-            })
-        }
-        EditorSection("自定义请求参数", "${profile.customBody.size} 项") {
-            CustomBodies(profile.customBody.map { CustomBody(it.key, it.value) }) { bodies ->
-                profile = profile.copy(customBody = bodies.map { RequestBodyField(it.key, it.value) })
-            }
-        }
-    }
-}
-
-@Composable
-internal fun ConnectionEditor(initial: ApiConnection, apiKey: String, onSave: (ApiConnection, String) -> Unit, onBack: () -> Unit, saving: Boolean = false) {
-    var connection by remember(initial.id) { mutableStateOf(initial) }
-    var key by remember(initial.id) { mutableStateOf(apiKey) }
-    EditorPage("API 连接", onBack, { onSave(connection, key) }, dirty = connection != initial || key != apiKey, saving = saving) {
-        TextFieldLine("名称", connection.name, { connection = connection.copy(name = it) })
-        ChoiceLine("协议", connection.protocol, listOf(Protocol.OPENAI to "OpenAI", Protocol.GOOGLE to "Google", Protocol.CLAUDE to "Claude")) { protocol ->
-            connection = connection.copy(protocol = protocol, baseUrl = when (protocol) {
-                Protocol.OPENAI -> "https://api.openai.com/v1"
-                Protocol.GOOGLE -> "https://generativelanguage.googleapis.com/v1beta"
-                Protocol.CLAUDE -> "https://api.anthropic.com"
-            })
-        }
-        TextFieldLine("接口地址", connection.baseUrl, { connection = connection.copy(baseUrl = it) })
-        OutlinedTextField(value = key, onValueChange = { key = it }, label = { Text("API Key（本机加密保存，导出不包含）") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-        if (connection.protocol == Protocol.OPENAI) ToggleLine("使用 Responses API", connection.responseApi) { connection = connection.copy(responseApi = it) }
-        ChoiceLine("同时请求", connection.maxConcurrentRequests, listOf(1 to "1 个（串行）", 2 to "最多 2 个")) {
-            connection = connection.copy(maxConcurrentRequests = it)
-        }
-        EditorSection("自定义请求头", "${connection.customHeaders.size} 项") {
-            CustomHeaders(connection.customHeaders.map { CustomHeader(it.name, it.value) }) { headers ->
-                connection = connection.copy(customHeaders = headers.map { RequestHeader(it.name, it.value) })
-            }
-        }
-        ToggleLine("启用连接", connection.enabled) { connection = connection.copy(enabled = it) }
     }
 }

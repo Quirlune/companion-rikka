@@ -70,6 +70,7 @@ import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -179,6 +180,8 @@ fun SettingProviderDetailContent(
     onConfigDirtyChanged: (Boolean) -> Unit = {},
     configExtraContent: @Composable () -> Unit = {},
     modelExtraContent: @Composable (Model) -> Unit = {},
+    modelEditExtraContent: (@Composable (Model, Boolean) -> Unit)? = null,
+    onModelEditClosed: (Model) -> Unit = {},
     loadModels: (suspend (ProviderSetting) -> List<Model>)? = null,
     onModelLoadError: ((Throwable) -> Unit)? = null,
     onEditConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)? = null,
@@ -287,6 +290,8 @@ fun SettingProviderDetailContent(
                         options = options,
                         enabled = modelsEnabled,
                         modelExtraContent = modelExtraContent,
+                        modelEditExtraContent = modelEditExtraContent,
+                        onModelEditClosed = onModelEditClosed,
                         loadModels = loadModels,
                         onModelLoadError = onModelLoadError,
                         onEditConfirmed = onEditConfirmed,
@@ -436,6 +441,8 @@ private fun SettingProviderModelPage(
     options: ProviderDetailOptions,
     enabled: Boolean,
     modelExtraContent: @Composable (Model) -> Unit,
+    modelEditExtraContent: (@Composable (Model, Boolean) -> Unit)?,
+    onModelEditClosed: (Model) -> Unit,
     loadModels: (suspend (ProviderSetting) -> List<Model>)?,
     onModelLoadError: ((Throwable) -> Unit)?,
     onEditConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)?,
@@ -446,6 +453,8 @@ private fun SettingProviderModelPage(
         options = options,
         enabled = enabled,
         modelExtraContent = modelExtraContent,
+        modelEditExtraContent = modelEditExtraContent,
+        onModelEditClosed = onModelEditClosed,
         loadModels = loadModels,
         onModelLoadError = onModelLoadError,
         onEditConfirmed = onEditConfirmed,
@@ -459,6 +468,8 @@ private fun ModelList(
     options: ProviderDetailOptions,
     enabled: Boolean,
     modelExtraContent: @Composable (Model) -> Unit,
+    modelEditExtraContent: (@Composable (Model, Boolean) -> Unit)?,
+    onModelEditClosed: (Model) -> Unit,
     loadModels: (suspend (ProviderSetting) -> List<Model>)?,
     onModelLoadError: ((Throwable) -> Unit)?,
     onEditConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)?,
@@ -536,6 +547,8 @@ private fun ModelList(
                             options = options.model,
                             enabled = enabled,
                             extraContent = modelExtraContent,
+                            editExtraContent = modelEditExtraContent,
+                            onEditClosed = onModelEditClosed,
                             onEditConfirmed = onEditConfirmed,
                             onDelete = {
                                 onUpdateProvider(providerSetting.delModel(item))
@@ -600,8 +613,10 @@ private fun ModelSettingsForm(
     isEdit: Boolean,
     parentProvider: ProviderSetting? = null,
     options: ProviderModelOptions = ProviderModelOptions(),
+    extraContent: (@Composable (Model, Boolean) -> Unit)? = null,
+    extraEnabled: Boolean = true,
 ) {
-    val pages = remember(options) { listOf(0) + (if (options.advancedSettings) listOf(1) else emptyList()) + (if (options.builtInTools) listOf(2) else emptyList()) }
+    val pages = remember(options, extraContent != null) { listOf(0) + (if (options.advancedSettings) listOf(1) else emptyList()) + (if (options.builtInTools) listOf(2) else emptyList()) + (if (extraContent != null) listOf(3) else emptyList()) }
     val pagerState = rememberPagerState { pages.size }
     val scope = rememberCoroutineScope()
 
@@ -655,6 +670,11 @@ private fun ModelSettingsForm(
                     }
                 },
                 text = { Text(stringResource(R.string.setting_page_built_in_tools)) }
+            )
+            if (extraContent != null) Tab(
+                selected = pages[pagerState.currentPage] == 3,
+                onClick = { scope.launch { pagerState.animateScrollToPage(pages.indexOf(3)) } },
+                text = { Text("调用默认值") },
             )
         }
 
@@ -778,6 +798,10 @@ private fun ModelSettingsForm(
                         }
                     )
                 }
+                3 -> Column(
+                    modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) { extraContent?.invoke(model, extraEnabled) }
             }
         }
     }
@@ -1324,6 +1348,8 @@ private fun ModelCard(
     options: ProviderModelOptions = ProviderModelOptions(),
     enabled: Boolean = true,
     extraContent: @Composable (Model) -> Unit = {},
+    editExtraContent: (@Composable (Model, Boolean) -> Unit)? = null,
+    onEditClosed: (Model) -> Unit = {},
     onEditConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)? = null,
 ) {
     val dialogState = useEditState<Model> {
@@ -1336,6 +1362,7 @@ private fun ModelCard(
 
 
     if (dialogState.isEditing) {
+        DisposableEffect(model.id) { onDispose { onEditClosed(model) } }
         dialogState.currentState?.let { editingModel ->
             val sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
             ModalBottomSheet(
@@ -1389,6 +1416,8 @@ private fun ModelCard(
                             isEdit = true,
                             parentProvider = parentProvider,
                             options = options,
+                            extraContent = editExtraContent,
+                            extraEnabled = !pending,
                         )
                     }
 

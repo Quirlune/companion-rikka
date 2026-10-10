@@ -39,7 +39,7 @@ fun createCompanionNetworkClient(context: Context, settingsStore: SettingsStore)
             if (original.header(HttpHeaders.UserAgent) == null) {
                 request.addHeader(
                     HttpHeaders.UserAgent,
-                    network.userAgent.trim().ifEmpty { "RikkaHub-Android/${BuildConfig.VERSION_NAME}" },
+                    network.userAgent.trim().ifEmpty { "velune-Android/${BuildConfig.VERSION_NAME}" },
                 )
             }
             chain.proceed(request.build())

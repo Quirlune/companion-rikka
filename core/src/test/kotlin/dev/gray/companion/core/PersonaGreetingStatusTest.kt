@@ -55,6 +55,6 @@ class PersonaGreetingStatusTest {
             MacroStatusField(key = "status/love", title = "亲近", kind = MacroTileKind.PROGRESS,
                 minimum = 5.0, maximum = 5.0)))
         val library = Library(mainCalls = listOf(MainCall(id = "main", name = "主调用", tiles = listOf(tile))))
-        assertTrue(LibraryValidator.validate(library).any { it.path.contains("fields.0") && it.error })
+        assertTrue(LibraryValidator.validate(library, executionVersion = 18).any { it.path.contains("fields.0") && it.error })
     }
 }

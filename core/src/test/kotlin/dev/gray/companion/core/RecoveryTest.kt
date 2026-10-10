@@ -203,13 +203,15 @@ class RecoveryTest {
     }
 
     @Test fun formatCandidatesPublishOnceAndSerialModeStopsAtThree() = runBlocking {
-        val before = session()
+        var before = session()
         val actions = ActionRegistry.defaults().register(ActionDescriptor("another.model", "Another model",
             usesModel = true, execution = ActionExecution.PURE_MODEL)) { context ->
             ActionOutcome(context.gateway.generateAttempt(context.profile!!, context.messages, context.onDelta))
         }
         val flow = Workflow(id = "flow", nodes = listOf(strictStatusNode().copy(actionId = "another.model")))
         val base = library(before, listOf(flow), listOf(statusTile()))
+        // This fixture tests archived tile contracts, not current card extraction.
+        before = before.copy(executableWorld = CompletedWorlds.capture(base, before, "hello", executionVersion = 18))
         var calls = 0
         val gateway = object : ModelGateway {
             override fun maxParallelCandidates(profile: ModelProfile) = 2
@@ -337,13 +339,15 @@ class RecoveryTest {
     }
 
     @Test fun bodySurvivesStatusFailureInSameVariant() = runBlocking {
-        val before = session()
+        var before = session()
         val body = WorkflowNode(id = "body", title = "Body", outputKey = "body", visible = true,
             blocks = listOf(PromptBlock(template = "body")))
         val bodyFlow = Workflow(id = "bodyFlow", nodes = listOf(body))
         val statusFlow = Workflow(id = "statusFlow", trigger = "reply.completed",
             nodes = listOf(strictStatusNode()))
         val base = library(before, listOf(bodyFlow, statusFlow), listOf(statusTile()))
+        // This fixture tests archived tile contracts, not current card extraction.
+        before = before.copy(executableWorld = CompletedWorlds.capture(base, before, "hello", executionVersion = 18))
         var bodyCalls = 0
         val gateway = object : ModelGateway {
             override suspend fun generate(profile: ModelProfile, messages: List<ChatMessage>,

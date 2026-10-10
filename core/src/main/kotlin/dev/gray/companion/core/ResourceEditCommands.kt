@@ -72,12 +72,13 @@ object ResourceEditCommands {
                     entries = old.entries.map { it.copy(id = newId()) }))
             }
             is MainCall -> {
-                val ids = graphIds(old.configuredWorkflows()) + old.tiles.associate { it.id to newId() } +
+                val ids = graphIds(old.configuredWorkflows()) + old.cards.associate { it.id to newId() } +
                     old.history.insertions.associate { it.id to newId() } + old.extensionBindings.associate { it.id to newId() }
                 val copy = old.copy(id = copiedId, name = unique(old.name + " 副本", library.mainCalls.map { it.name }),
                     slug = unique((old.slug.takeIf(MacroNaming::isValidSlug) ?: "main") + "_copy", library.mainCalls.map { it.slug }),
                     workflows = old.workflows.map { copyWorkflow(it, ids) }, primaryWorkflowId = old.primaryWorkflowId?.let { ids[it] ?: it },
-                    tiles = old.tiles.map { it.copy(id = ids.getValue(it.id)) }, bodySourceTileId = old.bodySourceTileId?.let { ids[it] ?: it },
+                    cards = old.cards.map { it.copy(id = ids.getValue(it.id)) },
+                    tiles = emptyList(), bodySourceTileId = null, bodyTextTemplate = "",
                     history = old.history.copy(insertions = old.history.insertions.map { it.copy(id = ids.getValue(it.id)) },
                         processor = old.history.processor.copy(workflow = copyWorkflow(old.history.processor.workflow, ids),
                             aggregationWorkflow = old.history.processor.aggregationWorkflow?.let { copyWorkflow(it, ids) })),
@@ -86,10 +87,10 @@ object ResourceEditCommands {
                 library.copy(mainCalls = library.mainCalls + copy)
             }
             is CallGroup -> {
-                val ids = graphIds(old.workflows) + old.tiles.associate { it.id to newId() }
+                val ids = graphIds(old.workflows) + old.cards.associate { it.id to newId() }
                 library.copy(groups = library.groups + old.copy(id = copiedId, name = unique(old.name + " 副本", library.groups.map { it.name }),
                     slug = unique((old.slug.takeIf(MacroNaming::isValidSlug) ?: "group") + "_copy", library.groups.map { it.slug }),
-                    workflows = old.workflows.map { copyWorkflow(it, ids) }, tiles = old.tiles.map { it.copy(id = ids.getValue(it.id)) }))
+                    workflows = old.workflows.map { copyWorkflow(it, ids) }, cards = old.cards.map { it.copy(id = ids.getValue(it.id)) }, tiles = emptyList()))
             }
             else -> return failure(source, "不支持此复制来源")
         }
@@ -111,7 +112,8 @@ object ResourceEditCommands {
         } else workflow.trigger,
         nodes = workflow.nodes.map { node ->
             val descriptor = ActionRegistry.defaults().descriptors().firstOrNull { it.id == node.actionId }
-            val referenceKeys = listOfNotNull(descriptor?.injectionTargetWorkflowField, descriptor?.injectionTargetNodeField)
+            val referenceKeys = listOfNotNull(descriptor?.injectionTargetWorkflowField, descriptor?.injectionTargetNodeField,
+                descriptor?.injectionTargetBlockField)
             node.copy(id = ids.getValue(node.id), dependsOn = node.dependsOn.map { ids[it] ?: it },
                 blocks = node.blocks.map { it.copy(id = ids.getValue(it.id)) },
                 arguments = node.arguments.mapValues { (key, value) -> if (key in referenceKeys) ids[value] ?: value else value })
@@ -154,7 +156,9 @@ object ResourceEditCommands {
             parameters = extension.parameters.filterNot { it.target.kind == ref.kind && it.target.resourceId == ref.id && (target.entryId == null || it.target.entryId == target.entryId) }) }
         if (target.entryId != null) return library.copy(extensions = definitions)
         return library.copy(extensions = definitions,
-            characters = library.characters.map { if (ref.kind == ExtensionResourceKind.PACKAGE) it.copy(boundPackageIds = it.boundPackageIds - ref.id) else it },
+            characters = library.characters.map { it.copy(
+                boundPackageIds = if (ref.kind == ExtensionResourceKind.PACKAGE) it.boundPackageIds - ref.id else it.boundPackageIds,
+                boundGroupIds = if (ref.kind == ExtensionResourceKind.GROUP) it.boundGroupIds - ref.id else it.boundGroupIds) },
             groups = library.groups.map { if (ref.kind == ExtensionResourceKind.PACKAGE) it.copy(boundPackageIds = it.boundPackageIds - ref.id) else it },
             mainCalls = library.mainCalls.map { it.copy(
                 boundPackageIds = if (ref.kind == ExtensionResourceKind.PACKAGE) it.boundPackageIds - ref.id else it.boundPackageIds,
@@ -227,9 +231,7 @@ object ResourceEditCommands {
             ExtensionResourceKind.PACKAGE -> library.packages.singleOrNull { it.id == source.resource.id }?.slug
             else -> null
         }
-        val templates = ResourceTemplateSlots.list(library).map { Triple(ResourceLocations.path(it.location), it.text, it.location.resource) } +
-            library.personas.map { Triple("persona.${it.id}.prompt", it.prompt, null) } +
-            listOf(Triple("library.titleConfig.prompt", library.titleConfig.prompt, null))
+        val templates = ResourceTemplateSlots.list(library).map { Triple(ResourceLocations.path(it.location), it.text, it.location.resource) }
         return buildList {
             templates.forEach { (path, text, owner) ->
                 MacroTemplateTokens.scan(text).tokens.filter { it.closed }.forEach tokenLoop@ { token ->

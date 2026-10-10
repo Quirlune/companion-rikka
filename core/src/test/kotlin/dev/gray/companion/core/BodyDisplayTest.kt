@@ -11,6 +11,10 @@ class BodyDisplayTest {
         characters = listOf(CharacterCard(id = "card", namespace = "hero", name = "Hero")),
         mainCalls = listOf(main), profiles = listOf(ModelProfile(id = "profile", model = "offline")),
         selectedProfileId = "profile")
+    // Exercise the archived tile interpretation explicitly; new turns use execution 19.
+    private fun legacyBefore(library: Library) = before().let { session ->
+        session.copy(executableWorld = CompletedWorlds.capture(library, session, "hello", executionVersion = 18))
+    }
     private val gateway = object : ModelGateway {
         override suspend fun generate(profile: ModelProfile, messages: List<ChatMessage>,
             onDelta: suspend (String) -> Unit): String = "  draft  "
@@ -38,7 +42,7 @@ class BodyDisplayTest {
         ), tiles = listOf(html()), bodySourceTileId = "body", bodyTextTemplate = "{{result.final}}")
         val lib = library(main)
         var journal: RunRecovery? = null
-        val result = WorkflowEngine(actions).run(lib, before(), "hello", gateway) { update ->
+        val result = WorkflowEngine(actions).run(lib, legacyBefore(lib), "hello", gateway) { update ->
             update.progress?.recovery?.takeIf { it.bodyDisplayReceipt != null }?.let { journal = it }
         }
         assertEquals(result.traces.toString(), RunStatus.SUCCESS, result.status)
@@ -79,7 +83,7 @@ class BodyDisplayTest {
                 tiles = listOf(empty.copy(template = "replacement")), bodySourceTileId = "empty")
         )
         for (main in cases) {
-            val result = WorkflowEngine().run(library(main), before(), "hello", gateway)
+            val result = WorkflowEngine().run(library(main), legacyBefore(library(main)), "hello", gateway)
             assertEquals(result.traces.toString(), RunStatus.SUCCESS, result.status)
             assertEquals("draft", result.replies.single().text)
             assertNull(result.replies.single().bodyDisplay)

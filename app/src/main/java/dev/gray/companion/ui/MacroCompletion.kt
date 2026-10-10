@@ -4,7 +4,7 @@ import dev.gray.companion.core.MacroTemplateTokens
 import dev.gray.companion.core.HistoryViews
 
 /** An editable macro at the caret. End includes its remaining text and any closing braces. */
-internal data class MacroCompletionToken(val start: Int, val end: Int, val query: String)
+internal data class MacroCompletionToken(val start: Int, val end: Int, val query: String, val shortcut: Boolean = false)
 
 internal data class MacroCompletionEdit(val text: String, val caret: Int)
 
@@ -13,6 +13,16 @@ internal fun macroCompletionToken(text: String, selectionStart: Int, selectionEn
     if (selectionStart != selectionEnd) return null
     val caret = selectionStart.coerceIn(0, text.length)
     if (caret < 2) return null
+    val slash = text.lastIndexOf("//", caret - 2)
+    val wordStart = text.take(caret).indexOfLast { it.isWhitespace() } + 1
+    if (slash >= 0 && (slash == 0 || text[slash - 1] != ':') && "://" !in text.substring(wordStart, caret)) {
+        val query = text.substring(slash + 2, caret)
+        if (query.none { it.isWhitespace() || it in "{}/" }) {
+            var end = caret
+            while (end < text.length && !text[end].isWhitespace() && text[end] !in "{}/") end++
+            return MacroCompletionToken(slash, end, query, shortcut = true)
+        }
+    }
     val outer = MacroTemplateTokens.scan(text).tokens.lastOrNull { token ->
         caret >= token.start + 2 && caret <= (if (token.closed) token.endExclusive - 2 else token.endExclusive)
     } ?: return null

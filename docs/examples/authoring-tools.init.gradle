@@ -1,0 +1,39 @@
+// Optional offline authoring utility; does not configure an app build or invoke a model.
+gradle.projectsEvaluated {
+    def core = gradle.rootProject.findProject(':core')
+    if (core == null) return // Init scripts also run for the included build-logic build.
+    def classesDir = core.layout.buildDirectory.dir('authoring-tools')
+    def toolsSource = gradle.rootProject.file('docs/examples/AuthoringTools.java')
+    def compiled = core.tasks.register('compileAuthoringTools', JavaCompile) {
+        dependsOn core.tasks.named('classes')
+        source toolsSource
+        classpath = core.sourceSets.main.runtimeClasspath
+        destinationDirectory.set(classesDir)
+        javaCompiler.set(core.javaToolchains.compilerFor {
+            languageVersion.set(JavaLanguageVersion.of(21))
+        })
+        options.encoding = 'UTF-8'
+    }
+    core.tasks.register('authoringCatalog', JavaExec) {
+        dependsOn compiled
+        classpath = core.files(classesDir) + core.sourceSets.main.runtimeClasspath
+        mainClass.set('AuthoringTools')
+        javaLauncher.set(core.javaToolchains.launcherFor {
+            languageVersion.set(JavaLanguageVersion.of(21))
+        })
+        args 'catalog', gradle.rootProject.file('docs/AI_IMPORT_API_REFERENCE.json').absolutePath
+    }
+    core.tasks.register('validateExtension', JavaExec) {
+        dependsOn compiled
+        classpath = core.files(classesDir) + core.sourceSets.main.runtimeClasspath
+        mainClass.set('AuthoringTools')
+        javaLauncher.set(core.javaToolchains.launcherFor {
+            languageVersion.set(JavaLanguageVersion.of(21))
+        })
+        doFirst {
+            def requested = gradle.rootProject.findProperty('extensionFile')
+            if (!requested) throw new GradleException('Pass -PextensionFile=path/to/config.json or bundle.zip')
+            args 'validate', gradle.rootProject.file(requested.toString()).absolutePath
+        }
+    }
+}

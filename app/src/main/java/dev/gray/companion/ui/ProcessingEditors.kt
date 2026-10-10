@@ -11,6 +11,7 @@ import dev.gray.companion.core.*
 @Composable
 internal fun TextProcessingEditor(
     title: String, steps: List<TextProcessStep>, references: List<PromptReferenceChoice>,
+    allowedKinds: List<TextProcessKind> = processKindChoices.map { it.first },
     onChange: (List<TextProcessStep>) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(steps.isNotEmpty()) }
@@ -21,7 +22,15 @@ internal fun TextProcessingEditor(
         key(index) {
             val titleText = processKindChoices.firstOrNull { it.first == step.kind }?.second ?: step.kind.name
             EditorSection("${index + 1}. $titleText", "当前文本 → 下一步", initiallyExpanded = true) {
-                ChoiceLine("处理", step.kind, processKindChoices) { kind ->
+                if (step.kind !in allowedKinds) {
+                    Text("旧版处理步骤已保留；此页只编辑正则步骤。", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    TextButton(onClick = { onChange(steps.filterIndexed { i, _ -> i != index }) }) {
+                        Text("移除这项旧版处理")
+                    }
+                    return@EditorSection
+                }
+                ChoiceLine("处理", step.kind, processKindChoices.filter { it.first in allowedKinds }) { kind ->
                     val strict = if (kind == TextProcessKind.REGEX_EXTRACT && step.kind != TextProcessKind.REGEX_EXTRACT) true else step.requireMatch
                     onChange(steps.toMutableList().also { it[index] = step.copy(kind = kind, requireMatch = strict) })
                 }
@@ -72,7 +81,7 @@ internal fun TextProcessingEditor(
         }
     }
     TextProcessing.validate(steps, "processing").map { it.message }.distinct().forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-    OutlinedButton(onClick = { onChange(steps + TextProcessStep(kind = TextProcessKind.TRIM)); expanded = true }, enabled = steps.size < 64) { Text("添加处理步骤") }
+    OutlinedButton(onClick = { onChange(steps + TextProcessStep(kind = allowedKinds.firstOrNull() ?: TextProcessKind.TRIM)); expanded = true }, enabled = steps.size < 64 && allowedKinds.isNotEmpty()) { Text("添加处理步骤") }
 }
 
 private val processKindChoices = listOf(
@@ -85,28 +94,39 @@ private val processKindChoices = listOf(
 
 @Composable
 internal fun NodeModelOptionsEditor(node: WorkflowNode, profiles: List<ModelProfile>, onChange: (WorkflowNode) -> Unit, references: List<PromptReferenceChoice>) {
-    val options = node.generation
     PromptTemplateField("输入模板", node.inputTemplate, references, { onChange(node.copy(inputTemplate = it)) }, minLines = 2)
     TextProcessingEditor("输入内容处理", node.inputProcessing, references) { onChange(node.copy(inputProcessing = it)) }
-    ChoiceLine("此节点模型", options.profileId, listOf<Pair<String?, String>>(null to "继承调用 / 对话模型") + profiles.map { it.id to it.name.ifBlank { it.model } } +
-        if (options.profileId != null && profiles.none { it.id == options.profileId }) listOf(options.profileId to "未找到模型：${options.profileId}") else emptyList()) {
-        onChange(node.copy(generation = options.copy(profileId = it)))
-    }
-    EditorSection("生成参数", "温度、Top P、输出上限与推理级别 · 留空继承") {
-        OptionalFloatLine("温度", options.temperature) { onChange(node.copy(generation = options.copy(temperature = it))) }
-        OptionalFloatLine("Top P", options.topP) { onChange(node.copy(generation = options.copy(topP = it))) }
-        OptionalIntLine("输出上限", options.maxTokens) { onChange(node.copy(generation = options.copy(maxTokens = it))) }
-        ChoiceLine("推理级别", options.reasoning, listOf<Pair<ModelReasoning?, String>>(null to "继承") + ModelReasoning.entries.map { it to it.name }) {
-            onChange(node.copy(generation = options.copy(reasoning = it)))
-        }
-        ToggleLine("此节点覆盖全局思考解析", node.reasoningParsing != null) { enabled ->
-            onChange(node.copy(reasoningParsing = if (enabled) ReasoningParsingConfig() else null))
-        }
-        node.reasoningParsing?.let { parsing ->
-            ReasoningParsingFields(parsing) { onChange(node.copy(reasoningParsing = it)) }
-        }
+    SharedModelGenerationEditor(node.generation, node.reasoningParsing, profiles) { generation, parsing ->
+        onChange(node.copy(generation = generation, reasoningParsing = parsing))
     }
     TextProcessingEditor("输出内容处理", node.outputProcessing, references) { onChange(node.copy(outputProcessing = it)) }
+}
+
+/** Model choice and native generation overrides shared by focused editors. */
+@Composable
+internal fun SharedModelGenerationEditor(
+    options: ModelCallOptions, reasoningParsing: ReasoningParsingConfig?, profiles: List<ModelProfile>,
+    modelLabel: String = "此节点模型",
+    onChange: (ModelCallOptions, ReasoningParsingConfig?) -> Unit,
+) {
+    ChoiceLine(modelLabel, options.profileId, listOf<Pair<String?, String>>(null to "继承调用 / 对话模型") + profiles.map { it.id to it.name.ifBlank { it.model } } +
+        if (options.profileId != null && profiles.none { it.id == options.profileId }) listOf(options.profileId to "未找到模型：${options.profileId}") else emptyList()) {
+        onChange(options.copy(profileId = it), reasoningParsing)
+    }
+    EditorSection("生成参数", "温度、Top P、输出上限与推理级别 · 留空继承") {
+        OptionalFloatLine("温度", options.temperature) { onChange(options.copy(temperature = it), reasoningParsing) }
+        OptionalFloatLine("Top P", options.topP) { onChange(options.copy(topP = it), reasoningParsing) }
+        OptionalIntLine("输出上限", options.maxTokens) { onChange(options.copy(maxTokens = it), reasoningParsing) }
+        ChoiceLine("推理级别", options.reasoning, listOf<Pair<ModelReasoning?, String>>(null to "继承") + ModelReasoning.entries.map { it to it.name }) {
+            onChange(options.copy(reasoning = it), reasoningParsing)
+        }
+        ToggleLine("覆盖全局思考解析", reasoningParsing != null) { enabled ->
+            onChange(options, if (enabled) ReasoningParsingConfig() else null)
+        }
+        reasoningParsing?.let { parsing ->
+            ReasoningParsingFields(parsing) { onChange(options, it) }
+        }
+    }
 }
 
 @Composable
@@ -190,7 +210,8 @@ internal fun MacroProcessEditor(node: WorkflowNode, onChange: (WorkflowNode) -> 
 }
 
 @Composable
-internal fun PromptManagementEditor(node: WorkflowNode, nodes: List<WorkflowNode>, onChange: (WorkflowNode) -> Unit, references: List<PromptReferenceChoice>) {
+internal fun PromptManagementEditor(node: WorkflowNode, nodes: List<WorkflowNode>, onChange: (WorkflowNode) -> Unit, references: List<PromptReferenceChoice>,
+    actions: List<ActionDescriptor> = ActionRegistry.defaults().descriptors()) {
     val inject = node.actionId == "prompt.inject"
     ChoiceLine("管理方式", inject, listOf(true to "插入或更新", false to "移除")) { onChange(node.copy(actionId = if (it) "prompt.inject" else "prompt.remove")) }
     val id = node.arguments["id"].orEmpty()
@@ -203,27 +224,72 @@ internal fun PromptManagementEditor(node: WorkflowNode, nodes: List<WorkflowNode
     TextFieldLine("注入标识", id, { onChange(node.copy(arguments = node.arguments + ("id" to it))) })
     Text("同一所有者以此标识更新或移除；新节点默认使用稳定标识。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     if (inject) {
-        val targets = references.mapNotNull { ref ->
-            val call = ref.owners.firstOrNull { it.id.startsWith("call:main:") } ?: return@mapNotNull null
-            if (ref.owners.none { it.id.startsWith("node:") && it.detail.contains("模型生成") }) return@mapNotNull null
-            val target = ref.producerNodeId ?: return@mapNotNull null
-            Triple(call.id.substringAfterLast(':'), target, "${call.title} · ${ref.owners.lastOrNull()?.title ?: ref.title}")
-        }.distinctBy { it.first to it.second }
+        val navigation = LocalSourceNavigation.current
+        val effective = navigation?.library
+        val mainId = navigation?.resource?.takeIf { it.kind == ExtensionResourceKind.MAIN }?.id
+            ?: effective?.sessions?.firstOrNull { it.id == effective.selectedSessionId }?.mainCallId
+        val main = effective?.mainCalls?.firstOrNull { it.id == mainId }
+        val modelActions = actions.filter { it.usesModel }.map { it.id }.toSet()
+        val targets = main?.workflows.orEmpty().filter { it.enabled }.flatMap { workflow ->
+            workflow.nodes.filter { it.enabled && it.actionId in modelActions }.map { workflow to it }
+        }
         val current = node.arguments["targetWorkflowId"].orEmpty() to node.arguments["targetNodeId"].orEmpty()
-        ChoiceLine("目标主调用节点", current, listOf(("" to "") to "主调用默认模型节点") + targets.map { (call, target, label) -> (call to target) to label } +
-            if (current.first.isNotBlank() && targets.none { it.first == current.first && it.second == current.second }) listOf(current to "已有目标：${current.first} / ${current.second}") else emptyList()) { (call, target) ->
+        val targetChoices = listOf(("" to "") to "主调用默认模型节点") + targets.map { (call, target) ->
+            (call.id to target.id) to "${call.title.ifBlank { "未命名调用" }} · ${target.title.ifBlank { "模型节点" }}"
+        }
+        ChoiceLine("目标主调用节点", current, targetChoices +
+            if (targetChoices.none { it.first == current }) listOf(current to "已有目标：${current.first} / ${current.second}") else emptyList()) { (call, target) ->
             onChange(node.copy(arguments = node.arguments + ("targetWorkflowId" to call) + ("targetNodeId" to target)))
         }
-        ChoiceLine("角色", node.arguments["role"] ?: Role.SYSTEM.name, Role.entries.map { it.name to it.name }) { onChange(node.copy(arguments = node.arguments + ("role" to it))) }
-        ChoiceLine("位置", node.arguments["position"] ?: PromptPosition.BEFORE_HISTORY.name, listOf(
-            PromptPosition.BEFORE_HISTORY.name to "历史之前", PromptPosition.IN_HISTORY.name to "历史中", PromptPosition.AFTER_HISTORY.name to "历史之后")) { onChange(node.copy(arguments = node.arguments + ("position" to it))) }
-        if (node.arguments["position"] == PromptPosition.IN_HISTORY.name) TextFieldLine("距历史末尾的消息数", node.arguments["depth"] ?: "0", { onChange(node.copy(arguments = node.arguments + ("depth" to it))) })
+        val targetWorkflows = main?.workflows.orEmpty().filter { it.enabled && (current.first.isBlank() || it.id == current.first) }
+        val targetNode = if (current.second.isNotBlank()) targets.singleOrNull { (call, target) ->
+            (current.first.isBlank() || call.id == current.first) && target.id == current.second
+        }?.second else {
+            val targetWorkflow = if (current.first.isNotBlank()) targetWorkflows.singleOrNull()
+                else if (main?.primaryWorkflowId != null) targetWorkflows.firstOrNull { it.id == main.primaryWorkflowId }
+                else targetWorkflows.firstOrNull()
+            targetWorkflow?.nodes?.lastOrNull { it.enabled && it.actionId in modelActions }
+        }
+        val slots = targetNode?.blocks.orEmpty().filter { it.injectionSlot && it.enabled }
+        val blockId = node.arguments["targetBlockId"].orEmpty()
+        val slot = slots.firstOrNull { it.id == blockId }
+        ChoiceLine("接收槽", blockId, listOf("" to "普通注入 · 自行设置角色与位置") + slots.map { it.id to it.title.ifBlank { "未命名接收槽" } } +
+            if (blockId.isNotBlank() && slot == null) listOf(blockId to "已有槽不可用：$blockId") else emptyList()) {
+            val arguments = node.arguments + ("targetBlockId" to it)
+            onChange(node.copy(arguments = if (it.isNotBlank() && "contextOrder" !in arguments) arguments + ("contextOrder" to "1") else arguments))
+        }
+        if (effective == null || main == null) Text("当前未定位到主调用草稿或会话主调用；选定主调用后可选择真实模型节点及接收槽。", style = MaterialTheme.typography.bodySmall)
+        if (blockId.isNotBlank()) {
+            Text(slot?.let { "继承接收槽：${it.role.name} · ${promptPositionLabel(it)}。槽停用或条件不满足时，内容不发送。" }
+                ?: "所选槽已删除、停用或不属于当前目标；运行会报告，不会改为普通注入。请明确重选槽或普通注入。",
+                style = MaterialTheme.typography.bodySmall, color = if (slot == null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+            val contextOrder = node.arguments["contextOrder"] ?: "1"
+            val orderChoices = (1..4).map { it.toString() to it.toString() }
+            ChoiceLine("上下文顺序", contextOrder, orderChoices +
+                if (orderChoices.none { it.first == contextOrder }) listOf(contextOrder to "当前：$contextOrder") else emptyList()) {
+                onChange(node.copy(arguments = node.arguments + ("contextOrder" to it)))
+            }
+            var orderDraft by remember(node.id, contextOrder) { mutableStateOf(contextOrder) }
+            val invalidOrder = orderDraft.toIntOrNull()?.let { it > 0 } != true
+            OutlinedTextField(orderDraft, { value ->
+                orderDraft = value
+                if (value.toIntOrNull()?.let { it > 0 } == true) onChange(node.copy(arguments = node.arguments + ("contextOrder" to value)))
+            }, label = { Text("自定义上下文顺序 · 正整数") }, modifier = Modifier.fillMaxWidth(), singleLine = true, isError = invalidOrder)
+            if (invalidOrder) Text("请输入正整数；当前输入尚未应用。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            Text("仅控制同一接收槽内提示内容的位置，数字小的在前；同号按固定定义顺序排列。与调用的排队级别、并行或排队执行无关。", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            ChoiceLine("角色", node.arguments["role"] ?: Role.SYSTEM.name, Role.entries.map { it.name to it.name }) { onChange(node.copy(arguments = node.arguments + ("role" to it))) }
+            ChoiceLine("位置", node.arguments["position"] ?: PromptPosition.BEFORE_HISTORY.name, listOf(
+                PromptPosition.BEFORE_HISTORY.name to "历史之前", PromptPosition.IN_HISTORY.name to "历史中", PromptPosition.AFTER_HISTORY.name to "历史之后")) { onChange(node.copy(arguments = node.arguments + ("position" to it))) }
+            if (node.arguments["position"] == PromptPosition.IN_HISTORY.name) TextFieldLine("距历史末尾的消息数", node.arguments["depth"] ?: "0", { onChange(node.copy(arguments = node.arguments + ("depth" to it))) })
+        }
         ChoiceLine("生命周期", node.arguments["scope"] ?: InjectionScope.TURN.name, InjectionScope.entries.map { it.name to it.name }) { onChange(node.copy(arguments = node.arguments + ("scope" to it))) }
         ChoiceLine("内容为空时", node.arguments["emptyBehavior"] ?: "ALLOW", listOf("ALLOW" to "仍插入空内容", "SKIP" to "跳过本次注入", "REMOVE" to "移除同标识注入")) { onChange(node.copy(arguments = node.arguments + ("emptyBehavior" to it))) }
         PromptTemplateField("注入内容", node.inputTemplate, references, { onChange(node.copy(inputTemplate = it)) }, minLines = 3)
         TextProcessingEditor("注入内容处理", node.inputProcessing, references) { onChange(node.copy(inputProcessing = it)) }
-        Text("注入或移除在目标提示词编译前生效；请设置相应触发时机和依赖。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("注入须在目标模型请求开始前完成；可在调用的时机设置中选择正文准备前。上下文顺序不改变触发时机或调用排队，选择接收槽也不会自动修改其他节点。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    val known = if (inject) setOf("id", "role", "position", "depth", "targetWorkflowId", "targetNodeId", "scope", "emptyBehavior") else setOf("id")
+    val known = if (inject) setOf("id", "role", "position", "depth", "targetWorkflowId", "targetNodeId", "targetBlockId", "contextOrder", "scope", "emptyBehavior") else setOf("id")
     if (node.arguments.keys.any { it !in known }) ActionArgumentForm(node, null, onChange, references)
 }

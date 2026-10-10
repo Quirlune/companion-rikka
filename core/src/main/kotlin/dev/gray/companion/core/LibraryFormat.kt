@@ -7,7 +7,7 @@ import kotlinx.serialization.json.intOrNull
 
 /** Resource wire versions are independent of the Android SQLite table version. */
 object LibraryFormat {
-    const val CURRENT_VERSION = 14
+    const val CURRENT_VERSION = 30
     private const val LEGACY_VERSION = 1
 
     val json = Json { ignoreUnknownKeys = false; encodeDefaults = true }
@@ -36,7 +36,8 @@ object LibraryFormat {
     /** Additive resource upgrades preserve legacy addresses and each journal's execution version. */
     fun upgrade(library: Library): Library {
         checkVersion(library.schemaVersion)
-        val named = MacroNaming.normalize(CollectionCompatibility.canonicalLive(library))
+        val live = ExtensionLiveMigration.upgrade(CollectionCompatibility.canonicalLive(library))
+        val named = MacroNaming.normalize(GlobalMemory.ensureXmlValidation(live))
         fun upgradeSession(session: Session): Session {
             val pending = session.pendingRun ?: return session
             val frozen = pending.frozenResources
@@ -68,6 +69,8 @@ object LibraryFormat {
     }
 
     private fun requireNativeConfiguration(library: Library) {
+        require(library.memoryExecutionView == null) { "记忆执行环境只能保存在会话运行或分支快照内" }
+
         NativeProviderConfiguration.validate(library).firstOrNull { it.error }?.let {
             throw IllegalArgumentException("${it.path}: ${it.message}")
         }

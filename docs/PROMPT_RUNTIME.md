@@ -1,4 +1,8 @@
+> 当前入口（文档修订68）：作者契约以 [AI_IMPORT_GUIDE.txt](AI_IMPORT_GUIDE.txt) 与当前源码为准，架构以 [ARCHITECTURE.md](ARCHITECTURE.md) 为准。下文包含历史版本补充；旧参与范围、磁贴或主调用卡片说明不覆盖当前全局扩展/调用组卡片规则。
+
 # Prompt runtime foundation
+
+Scope note, 2026-10-09, based on main `1c7036d1`: this document describes the earlier opt-in `prompt-runtime` foundation and its upstream adapters. Its provider/package/preset/rule API and state.json are not the active Companion core `Library` configuration-package schema. For Companion extensions and JSON/ZIP imports, use `CONFIGURATION_PACKAGES.md`, `PROMPT_LANGUAGE.md` with its current supported capability boundaries, and the latest `ARCHITECTURE.md` baseline. Do not author these foundation objects as `companion.config.v1` resources.
 
 This is an opt-in foundation, not a replacement UI. Existing Compose screens, provider implementations,
 UIMessage parts, attachment URLs, OCR, document processing, tool handling and conversation storage remain

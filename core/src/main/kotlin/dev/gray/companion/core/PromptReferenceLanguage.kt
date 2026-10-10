@@ -99,7 +99,7 @@ object PromptReferenceLanguage {
     private enum class Field(val keyword: String) {
         TYPE("type"), IN("in"), CALL("call"), FOLDER("folder"), UNDER("under"), NAME("name"),
         TAG("tag"), ANY("any"), NOT("not"), AT("at"), XML("xml"),
-        FROM("from"), THROUGH("through"), VIEW("view"), REVISION("revision"), SOURCE("source"), FORMAT("format")
+        FROM("from"), THROUGH("through"), VIEW("view"), REVISION("revision"), SOURCE("source"), FORMAT("format"), SPEAKER("speaker")
     }
     private data class Value(val text: String, val span: SourceSpan, val quoted: Boolean)
     private data class ParsedField(val name: String, val span: SourceSpan, val values: List<Value>) {
@@ -200,7 +200,7 @@ object PromptReferenceLanguage {
             issue(Code.UNSUPPORTED_FIELD, "${singleOnly.keyword} 仅用于有 name 的单取引用", it)
         }
         val isHistory = sourceType == SourceType.BUILTIN && source == SourceScope.Named("history") && name in setOf("messages", "context")
-        val historyFields = listOf(Field.FROM, Field.THROUGH, Field.VIEW, Field.REVISION, Field.SOURCE, Field.FORMAT)
+        val historyFields = listOf(Field.FROM, Field.THROUGH, Field.VIEW, Field.REVISION, Field.SOURCE, Field.FORMAT, Field.SPEAKER)
         if (!isHistory) historyFields.forEach { key -> field(key)?.let {
             issue(Code.UNSUPPORTED_FIELD, "${key.keyword} 仅支持 builtin history messages", it)
         } }
@@ -233,6 +233,13 @@ object PromptReferenceLanguage {
                 "model" -> HistorySourceKind.MODEL_RAW
                 else -> { invalid(Field.SOURCE, "source 须为 display 或 model"); HistorySourceKind.DISPLAY }
             }
+            val sourceRole = when (text(Field.SPEAKER)) {
+                null -> null
+                "user" -> Role.USER
+                "assistant" -> Role.ASSISTANT
+                "system" -> Role.SYSTEM
+                else -> { invalid(Field.SPEAKER, "speaker 须为 user、assistant 或 system；省略时读取全部原始发言方"); null }
+            }
             val format = text(Field.FORMAT)?.let { raw ->
                 try { HistoryReferences.decodeFormat(raw) }
                 catch (failure: IllegalArgumentException) {
@@ -242,7 +249,7 @@ object PromptReferenceLanguage {
             }
             HistorySelection(viewId, revision, HistoryRange(point(Field.FROM, HistoryPoint()),
                 point(Field.THROUGH, HistoryPoint(HistoryAnchor.END, 1.0))), compressed = name == "context", sourceKind = sourceKind,
-                format = format, rangeExplicit = Field.FROM in fields || Field.THROUGH in fields)
+                format = format, rangeExplicit = Field.FROM in fields || Field.THROUGH in fields, sourceRole = sourceRole)
         } else null
         if (diagnostics.isNotEmpty()) return CompileResult(null, diagnostics, locations)
         return CompileResult(QueryPlan(requireNotNull(sourceType), requireNotNull(source), call, folder, name,

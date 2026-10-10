@@ -35,6 +35,7 @@ object HistoryReferences {
         append("{{type:builtin.in:history.name:")
         append(if (selection.compressed) "context" else "messages")
         if (selection.sourceKind == HistorySourceKind.MODEL_RAW) append(".source:model")
+        selection.sourceRole?.let { append(".speaker:").append(it.name.lowercase()) }
         selection.viewId?.let { append(".view:").append(it) }
         selection.revision?.let { append(".revision:").append(it) }
         if (selection.rangeExplicit || selection.range != HistoryRange()) {

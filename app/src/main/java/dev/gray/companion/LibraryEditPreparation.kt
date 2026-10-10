@@ -46,7 +46,7 @@ internal object LibraryEditPreparation {
         if (removed.isEmpty()) return emptyList()
         val refs = (next.sessions + next.savedChats.map { it.snapshot })
             .flatMap { listOf(it.characterId, it.mainCallId) + it.packageIds + it.groupIds } +
-            next.characters.flatMap { it.boundPackageIds } +
+            next.characters.flatMap { it.boundPackageIds + it.boundGroupIds } +
             next.mainCalls.flatMap { it.boundPackageIds + it.boundGroupIds } +
             next.groups.flatMap { it.boundPackageIds }
         return removed.filter { it in refs }.map { Issue("resource.$it", "资源仍被会话或绑定使用") }

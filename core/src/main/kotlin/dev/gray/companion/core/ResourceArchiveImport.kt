@@ -11,8 +11,7 @@ import kotlinx.serialization.json.*
 /** Bounded transport preparation. Publication and all typed resource validation remain with the caller. */
 object ResourceArchiveImport {
     const val FORMAT = "companion.bundle.v1"
-    private val kinds = linkedMapOf("character" to "characters", "mainCall" to "mainCalls", "package" to "packages",
-        "group" to "groups", "persona" to "personas", "tag" to "tags", "profile" to "profiles", "connection" to "connections", "extension" to "extensions")
+    private val kinds = ResourceKindCatalog.folders
 
     fun read(input: InputStream, stagingDirectory: File, fileName: String = "", limits: ResourceArchiveLimits = ResourceArchiveLimits(),
              checkCancelled: () -> Unit = {}, prepareAvatar: (ByteArray, String) -> AvatarImage = ::portableAvatar): ResourceArchiveResult {
@@ -98,7 +97,7 @@ object ResourceArchiveImport {
         catch (failure: ResourceArchiveProblem) {
             return ResourceArchiveResult(null, issues + Issue(failure.path, failure.message), count, budget.expandedBytes)
         } catch (failure: Exception) {
-            return ResourceArchiveResult(null, issues + Issue("import", "读取失败：${failure.message ?: failure.javaClass.simpleName}"), count, budget.expandedBytes)
+            return ResourceArchiveResult(null, issues + Issue("import", "读取失败；文件无效或导入暂存不可用"), count, budget.expandedBytes)
         } finally {
             ownedFiles.forEach { it.delete() }
             ownedDirectory?.delete()

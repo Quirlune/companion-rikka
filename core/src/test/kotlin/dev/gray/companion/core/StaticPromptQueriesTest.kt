@@ -8,10 +8,10 @@ import org.junit.Test
 
 class StaticPromptQueriesTest {
     private val tags = listOf(
-        PromptTag(id = "npc-id", slug = "npc"),
-        PromptTag(id = "ally-id", slug = "ally"),
-        PromptTag(id = "warm-id", slug = "warm"),
-        PromptTag(id = "spoiler-id", slug = "spoiler")
+        PromptTag(id = "npc-id", name = "NPC", slug = "npc"),
+        PromptTag(id = "ally-id", name = "Ally", slug = "ally"),
+        PromptTag(id = "warm-id", name = "Warm", slug = "warm"),
+        PromptTag(id = "spoiler-id", name = "Spoiler", slug = "spoiler")
     )
 
     private fun plan(expression: String): QueryPlan =
@@ -83,29 +83,42 @@ class StaticPromptQueriesTest {
 
     @Test fun unsupportedMetadataAndUnknownTagsAreDiagnosed() {
         val resources = loadedResources(Library(promptTags = tags), Session(), emptyMap())
-        for (expression in listOf(
+        val unsupported = listOf(
             "type:pack.in:world.folder:cast",
+            "type:pack.in:world.under:cast",
             "type:pack.in:world.name:hero.at:version-1",
             "type:main.in:daily",
-            "type:pack.in:world.tag:unknown"
-        )) assertTrue(expression, StaticPromptQueries.bind(plan(expression), resources).diagnostic != null)
+            "type:group.in:extras"
+        )
+        for (expression in unsupported) {
+            assertTrue(expression, StaticPromptQueries.bind(plan(expression), resources).diagnostic != null)
+            assertTrue(expression, macroExpressionError(expression) != null)
+        }
+        assertTrue(StaticPromptQueries.bind(plan("type:pack.in:world.tag:unknown"), resources).diagnostic != null)
     }
 
     @Test fun compilerRendersSelectedTemplatesAndXmlWithoutChangingOldRecovery() {
-        val pack = PromptPackage(id = "pack", namespace = "legacy", slug = "world", entries = listOf(
+        val pack = PromptPackage(id = "pack", namespace = "legacy", name = "World", slug = "world", entries = listOf(
             PromptEntry(key = "first", slug = "first", text = "<detail>{{input}}</detail>", isTemplate = true,
-                tagIds = listOf("npc-id")),
-            PromptEntry(key = "second", slug = "second", text = "second", tagIds = listOf("npc-id"))
+                tagIds = listOf("npc-id", "ally-id", "warm-id")),
+            PromptEntry(key = "second", slug = "second", text = "second", tagIds = listOf("npc-id", "ally-id"))
         ))
-        val library = Library(packages = listOf(pack), promptTags = tags)
-        val session = Session(packageIds = listOf(pack.id))
-        val node = WorkflowNode(includeHistory = false, inputTemplate = "", blocks = listOf(
-            PromptBlock(template = "{{type:pack.in:world.tag:npc}}"),
-            PromptBlock(template = "{{type:pack.in:world.name:first.xml:detail}}")
+        val node = WorkflowNode(id = "node", includeHistory = false, inputTemplate = "", blocks = listOf(
+            PromptBlock(template = "{{type:pack.in:world.tag:npc.any:ally,warm.not:spoiler}}"),
+            PromptBlock(template = "{{type:pack.in:world.name:first.at:latest.xml:detail}}")
         ))
+        val workflow = Workflow(id = "workflow", nodes = listOf(node))
+        val main = MainCall(id = "main", name = "Main", workflows = listOf(workflow), primaryWorkflowId = workflow.id)
+        val library = Library(mainCalls = listOf(main), packages = listOf(pack), promptTags = tags)
+        val session = Session(mainCallId = main.id, packageIds = listOf(pack.id))
+
+        assertTrue(LibraryValidator.validate(library).none { it.error })
         val current = PromptCompiler().preview(library, session, node, "resolved")
         assertTrue(current.issues.none { it.error })
         assertEquals(listOf("<detail>resolved</detail>\nsecond", "resolved"), current.messages.map { it.text })
+
+        val oldValidation = LibraryValidator.validate(library, executionVersion = 4)
+        assertTrue(oldValidation.any { it.error && it.message.contains("尚未绑定") })
         val old = PromptCompiler().preview(library, session, node, "resolved", executionVersion = 4)
         assertTrue(old.issues.any { it.error && it.message.contains("尚未绑定") })
     }

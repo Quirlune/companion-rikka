@@ -25,7 +25,8 @@ private sealed interface CallEditorRoute : NavKey {
     @Serializable data class Details(val id: String) : CallEditorRoute
     @Serializable data class Prompt(val id: String) : CallEditorRoute
     @Serializable data object History : CallEditorRoute
-    @Serializable data object BodyDisplay : CallEditorRoute
+    @Serializable data object Cards : CallEditorRoute
+    @Serializable data object BodyAppearance : CallEditorRoute
     @Serializable data object Bindings : CallEditorRoute
     @Serializable data object Info : CallEditorRoute
 }
@@ -34,10 +35,13 @@ private data class PendingMainSwitch(val targetId: String?)
 
 /** Apply new-editor defaults only when a main call is created, never to a loaded resource. */
 internal fun newEditorMainCall(id: String): MainCall {
-    val main = MainCall(id = id, name = "新主调用")
+    val main = MainCall(id = id, name = "新主调用", specialDefault = true)
     val processor = main.history.processor
     return main.copy(
-        workflows = main.workflows.map { call -> call.copy(nodes = call.nodes.map { it.copy(recordTrajectory = false) }) },
+        workflows = main.workflows.map { call -> DefaultPromptSlots.ensureMissing(call.copy(nodes = call.nodes.map { it.copy(
+            actionId = "model.generate", visible = true, outputSlot = OutputSlot.BODY,
+            dependsOn = emptyList(), recordTrajectory = true,
+        ) })) },
         primaryWorkflowId = main.workflows.firstOrNull()?.id,
         history = main.history.copy(processor = processor.copy(workflow = processor.workflow.copy(
             nodes = processor.workflow.nodes.map { it.copy(recordTrajectory = false) }))),
@@ -70,7 +74,12 @@ internal fun MainCallEditor(
     val editingBusy = saving || avatarProcessing
     fun pop() { if (stack.size > 1) stack.removeAt(stack.lastIndex) else onBack() }
     fun open(route: CallEditorRoute) { stack.add(route) }
-    fun openDetails(workflow: Workflow) { callDrafts[workflow.id] = CallDetailDraft(workflow, workflow); open(CallEditorRoute.Details(workflow.id)) }
+    fun openDetails(workflow: Workflow) {
+        if (!item.specialDefault && DefaultCallRules.primary(item)?.id == workflow.id && DefaultCallRules.compatible(workflow))
+            item = item.copy(specialDefault = true, primaryWorkflowId = workflow.id)
+        callDrafts[workflow.id] = CallDetailDraft(workflow, workflow)
+        open(CallEditorRoute.Details(workflow.id))
+    }
     fun requestPrompt(request: PromptEditRequest) { promptRequest = request.copy(workflowDraft = stack.last() is CallEditorRoute.Details); open(CallEditorRoute.Prompt(newId())) }
     fun updateWorkflow(changed: Workflow) { item = item.copy(workflows = item.workflows.map { if (it.id == changed.id) changed else it }) }
     fun mergeWorkflow(changed: Workflow) = if (item.workflows.any { it.id == changed.id }) item.workflows.map { if (it.id == changed.id) changed else it } else item.workflows + changed
@@ -95,7 +104,7 @@ internal fun MainCallEditor(
         openDetails(workflow)
     }
     // Legacy resources without an explicit primary keep their original runtime/output contract.
-    val default = item.workflows.firstOrNull { it.id == item.primaryWorkflowId } ?: item.workflows.firstOrNull()
+    val default = DefaultCallRules.primary(item)
     val sourceResource = ExtensionResourceRef(ExtensionResourceKind.MAIN, item.id)
     val sourceFocus = LocalSourceNavigation.current?.focus
     LaunchedEffect(sourceFocus) {
@@ -113,7 +122,6 @@ internal fun MainCallEditor(
                         }
                     })
                 }
-                sourceFocus.section?.startsWith("tiles") == true || sourceFocus.section == "bodyTextTemplate" || sourceFocus.section == "bodySourceTileId" -> open(CallEditorRoute.BodyDisplay)
                 sourceFocus.section?.startsWith("history") == true -> open(CallEditorRoute.History)
             }
         }
@@ -174,23 +182,36 @@ internal fun MainCallEditor(
                             updateWorkflow(current.copy(nodes = current.nodes.map { if (it.id == modelNode.id) it.copy(blocks = blocks) else it }))
                         })
                     }
+                    if (DefaultCallRules.compatible(default) && DefaultPromptSlots.ensureMissing(default) != default) {
+                        OutlinedButton(onClick = {
+                            item.workflows.firstOrNull { it.id == default.id }?.let { updateWorkflow(DefaultPromptSlots.ensureMissing(it)) }
+                        }, enabled = !editingBusy) { Text("补齐四个提示词接收槽") }
+                        Text("仅向当前草稿补入缺少的接收槽；已有提示词与原聊天保留，保存后生效。", style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     if (modelNode != null) NodeTrajectoryControl(modelNode, {}, usesModel = true)
                     if (modelNode != null) RegexOutputCopyEditor(modelNode, outputKeysForNewNodes(library, item.configuredWorkflows())) { copy ->
                         val current = item.workflows.firstOrNull { it.id == default.id } ?: return@RegexOutputCopyEditor
                         updateWorkflow(current.copy(nodes = current.nodes.map { if (it.id == modelNode.id) it.copy(regexOutputCopy = copy) else it }))
                     }
-                    EditorDestinationRow("默认调用设置", if (default.nodes.size > 1) "${default.nodes.size} 个节点" else null) { openDetails(default) }
+                    EditorDestinationRow(if (item.specialDefault) "默认模型调用" else "默认调用设置",
+                        if (!DefaultCallRules.compatible(default)) "旧配置 · ${default.nodes.size} 个节点" else "模型主体 · 正文与后处理") { openDetails(default) }
+                    if (item.specialDefault) Text("默认调用固定一个模型主体，结果作为正文并可后处理；初始由用户消息触发一次，触发和条件仍可自定义，不限制其他调用。",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    else Text(if (DefaultCallRules.compatible(default))
+                        "打开编辑时将本草稿按专用默认模型调用管理；保存后生效，原聊天不改动。"
+                        else "这项旧默认调用保留完整节点与原有规则。可先整理为一个生成正文的模型主体，再采用专用默认调用。",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else OutlinedButton(onClick = {
                     val key = nextCallOutputKey(outputKeysForNewNodes(library, item.configuredWorkflows()), "reply")
-                    val workflow = Workflow(title = nextDisplayName(item.configuredWorkflows().map { it.title }, "调用"),
+                    val workflow = DefaultPromptSlots.ensureMissing(Workflow(title = nextDisplayName(item.configuredWorkflows().map { it.title }, "调用"),
                         slug = nextEditorSlug(item.configuredWorkflows().map { it.slug }, "call"),
-                        nodes = listOf(WorkflowNode(outputKey = key, slug = key, visible = true, recordTrajectory = false)))
-                    item = item.copy(workflows = item.workflows + workflow, primaryWorkflowId = workflow.id)
+                        nodes = listOf(WorkflowNode(actionId = "model.generate", outputKey = key, slug = key,
+                            visible = true, outputSlot = OutputSlot.BODY, recordTrajectory = true))))
+                    item = item.copy(workflows = item.workflows + workflow, primaryWorkflowId = workflow.id, specialDefault = true)
                 }) { Text("添加默认调用") }
                 HorizontalDivider()
-                EditorDestinationRow("正文显示", item.bodySourceTileId?.let { selected ->
-                    (item.tiles + library?.groups.orEmpty().flatMap { it.tiles }).firstOrNull { it.id == selected }?.title ?: "所选模板已不可用"
-                } ?: "原模型正文") { open(CallEditorRoute.BodyDisplay) }
+                EditorDestinationRow("正文外观", if (BodyAppearanceTemplates.isCustom(item.bodyAppearanceTemplate)) "自定义 HTML 与 CSS" else "默认正文样式") { open(CallEditorRoute.BodyAppearance) }
                 EditorDestinationRow("历史配置", "范围、角色、包装与插入项") { open(CallEditorRoute.History) }
                 EditorDestinationRow("关联资源", "${item.boundPackageIds.size} 个提示词包 · ${item.boundGroupIds.size} 个调用组") { open(CallEditorRoute.Bindings) }
                 HorizontalDivider()
@@ -200,12 +221,15 @@ internal fun MainCallEditor(
         entry<CallEditorRoute.Calls> { route ->
             CallListEditor("其他调用", item.workflows.filterNot { it.id == default?.id }, ::pop, { id -> item.workflows.firstOrNull { it.id == id }?.let(::openDetails) }, ::addCall,
                 { workflow, enabled -> updateWorkflow(workflow.copy(enabled = enabled)) }, { backs[route] = it }, leadingContent = {
-                    ChoiceLine("默认调用", item.primaryWorkflowId,
-                        listOf<Pair<String?, String>>(null to "保留旧配置的显示方式") +
-                            item.workflows.map { it.id to it.title.ifBlank { "未命名调用" } }) {
-                        item = item.copy(primaryWorkflowId = it)
-                    }
-                    if (item.primaryWorkflowId == null) Text("此资源保留旧配置；首页展示第一项调用，原节点和输出设置保持原样。",
+                    if (item.specialDefault) ChoiceLine("默认模型调用", item.primaryWorkflowId ?: default?.id,
+                        item.workflows.filter(DefaultCallRules::compatible).map { (it.id as String?) to it.title.ifBlank { "未命名调用" } }) { selected ->
+                        if (selected != null) item = item.copy(primaryWorkflowId = selected)
+                    } else ChoiceLine("默认调用", item.primaryWorkflowId,
+                            listOf<Pair<String?, String>>(null to "保留旧配置的显示方式") +
+                                item.workflows.map { it.id to it.title.ifBlank { "未命名调用" } }) {
+                            item = item.copy(primaryWorkflowId = it)
+                        }
+                    if (!item.specialDefault && item.primaryWorkflowId == null) Text("此资源保留旧配置；首页展示第一项调用，原节点和输出设置保持原样。",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     HorizontalDivider()
                 })
@@ -218,7 +242,8 @@ internal fun MainCallEditor(
                     { item = item.copy(workflows = mergeWorkflow(it)); pop() }, ::pop, ::requestPrompt,
                     onDelete = if (call.id == default?.id) null else ({ item = item.copy(workflows = item.workflows.filterNot { it.id == call.id }); pop() }),
                     onRegisterBack = { backs[route] = it }, siblings = item.configuredWorkflows(),
-                    tags = library?.promptTags.orEmpty(), triggerTargets = completionSources())
+                    tags = library?.promptTags.orEmpty(), triggerTargets = completionSources(),
+                    specialDefault = item.specialDefault && call.id == default?.id)
             }
         }
         entry<CallEditorRoute.Prompt> { route -> promptRequest?.let { request ->
@@ -248,52 +273,22 @@ internal fun MainCallEditor(
                 restore = { candidate, parent -> candidate.copy(mainCalls = candidate.mainCalls.map { main -> if (main.id == item.id) main.copy(history = parent.mainCalls.first { it.id == item.id }.history) else main }) },
                 accept = { candidate -> candidate.mainCalls.firstOrNull { it.id == item.id }?.let { history = it.history } }) {
             CallEditorPage("历史配置", history != baseline, ::pop, { item = item.copy(history = history); pop() }, onRegisterBack = { backs[route] = it }) {
-                HistoryConfigEditor(history, library, referenceChoices(item.copy(history = history))) { history = it }
+                HistoryConfigEditor(history, library, referenceChoices(item.copy(history = history)), editedMainId = item.id) { history = it }
             }
             }
         }
-        entry<CallEditorRoute.BodyDisplay> { route ->
-            val baseline = remember { item }
-            var tiles by remember { mutableStateOf(item.tiles) }
-            var sourceId by remember { mutableStateOf(item.bodySourceTileId) }
-            var textTemplate by remember { mutableStateOf(item.bodyTextTemplate) }
-            var invalid by remember { mutableStateOf(false) }
-            val selectedSession = library?.sessions?.firstOrNull { it.id == library.selectedSessionId && it.mainCallId == item.id }
-            val groups = if (selectedSession != null) library?.loadedCallGroups(selectedSession, item).orEmpty()
-                else library?.groups.orEmpty().filter { it.id in item.boundGroupIds }
-            val candidates = (tiles + groups.flatMap { it.tiles }).filter {
-                it.enabled && it.placement == MacroTilePlacement.CHAT && it.kind in setOf(MacroTileKind.TEXT, MacroTileKind.HTML)
-            }.distinctBy { it.id }
-            val chosen = candidates.firstOrNull { it.id == sourceId }
-            val choices = listOf<Pair<String?, String>>(null to "原模型正文") + candidates.map { it.id to it.title.ifBlank { "未命名显示模板" } }
+        entry<CallEditorRoute.BodyAppearance> { route ->
+            val original = remember { item.bodyAppearanceTemplate }
+            var template by remember { mutableStateOf(original) }
             SourceDraftBoundary(sourceResource,
-                overlay = { base -> base.copy(mainCalls = base.mainCalls.map { if (it.id == item.id) it.copy(tiles = tiles, bodySourceTileId = sourceId, bodyTextTemplate = textTemplate) else it }) },
-                restore = { candidate, parent ->
-                    val old = parent.mainCalls.first { it.id == item.id }
-                    candidate.copy(mainCalls = candidate.mainCalls.map { if (it.id == item.id) it.copy(tiles = old.tiles, bodySourceTileId = old.bodySourceTileId, bodyTextTemplate = old.bodyTextTemplate) else it })
-                }, accept = { candidate -> candidate.mainCalls.firstOrNull { it.id == item.id }?.let { tiles = it.tiles; sourceId = it.bodySourceTileId; textTemplate = it.bodyTextTemplate } }) {
-            CallEditorPage("正文显示", tiles != baseline.tiles || sourceId != baseline.bodySourceTileId || textTemplate != baseline.bodyTextTemplate,
-                ::pop, {
-                    invalid = sourceId != null && (chosen == null || (chosen.kind == MacroTileKind.HTML && textTemplate.isBlank()))
-                    if (!invalid) { item = item.copy(tiles = tiles, bodySourceTileId = sourceId, bodyTextTemplate = textTemplate); pop() }
-                }, onRegisterBack = { backs[route] = it }) {
-                Text("每轮完成后，将所选显示模板冻结为该轮正文；原模型输出仍保留。旧聊天及下方面板的显示保持原样。",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                ChoiceLine("正文来源", sourceId, choices + if (sourceId != null && chosen == null) listOf(sourceId to "所选模板已不可用") else emptyList()) {
-                    sourceId = it; invalid = false
-                }
-                if (chosen?.kind == MacroTileKind.HTML) {
-                    PromptTemplateField("HTML 正文的语义文本", textTemplate, referenceChoices(item.copy(tiles = tiles)), { textTemplate = it }, minLines = 3)
-                    Text("这段文字供历史、复制和导出使用；HTML 只负责画面。", style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                if (invalid) Text("请选择可用的聊天文本或 HTML 模板；HTML 还需填写语义文本。", color = MaterialTheme.colorScheme.error)
-                HorizontalDivider()
-                Text("本主调用的显示模板", style = MaterialTheme.typography.titleMedium)
-                MacroTilesEditor(tiles, referenceChoices(item.copy(tiles = tiles))) { tiles = it; invalid = false }
-                if (groups.isNotEmpty()) Text("已关联调用组的可用模板也能作为正文来源；编辑它们请进入对应调用组的显示磁贴设置。",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+                overlay = { base -> base.copy(mainCalls = base.mainCalls.map { if (it.id == item.id) it.copy(bodyAppearanceTemplate = template) else it }) },
+                restore = { candidate, parent -> candidate.copy(mainCalls = candidate.mainCalls.map { main ->
+                    if (main.id == item.id) main.copy(bodyAppearanceTemplate = parent.mainCalls.first { it.id == item.id }.bodyAppearanceTemplate) else main
+                }) },
+                accept = { candidate -> candidate.mainCalls.firstOrNull { it.id == item.id }?.let { template = it.bodyAppearanceTemplate } }) {
+                BodyAppearanceEditor(original, template, { template = it },
+                    { item = item.copy(bodyAppearanceTemplate = template); pop() }, ::pop,
+                    onRegisterBack = { backs[route] = it })
             }
         }
         entry<CallEditorRoute.Bindings> { route ->
@@ -382,6 +377,7 @@ internal fun GroupEditor(
                         }
                     })
                 }
+            else if (sourceFocus.section?.startsWith("cards") == true) open(CallEditorRoute.Cards)
             else if (sourceFocus.section != null) open(CallEditorRoute.Info)
         }
     }
@@ -393,6 +389,7 @@ internal fun GroupEditor(
         entry<CallEditorRoute.Home> { route ->
             CallEditorPage("调用组", item != baseline, onBack, { onSave(item.copy(name = item.name.trim())) }, saving, { backs[route] = it }) {
                 EditorTitleRow(item.name, { rename = true })
+                EditorDestinationRow("卡片", "${item.cards.size} 项 · 数据、显示与布局") { open(CallEditorRoute.Cards) }
                 EditorDestinationRow("组内调用", "${item.workflows.size} 项") { open(CallEditorRoute.Calls) }
                 HorizontalDivider()
                 EditorDestinationRow("关联提示词包", "${item.boundPackageIds.size} 项") { open(CallEditorRoute.Bindings) }
@@ -427,6 +424,18 @@ internal fun GroupEditor(
                 { changed -> callDrafts[changed.id] = workflowDraft.copy(value = changed) }, promptContent)
             else promptContent()
         } }
+        entry<CallEditorRoute.Cards> { route ->
+            val original = remember { item.cards }
+            var cards by remember { mutableStateOf(item.cards) }
+            SourceDraftBoundary(sourceResource,
+                overlay = { base -> base.copy(groups = base.groups.map { if (it.id == item.id) it.copy(cards = cards) else it }) },
+                restore = { candidate, parent -> candidate.copy(groups = candidate.groups.map { if (it.id == item.id) it.copy(cards = parent.groups.first { old -> old.id == item.id }.cards) else it }) },
+                accept = { candidate -> candidate.groups.firstOrNull { it.id == item.id }?.let { cards = it.cards } }) {
+                CallEditorPage("卡片", cards != original, ::pop, { item = item.copy(cards = cards); pop() }, onRegisterBack = { backs[route] = it }) {
+                    CardResourcesEditor(cards, referenceChoices()) { cards = it }
+                }
+            }
+        }
         entry<CallEditorRoute.Bindings> { route ->
             val baseline = remember { item.boundPackageIds }
             var selected by remember { mutableStateOf(item.boundPackageIds) }

@@ -8,8 +8,17 @@ internal fun macroExpressionError(expression: String, executionVersion: Int = Ex
     if (Regex("^[a-zA-Z_][a-zA-Z0-9_-]*\\s*:").containsMatchIn(expression.trim())) {
         val compiled = PromptReferenceLanguage.compile(expression)
         if (!ExecutionSemantics(executionVersion).localHistoryFormats && compiled.fields.any { it.name == "format" }) return "此恢复版本不支持 History 局部格式"
-        return compiled.diagnostics.firstOrNull()?.message ?: if ((compiled.reference as? PromptReferenceLanguage.QueryPlan)?.historySelection != null)
-            null else "此来源的新式引用尚未绑定运行时；目前仅支持 builtin history messages"
+        if (!ExecutionSemantics(executionVersion).historySourceRoleSelection && compiled.fields.any { it.name == "speaker" }) return "此恢复版本不支持 History 原始发言方筛选"
+        val plan = compiled.reference as? PromptReferenceLanguage.QueryPlan
+        return compiled.diagnostics.firstOrNull()?.message ?: when {
+            plan?.historySelection != null -> null
+            plan == null -> "此来源的新式引用尚未绑定运行时；目前仅支持 builtin history messages"
+            !ExecutionSemantics(executionVersion).staticResourceQueries ->
+                "此来源的新式引用尚未绑定运行时；目前仅支持 builtin history messages"
+            DynamicPromptQueries.accepts(plan) -> if (executionVersion >= 9) DynamicPromptQueries.supportError(plan)
+                else "此恢复版本不支持调用slug引用"
+            else -> StaticPromptQueries.supportError(plan)
+        }
     }
     val tagged = expression.substringBefore('#')
     val base = tagged.substringBefore('@')
@@ -28,17 +37,37 @@ internal fun macroExpressionError(expression: String, executionVersion: Int = Ex
     return null
 }
 
-internal fun injectedBlocks(library: Library, session: Session, node: WorkflowNode): List<PromptBlock> {
+private fun activeNodeInjections(library: Library, session: Session, node: WorkflowNode): List<PromptInjection> {
     val main = library.mainCalls.firstOrNull { it.id == session.mainCallId } ?: return emptyList()
     val owners = MacroReferences.visibleOwners(library, session)
     val currentTurnId = MacroReferences.currentTurnId(session)
     return session.promptInjections.mapNotNull { injection ->
+        if (!PluginParticipation.injectionActive(library, session, injection.pluginOwnerIds, injection.origin.resourceId)) return@mapNotNull null
         if (injection.origin.resourceId !in owners || (injection.scope == InjectionScope.TURN && injection.turnId != currentTurnId)) return@mapNotNull null
         val workflow = main.workflows.firstOrNull { it.id == (injection.targetWorkflowId ?: main.primaryWorkflowId) }
             ?: if (injection.targetWorkflowId == null && main.primaryWorkflowId == null) main.workflows.firstOrNull() else null
         val target = injection.targetNodeId ?: workflow?.nodes?.lastOrNull { it.enabled && it.actionId == "model.generate" }?.id
-        if (workflow?.nodes?.any { it.id == node.id } == true && node.id == target) injection.block else null
+        if (workflow?.nodes?.any { it.id == node.id } == true && node.id == target) injection else null
     }
+}
+
+internal fun injectedBlocks(library: Library, session: Session, node: WorkflowNode): List<PromptBlock> =
+    activeNodeInjections(library, session, node).filter { it.targetBlockId == null }.map { it.block }
+
+internal fun slotInjections(library: Library, session: Session, node: WorkflowNode, slotId: String,
+                            executionVersion: Int = ExecutionSemantics.CURRENT): List<PromptInjection> {
+    val main = library.mainCalls.firstOrNull { it.id == session.mainCallId }
+    val definitions = listOfNotNull(main).flatMap { value -> value.configuredWorkflows().map { value.id to it } } +
+        library.loadedCallGroups(session, main).flatMap { group -> group.workflows.map { group.id to it } }
+    val order = definitions.flatMap { (resourceId, workflow) -> workflow.nodes.map { model ->
+        Triple(resourceId, workflow.id, model.id)
+    } }.withIndex().associate { it.value to it.index }
+    return activeNodeInjections(library, session, node).filter { it.targetBlockId == slotId }.sortedWith(
+        compareBy<PromptInjection> { if (ExecutionSemantics(executionVersion).independentContextOrder)
+                it.contextOrder ?: it.queueOrder else it.queueOrder }
+            .thenBy { order[Triple(it.origin.resourceId, it.origin.workflowId, it.origin.nodeId)] ?: Int.MAX_VALUE }
+            .thenBy { it.origin.resourceId }.thenBy { it.origin.workflowId }.thenBy { it.origin.nodeId }.thenBy { it.id }
+    )
 }
 
 /** Version storage is independent of a run's masked dependency-result projection. */
@@ -82,7 +111,7 @@ object MacroReferences {
     }
 
     fun originVisible(library: Library, session: Session, origin: ResultOrigin?): Boolean =
-        origin == null || origin.resourceId in visibleOwners(library, session)
+        origin == null || (origin.resourceId in visibleOwners(library, session) && PluginParticipation.originActive(library, session, origin))
 
     fun currentVersion(library: Library, session: Session, address: String): MacroVersion? =
         selectVersion(library, session, address, "latest")
@@ -142,7 +171,8 @@ internal class MacroReadView(val library: Library, val session: Session) {
         packages.forEach { add(it.id) }
     }
     private val turn = MacroReferences.currentTurn(session)
-    fun originVisible(origin: ResultOrigin?) = origin == null || origin.resourceId in owners
+    fun originVisible(origin: ResultOrigin?) = origin == null ||
+        (origin.resourceId in owners && PluginParticipation.originActive(library, session, origin))
     fun targetLoaded(address: String) = when {
         address.startsWith("character.") -> character != null
         address.startsWith("pack.") -> address.split('.')[1] in namespaces
@@ -157,8 +187,7 @@ internal class MacroReadView(val library: Library, val session: Session) {
             (address.substring(7) in session.unavailableResultKeys ||
                 address.substring(7) in session.pendingRun?.unavailableKeys.orEmpty())) return null
         val versions = session.macroHistory[address].orEmpty()
-        fun visible(version: MacroVersion) = version.origin.resourceId in owners &&
-            (version.valueOrigin == null || version.valueOrigin.resourceId in owners) &&
+        fun visible(version: MacroVersion) = originVisible(version.origin) && originVisible(version.valueOrigin) &&
             (version.turn == null || version.turn <= turn)
         val head = session.currentOnlyMacros[address]
         fun currentHead(): MacroVersion? {
@@ -203,11 +232,12 @@ internal class MacroReadView(val library: Library, val session: Session) {
 }
 
 /** Shared display/template entry point. It never invokes a model or executes behavior. */
-class MacroResolver(library: Library, session: Session, input: String = "", executionVersion: Int = ExecutionSemantics.CURRENT) {
+class MacroResolver(library: Library, session: Session, input: String = "", executionVersion: Int = ExecutionSemantics.CURRENT,
+                    onResultRead: ((String, String) -> Unit)? = null) {
     private val mutableIssues = mutableListOf<Issue>()
     private val renderer = TemplateRenderer(
         loadedResources(library, session, session.state, session.results, input, mutableIssues, executionVersion = executionVersion),
-        input, session.results, session.state, mutableIssues, session.resultOrigins, session, executionVersion = executionVersion
+        input, session.results, session.state, mutableIssues, session.resultOrigins, session, executionVersion = executionVersion, onResultRead = onResultRead
     )
     val issues: List<Issue> get() = mutableIssues.toList()
     fun render(template: String): String = renderer.render(template, "macro")

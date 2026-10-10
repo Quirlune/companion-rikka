@@ -1,6 +1,7 @@
 package me.rerere.rikkahub.ui.pages.chat
 
 import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.Copy01
 import me.rerere.hugeicons.stroke.Folder01
 import me.rerere.hugeicons.stroke.Forward02
 import me.rerere.hugeicons.stroke.Pin
@@ -85,10 +86,9 @@ fun ColumnScope.CompanionConversationList(
     listState: LazyListState,
     modifier: Modifier = Modifier,
     onClick: (Conversation) -> Unit,
-    onRegenerateTitle: (Conversation) -> Unit,
-    onSave: (Conversation) -> Unit,
     onRename: (Conversation) -> Unit,
-    onPin: (Conversation) -> Unit,
+    onCopy: (Conversation) -> Unit,
+    onMove: (Conversation) -> Unit,
     onDelete: (Conversation) -> Unit,
 ) {
     val zone = ZoneId.systemDefault()
@@ -139,7 +139,7 @@ fun ColumnScope.CompanionConversationList(
                     timeLabel = row.timeLabel,
                     onClick = onClick,
                     onDelete = onDelete,
-                    companionActions = CompanionConversationActions(onSave, onRename, onPin, onRegenerateTitle),
+                    companionActions = CompanionConversationActions(onRename, onCopy, onMove),
                     modifier = Modifier.animateItem(),
                 )
             }
@@ -160,7 +160,7 @@ fun ColumnScope.CompanionConversationList(
                     timeLabel = row.timeLabel,
                     onClick = onClick,
                     onDelete = onDelete,
-                    companionActions = CompanionConversationActions(onSave, onRename, onPin, onRegenerateTitle),
+                    companionActions = CompanionConversationActions(onRename, onCopy, onMove),
                     modifier = Modifier.animateItem(),
                 )
             }
@@ -169,10 +169,9 @@ fun ColumnScope.CompanionConversationList(
 }
 
 private class CompanionConversationActions(
-    val onSave: (Conversation) -> Unit,
     val onRename: (Conversation) -> Unit,
-    val onPin: (Conversation) -> Unit,
-    val onRegenerateTitle: (Conversation) -> Unit,
+    val onCopy: (Conversation) -> Unit,
+    val onMove: (Conversation) -> Unit,
 )
 
 @Composable
@@ -405,44 +404,41 @@ private fun ConversationItem(
                 expanded = showDropdownMenu,
                 onDismissRequest = { showDropdownMenu = false },
             ) {
+                if (companionActions != null) {
+                    DropdownMenuItem(
+                        text = { Text("命名") },
+                        leadingIcon = { Icon(HugeIcons.PencilEdit01, null) },
+                        onClick = { showDropdownMenu = false; companionActions.onRename(conversation) },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("删除") },
+                        leadingIcon = { Icon(HugeIcons.Delete01, null) },
+                        onClick = { showDropdownMenu = false; onDelete(conversation) },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("复制") },
+                        leadingIcon = { Icon(HugeIcons.Copy01, null) },
+                        onClick = { showDropdownMenu = false; companionActions.onCopy(conversation) },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("移动") },
+                        leadingIcon = { Icon(HugeIcons.Folder01, null) },
+                        onClick = { showDropdownMenu = false; companionActions.onMove(conversation) },
+                    )
+                } else {
                 DropdownMenuItem(
                     text = {
                         Text(if (conversation.isPinned) stringResource(R.string.unpin_chat) else stringResource(R.string.pin_chat))
                     },
                     onClick = {
-                        if (companionActions == null) onPin(conversation)
-                        else companionActions.onPin(conversation)
+                        onPin(conversation)
                         showDropdownMenu = false
                     },
                     leadingIcon = {
                         Icon(if (conversation.isPinned) HugeIcons.PinOff else HugeIcons.Pin, null)
                     },
                 )
-                if (companionActions != null) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.chat_page_regenerate_title)) },
-                        leadingIcon = { Icon(HugeIcons.Refresh01, null) },
-                        onClick = {
-                            showDropdownMenu = false
-                            companionActions.onRegenerateTitle(conversation)
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("收藏到文件夹") },
-                        leadingIcon = { Icon(HugeIcons.Folder01, null) },
-                        onClick = { showDropdownMenu = false; companionActions.onSave(conversation) },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("重命名") },
-                        leadingIcon = { Icon(HugeIcons.PencilEdit01, null) },
-                        onClick = { showDropdownMenu = false; companionActions.onRename(conversation) },
-                    )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.chat_page_delete)) },
-                        leadingIcon = { Icon(HugeIcons.Delete01, null) },
-                        onClick = { showDropdownMenu = false; onDelete(conversation) },
-                    )
-                } else {
+
                 DropdownMenuItem(
                     text = {
                         Text(stringResource(id = R.string.chat_page_regenerate_title))

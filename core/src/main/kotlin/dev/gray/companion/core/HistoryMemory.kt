@@ -37,7 +37,9 @@ import kotlinx.serialization.Serializable
 @Serializable data class HistorySelection(
     val viewId: String? = null, val revision: Int? = null, val range: HistoryRange = HistoryRange(),
     val compressed: Boolean = false, val sourceKind: HistorySourceKind = HistorySourceKind.DISPLAY,
-    val format: HistoryReferenceFormat? = null, val rangeExplicit: Boolean = false
+    val format: HistoryReferenceFormat? = null, val rangeExplicit: Boolean = false,
+    /** Original speaker filter, before selecting the range. null keeps all BODY source roles. */
+    val sourceRole: Role? = null
 )
 data class HistoryProjection(
     val messages: List<ChatMessage>, val issues: List<Issue> = emptyList(),
@@ -176,10 +178,17 @@ object HistoryMemory {
     }
 
     fun effectiveSegments(session: Session, main: MainCall,
-                          sourceKind: HistorySourceKind = HistorySourceKind.DISPLAY): Map<String, HistoryMemorySegment> =
+                          sourceKind: HistorySourceKind = HistorySourceKind.DISPLAY,
+                          legacyWorkflowIds: Set<String> = emptySet()): Map<String, HistoryMemorySegment> =
         session.historyMemory.segments.filterValues { segment ->
             segment.sources.isNotEmpty() && segment.sources.all { it.sourceKind == sourceKind }
-        } + listOfNotNull(if (sourceKind == HistorySourceKind.DISPLAY) legacySegment(session, main) else null).associateBy { it.id }
+        } + listOfNotNull(if (sourceKind == HistorySourceKind.DISPLAY) legacySegment(session, main) else null).associateBy { it.id } +
+            if (sourceKind != HistorySourceKind.DISPLAY || legacyWorkflowIds.isEmpty()) emptyMap() else {
+                val body = session.messages.filter { !it.deleted && it.outputSlot == OutputSlot.BODY }
+                session.historyDigests.values.filter { it.workflowId in legacyWorkflowIds && it.text.isNotBlank() &&
+                    it.coveredFloors in 1..body.size && body[it.coveredFloors - 1].id == it.throughMessageId }
+                    .map { segment("旧版历史摘要", it.text, body.take(it.coveredFloors), it.workflowId) }.associateBy { it.id }
+            }
 
     /** The selected messages are authoritative; inactive generations provide only missing identities. */
     fun sourceIndex(session: Session): Map<String, ChatMessage> = buildMap {

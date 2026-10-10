@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -122,6 +123,10 @@ fun ChatMessage(
     assistantTextContent: (@Composable () -> Unit)? = null,
     branchSelectionEnabled: Boolean = true,
     onBranchSelectionDisabled: () -> Unit = {},
+    compactBranchActions: Boolean = false,
+    messageActionsEnabled: Boolean = true,
+    compactActionsExpanded: Boolean = false,
+    onCompactActionsExpandedChange: (Boolean) -> Unit = {},
 ) {
     val message = node.messages[node.selectIndex]
     val settings = LocalSettings.current.displaySetting
@@ -163,25 +168,51 @@ fun ChatMessage(
                 )
             }
         }
-        ProvideTextStyle(textStyle) {
-            MessagePartsBlock(
-                assistant = assistant,
-                role = message.role,
-                parts = message.parts,
-                annotations = message.annotations,
-                loading = loading,
-                model = model,
-                onToolApproval = onToolApproval,
-                onToolAnswer = onToolAnswer,
-                onUserMessageClick = if (!readOnly && message.role == MessageRole.USER) onEdit else null,
-                assistantTextContent = assistantTextContent,
-            )
+        Box(Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.fillMaxWidth().then(
+                    if (compactBranchActions) Modifier.padding(end = 48.dp).heightIn(min = 48.dp) else Modifier
+                ),
+                horizontalAlignment = if (message.role == MessageRole.USER) Alignment.End else Alignment.Start,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                ProvideTextStyle(textStyle) {
+                    MessagePartsBlock(
+                        assistant = assistant,
+                        role = message.role,
+                        parts = message.parts,
+                        annotations = message.annotations,
+                        loading = loading,
+                        model = model,
+                        onToolApproval = onToolApproval,
+                        onToolAnswer = onToolAnswer,
+                        onUserMessageClick = if (!compactBranchActions && !readOnly && message.role == MessageRole.USER) onEdit else null,
+                        assistantTextContent = assistantTextContent,
+                    )
 
-            message.translation?.let { translation ->
-                CollapsibleTranslationText(
-                    content = translation,
-                    onClickCitation = {}
-                )
+                    message.translation?.let { translation ->
+                        CollapsibleTranslationText(
+                            content = translation,
+                            onClickCitation = {}
+                        )
+                    }
+                }
+
+            }
+            if (compactBranchActions && !loading) {
+                Box(Modifier.align(Alignment.BottomEnd)) {
+                    CompanionMessageToolbar(
+                        node = node,
+                        expanded = compactActionsExpanded,
+                        enabled = messageActionsEnabled && !readOnly,
+                        branchSelectionEnabled = branchSelectionEnabled,
+                        onExpandedChange = onCompactActionsExpandedChange,
+                        onUpdate = onUpdate,
+                        onRegenerate = onRegenerate,
+                        onEdit = onEdit,
+                        onFork = onFork,
+                    )
+                }
             }
         }
 
@@ -192,7 +223,7 @@ fun ChatMessage(
         }
 
         AnimatedVisibility(
-            visible = showActions,
+            visible = showActions && !compactBranchActions,
             enter = slideInVertically { it / 2 } + fadeIn(),
             exit = slideOutVertically { it / 2 } + fadeOut()
         ) {
@@ -227,7 +258,7 @@ fun ChatMessage(
         }
 
     }
-    if (showActionsSheet) {
+    if (showActionsSheet && !compactBranchActions) {
         ChatMessageActionsSheet(
             message = message,
             onEdit = onEdit,
@@ -262,7 +293,7 @@ fun ChatMessage(
         )
     }
 
-    if (showSelectCopySheet) {
+    if (showSelectCopySheet && !compactBranchActions) {
         ChatMessageCopySheet(
             message = message,
             onDismissRequest = {

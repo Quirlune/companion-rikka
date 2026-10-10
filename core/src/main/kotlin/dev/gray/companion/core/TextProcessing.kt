@@ -76,6 +76,14 @@ internal fun WorkflowNode.declaredOutputAddresses(descriptor: ActionDescriptor?)
 /** Pure ordered text operations. Errors reject this node; previously accepted receipts remain. */
 object TextProcessing {
     private const val MAX_OUTPUT_LENGTH = 1_000_000
+
+    /** The template actually read by this operation, shared with frozen-context dependency capture. */
+    internal fun macroTemplate(step: TextProcessStep): String = when (step.kind) {
+        TextProcessKind.REGEX_REPLACE -> step.replacement
+        TextProcessKind.APPEND, TextProcessKind.PREPEND, TextProcessKind.FORMAT -> step.text
+        else -> ""
+    }
+
     fun validate(steps: List<TextProcessStep>, path: String, executionVersion: Int = ExecutionSemantics.CURRENT): List<Issue> = buildList {
         if (steps.size > 64) add(Issue(path, "文本处理步骤过多"))
         steps.forEachIndexed { index, step ->
@@ -113,6 +121,7 @@ object TextProcessing {
         var value = source
         for (step in steps) {
             require(value.length <= MAX_OUTPUT_LENGTH) { "文本处理内容过长" }
+            fun template() = expand(macroTemplate(step), readMacro, executionVersion)
             value = when (step.kind) {
                 TextProcessKind.REGEX_EXTRACT -> {
                     require(SafePatterns.validate(step.pattern, step.group) == null) { "正则表达式无效" }
@@ -122,12 +131,12 @@ object TextProcessing {
                 }
                 TextProcessKind.REGEX_REPLACE -> {
                     require(SafePatterns.validate(step.pattern) == null && step.pattern.isNotBlank()) { "正则表达式无效" }
-                    SafePatterns.replace(step.pattern, value, expand(step.replacement, readMacro, executionVersion))
+                    SafePatterns.replace(step.pattern, value, template())
                 }
                 TextProcessKind.TRIM -> value.trim()
-                TextProcessKind.APPEND -> value + expand(step.text, readMacro, executionVersion)
-                TextProcessKind.PREPEND -> expand(step.text, readMacro, executionVersion) + value
-                TextProcessKind.FORMAT -> expand(step.text, readMacro, executionVersion).replace("{value}", value)
+                TextProcessKind.APPEND -> value + template()
+                TextProcessKind.PREPEND -> template() + value
+                TextProcessKind.FORMAT -> template().replace("{value}", value)
                 TextProcessKind.INCREASE -> number((value.ifBlank { "0" }).toBigDecimal() + step.amount.toBigDecimal())
                 TextProcessKind.CLAMP -> {
                     val low = step.min.takeIf { it.isNotBlank() }?.toBigDecimal()

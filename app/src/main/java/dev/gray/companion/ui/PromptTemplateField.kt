@@ -119,7 +119,7 @@ internal fun PromptTemplateField(
     }
     val problems = remember(draft.text, scan) { promptReferenceProblems(draft.text, scan) }
     val popupOpen = !browserOpen && historyEdit == null && referenceEdit == null &&
-        (explicitlyOpen || (focused && token != null && dismissedAt != (draft.text to draft.selection)))
+        (explicitlyOpen || (focused && token?.shortcut == true && dismissedAt != (draft.text to draft.selection)))
     val visibleBottom = (windowSize.height - imeBottom - marginPx).coerceAtLeast(marginPx + 1)
     val availableHeight = max(
         fieldBounds.top - marginPx * 2,
@@ -232,7 +232,7 @@ internal fun PromptTemplateField(
                     onClick = { if (popupOpen) dismissCompletion() else explicitlyOpen = true },
                     modifier = Modifier.focusProperties { canFocus = false }.semantics { contentDescription = "选取宏" },
                 ) {
-                    Text("{}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelLarge)
+                    Text("//", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelLarge)
                 }
             },
             minLines = minLines,

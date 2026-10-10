@@ -142,6 +142,8 @@ fun ChatList(
     afterMessage: (@Composable (MessageNode) -> Unit)? = null,
     branchSelectionEnabled: (MessageNode) -> Boolean = { true },
     onBranchSelectionDisabled: (MessageNode) -> Unit = {},
+    compactBranchActions: Boolean = false,
+    messageActionsEnabled: (MessageNode) -> Boolean = { true },
 ) {
     AnimatedContent(
         targetState = previewMode,
@@ -191,6 +193,8 @@ fun ChatList(
                 afterMessage = afterMessage,
                 branchSelectionEnabled = branchSelectionEnabled,
                 onBranchSelectionDisabled = onBranchSelectionDisabled,
+                compactBranchActions = compactBranchActions,
+                messageActionsEnabled = messageActionsEnabled,
             )
         }
     }
@@ -228,7 +232,15 @@ private fun ChatListNormal(
     afterMessage: (@Composable (MessageNode) -> Unit)? = null,
     branchSelectionEnabled: (MessageNode) -> Boolean = { true },
     onBranchSelectionDisabled: (MessageNode) -> Unit = {},
+    compactBranchActions: Boolean = false,
+    messageActionsEnabled: (MessageNode) -> Boolean = { true },
 ) {
+    var expandedMessageActions by remember(conversation.id) { mutableStateOf<Uuid?>(null) }
+    LaunchedEffect(loading, state.isScrollInProgress, conversation.messageNodes) {
+        if (loading || state.isScrollInProgress || conversation.messageNodes.none { it.id == expandedMessageActions }) {
+            expandedMessageActions = null
+        }
+    }
     val scope = rememberCoroutineScope()
     val loadingState by rememberUpdatedState(loading)
     var isRecentScroll by remember { mutableStateOf(false) }
@@ -390,6 +402,10 @@ private fun ChatListNormal(
                             assistantTextContent = assistantTextContent[node.currentMessage.id],
                             branchSelectionEnabled = branchSelectionEnabled(node),
                             onBranchSelectionDisabled = { onBranchSelectionDisabled(node) },
+                            compactBranchActions = compactBranchActions,
+                            messageActionsEnabled = !loading && messageActionsEnabled(node),
+                            compactActionsExpanded = expandedMessageActions == node.id,
+                            onCompactActionsExpandedChange = { expandedMessageActions = if (it) node.id else null },
                         )
                     }
                     afterMessage?.invoke(node)

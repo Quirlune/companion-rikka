@@ -4,10 +4,17 @@ object LibraryValidator {
     fun validate(library: Library, executionVersion: Int = ExecutionSemantics.CURRENT): List<Issue> {
         val semantics = ExecutionSemantics(executionVersion)
         val issues = mutableListOf<Issue>()
+        issues += ExecutionResources.validate(library, executionVersion)
         if (library.schemaVersion != LibraryFormat.CURRENT_VERSION) issues += Issue("library.schemaVersion", "不支持的资源版本")
         issues += NativeProviderConfiguration.validate(library)
         checkMetadata(library, issues)
         issues += ExtensionCommands.validate(library)
+        issues += PluginCodes.validateCode(library)
+        if (semantics.nativeMemoryPlugins) issues += MemoryPlugins.validate(library)
+        if (semantics.globalMemory) issues += GlobalMemory.validate(library)
+        library.sessions.forEach { session -> session.enabledExtensionIds.forEach { id ->
+            if ((session.executableWorld?.library ?: library).extensions.none { it.id == id }) issues += Issue("session.${session.id}.enabledExtensionIds", "启用的插件不存在")
+        } }
         if (semantics.reasoningArchives)
             library.reasoningParsing.validationError()?.let { issues += Issue("library.reasoningParsing", it) }
         fun unique(values: List<String>, path: String) {
@@ -31,7 +38,6 @@ object LibraryValidator {
             if (persona.name.isBlank()) issues += Issue("$path.name", "用户身份名称不能为空")
             if (persona.avatar != null && persona.avatar.decodedBytes() == null)
                 issues += Issue("$path.avatar", "头像必须是 32 KB 以内的 JPEG 或 PNG 图片")
-            checkTemplate(persona.prompt, "$path.prompt", issues, executionVersion)
         }
         if (library.selectedPersonaId != null && library.personas.none { it.id == library.selectedPersonaId })
             issues += Issue("library.selectedPersonaId", "所选用户身份不存在")
@@ -61,12 +67,20 @@ object LibraryValidator {
                 checkTemplate(greeting, "character.${card.id}.alternateGreetings.$index", issues, executionVersion)
             }
             card.boundPackageIds.forEach { if (library.packages.none { pack -> pack.id == it }) issues += Issue("character.${card.id}", "绑定的提示词包不存在") }
+            card.boundGroupIds.forEach { id -> if (library.groups.none { it.id == id }) issues += Issue("character.${card.id}.boundGroupIds", "绑定的调用组不存在") }
         }
         library.packages.forEach { unique(it.entries.map { entry -> entry.key }, "pack.${it.id}.entries") }
         library.groups.forEach { group ->
             group.boundPackageIds.forEach { if (library.packages.none { pack -> pack.id == it }) issues += Issue("group.${group.id}", "绑定的提示词包不存在") }
         }
         fun checkSession(session: Session, path: String) {
+            issues += ConversationPaths.validate(session).map { issue ->
+                issue.copy(path = issue.path.replaceFirst("session.${session.id}", path))
+            }
+            // Folder membership is live UI metadata; archived snapshots may retain an old folder ID.
+            if (path.startsWith("session.") && session.folderId != null && library.chatFolders.none { it.id == session.folderId })
+                issues += Issue("$path.folderId", "聊天文件夹不存在")
+            issues += CardLayoutCommands.validate(session.cardPlacements, "$path.cardPlacements")
             checkMemory(session.historyMemory, "$path.historyMemory", issues)
             session.currentOnlyMacros.forEach { (key, head) ->
                 val at = "$path.currentOnlyMacros.$key"
@@ -76,14 +90,15 @@ object LibraryValidator {
                     (head.gap.firstTurn != null && head.gap.firstTurn < 0))
                     issues += Issue(at, "当前宏的地址、版本或覆盖结构无效")
             }
-            if (session.personaId != null && library.personas.none { it.id == session.personaId })
+            val sessionResources = session.executableWorld?.library ?: library
+            if (session.personaId != null && sessionResources.personas.none { it.id == session.personaId })
                 issues += Issue("$path.personaId", "会话用户身份不存在")
-            if (session.characterId.isNotBlank() && library.characters.none { it.id == session.characterId }) issues += Issue(path, "角色卡不存在")
-            if (session.mainCallId.isNotBlank() && library.mainCalls.none { it.id == session.mainCallId }) issues += Issue(path, "主调用不存在")
-            session.packageIds.forEach { id -> if (library.packages.none { it.id == id }) issues += Issue(path, "提示词包不存在") }
-            session.groupIds.forEach { id -> if (library.groups.none { it.id == id }) issues += Issue(path, "调用组不存在") }
+            if (session.characterId.isNotBlank() && sessionResources.characters.none { it.id == session.characterId }) issues += Issue(path, "角色卡不存在")
+            if (session.mainCallId.isNotBlank() && sessionResources.mainCalls.none { it.id == session.mainCallId }) issues += Issue(path, "主调用不存在")
+            session.packageIds.forEach { id -> if (sessionResources.packages.none { it.id == id }) issues += Issue(path, "提示词包不存在") }
+            session.groupIds.forEach { id -> if (sessionResources.groups.none { it.id == id }) issues += Issue(path, "调用组不存在") }
             session.historyDigests.forEach { (mainId, digest) ->
-                if (library.mainCalls.none { it.id == mainId }) issues += Issue("$path.historyDigests.$mainId", "历史摘要对应的主调用不存在")
+                if (sessionResources.mainCalls.none { it.id == mainId }) issues += Issue("$path.historyDigests.$mainId", "历史摘要对应的主调用不存在")
                 val body = session.messages.filter { it.outputSlot == OutputSlot.BODY && !it.deleted }
                 if (digest.coveredFloors !in 1..body.size || body[digest.coveredFloors - 1].id != digest.throughMessageId)
                     issues += Issue("$path.historyDigests.$mainId", "历史摘要覆盖范围与原消息不一致")
@@ -93,18 +108,16 @@ object LibraryValidator {
         library.savedChats.forEach { checkSession(it.snapshot, "savedChat.${it.id}.snapshot") }
         (library.sessions.map { "session.${it.id}" to it } + library.savedChats.map { "savedChat.${it.id}.snapshot" to it.snapshot })
             .forEach { (path, session) ->
-                val main = library.mainCalls.firstOrNull { it.id == session.mainCallId } ?: return@forEach
+                val main = (session.executableWorld?.library ?: library).mainCalls.firstOrNull { it.id == session.mainCallId } ?: return@forEach
                 val floors = session.messages.count { it.outputSlot == OutputSlot.BODY && !it.deleted }
                 if (!HistoryContext.rangeValid(main.history.range, floors))
                     issues += Issue("$path.history", "所选历史范围起点晚于终点")
             }
         if (library.selectedProfileId != null && library.profiles.none { it.id == library.selectedProfileId }) issues += Issue("library.selectedProfileId", "所选模型不存在")
-        if (library.titleConfig.modelProfileId != null && library.profiles.none { it.id == library.titleConfig.modelProfileId })
-            issues += Issue("library.titleConfig.modelProfileId", "标题模型不存在")
-        if (library.titleConfig.enabled && library.titleConfig.prompt.isBlank())
-            issues += Issue("library.titleConfig.prompt", "标题提示词不能为空")
+        issues += AutomaticOptions.validate(library)
         if (library.selectedSessionId != null && library.sessions.none { it.id == library.selectedSessionId }) issues += Issue("library.selectedSessionId", "所选会话不存在")
         library.mainCalls.forEach { main ->
+            issues += DefaultCallRules.issues(main)
             if (main.avatar != null && main.avatar.decodedBytes() == null)
                 issues += Issue("main.${main.id}.avatar", "头像必须是 32 KB 以内的 JPEG 或 PNG 图片")
             main.boundPackageIds.forEach { id ->
@@ -113,7 +126,7 @@ object LibraryValidator {
             if (main.primaryWorkflowId != null && main.workflows.none { it.id == main.primaryWorkflowId })
                 issues += Issue("main.${main.id}.primaryWorkflowId", "默认调用不存在")
             main.boundGroupIds.forEach { id -> if (library.groups.none { it.id == id }) issues += Issue("main.${main.id}.boundGroupIds", "绑定的调用组不存在") }
-            main.bodySourceTileId?.let { sourceId ->
+            main.bodySourceTileId?.takeIf { ExecutionSemantics(executionVersion).legacyTiles }?.let { sourceId ->
                 val source = (main.tiles + library.groups.flatMap { it.tiles }).firstOrNull { it.id == sourceId }
                 val path = "main.${main.id}.bodySourceTileId"
                 when {
@@ -131,7 +144,17 @@ object LibraryValidator {
             }
             checkHistory(main, issues, executionVersion)
         }
-        val tiles = library.mainCalls.flatMap { it.tiles } + library.groups.flatMap { it.tiles }
+        val cards = library.mainCalls.flatMap { it.cards } + library.groups.flatMap { it.cards }
+        unique(cards.map { it.id } + (library.mainCalls.flatMap { it.configuredWorkflows() } +
+            library.groups.flatMap { it.workflows }).flatMap { it.nodes }.map { it.id }, "library.cardIds")
+        cards.forEach { card ->
+            val path = "card.${card.id}"
+            if (card.id.isBlank()) issues += Issue(path, "卡片 ID 不能为空")
+            checkTemplate(card.sourceTemplate, "$path.sourceTemplate", issues, executionVersion)
+            issues += CardDefinitions.validate(card.definition, "$path.definition", executionVersion)
+        }
+        val tiles = if (ExecutionSemantics(executionVersion).legacyTiles)
+            library.mainCalls.flatMap { it.tiles } + library.groups.flatMap { it.tiles } else emptyList()
         unique(tiles.map { it.id }, "library.tileIds")
         tiles.forEach { tile ->
             val path = "tile.${tile.id}"
@@ -183,9 +206,14 @@ object LibraryValidator {
                 if (field.key.isBlank()) issues += Issue("profile.${profile.id}.customBody.$index", "自定义请求参数名称不能为空")
             }
         }
-        val processorIds = library.mainCalls.map { it.history.processor.workflow.id }.toSet()
+        val processorIds = library.mainCalls.map { it.history.processor.workflow.id }.toSet() +
+            library.extensions.mapNotNull { definition ->
+                MemoryPlugins.processor(library, definition)?.workflow?.id
+            }
         val allWorkflows = library.mainCalls.flatMap { it.configuredWorkflows() } + library.groups.flatMap { it.workflows }
         unique(allWorkflows.map { it.id }, "library.workflowIds")
+        unique(allWorkflows.distinctBy { it.id }.flatMap { it.nodes }.filter { it.actionId == "card.define" }
+            .map { it.id }, "library.cardNodeIds")
         unique(allWorkflows.flatMap { it.nodes }.flatMap { it.blocks }.map { it.id }, "library.blockIds")
         allWorkflows.forEach { workflow ->
             val path = "workflow.${workflow.id}"
@@ -207,6 +235,7 @@ object LibraryValidator {
             val writerCategories = mutableMapOf<String, String>()
             workflow.nodes.forEach { node ->
                 val nodePath = "$path.node.${node.id}"
+                issues += CardDefinitions.validateNode(node, nodePath, executionVersion)
                 if (semantics.reasoningArchives)
                     node.reasoningParsing?.validationError()?.let { issues += Issue("$nodePath.reasoningParsing", it) }
                 if (node.title.isBlank()) issues += Issue(nodePath, "节点名称不能为空")
@@ -256,6 +285,7 @@ object LibraryValidator {
                 checkTemplate(node.inputTemplate, "$nodePath.input", issues, executionVersion)
                 node.blocks.forEach { block ->
                     val blockPath = "$nodePath.block.${block.id}"
+                    issues += DefaultPromptSlots.blockIssues(block, blockPath, executionVersion)
                     checkTemplate(block.template, blockPath, issues, executionVersion)
                     issues += TextProcessing.validate(block.processing, "$blockPath.processing", executionVersion)
                     if (containsStructuredHistoryToken(block.template, executionVersion) && !isStructuredHistoryBlock(block.template, executionVersion))
@@ -265,6 +295,21 @@ object LibraryValidator {
                     if (block.depth < 0) issues += Issue("$blockPath.depth", "插入深度不能小于零")
                 }
                 node.arguments.forEach { (key, value) -> checkTemplate(value, "$nodePath.argument.$key", issues, executionVersion) }
+                if (node.actionId == "prompt.inject" && semantics.independentContextOrder) {
+                    val order = node.arguments["contextOrder"] ?: "1"
+                    if (!order.contains("{{") && order.trim().toIntOrNull()?.let { it >= 1 } != true)
+                        issues += Issue("$nodePath.argument.contextOrder", "上下文顺序须为正整数")
+                }
+                if (node.actionId == "prompt.inject" && node.arguments["targetBlockId"].orEmpty().isNotBlank()) {
+                    val blockId = node.arguments.getValue("targetBlockId")
+                    val at = "$nodePath.argument.targetBlockId"
+                    if (!semantics.anchoredPromptSlots) issues += Issue(at, "此恢复版本不支持指定注入槽")
+                    else if (listOf("targetWorkflowId", "targetNodeId", "targetBlockId").none { node.arguments[it].orEmpty().contains("{{") }) {
+                        val target = library.mainCalls.any { main -> injectionTarget(main, ActionRegistry.defaults().snapshot(),
+                            node.arguments["targetWorkflowId"], node.arguments["targetNodeId"], blockId, executionVersion, requireEnabled = false) != null }
+                        if (!target) issues += Issue(at, "注入槽不存在或不是目标模型节点上的注入槽")
+                    }
+                }
                 if (node.actionId in setOf("history.view.copy", "history.memory.write", "history.memory.select")) {
                     issues += ActionConfigurationRules.historyArguments(node, nodePath)
                 }
@@ -291,9 +336,9 @@ object LibraryValidator {
         if (tagIds.any { it.isBlank() } || tagIds.distinct().size != tagIds.size)
             issues += Issue("library.promptTagIds", "标签 ID 不能为空或重复")
         val catalogue = tagIds.toSet()
-        fun tags(ids: List<String>, path: String) {
+        fun tags(ids: List<String>, path: String, available: Set<String> = catalogue) {
             if (ids.distinct().size != ids.size) issues += Issue("$path.tagIds", "不能重复分配同一标签")
-            ids.filter { it.isBlank() || it !in catalogue }.distinct().forEach {
+            ids.filter { it.isBlank() || it !in available }.distinct().forEach {
                 issues += Issue("$path.tagIds", "标签不存在：$it")
             }
         }
@@ -327,12 +372,13 @@ object LibraryValidator {
             slugs(workflows.map { "workflow.${it.id}" to it.slug }, "$path.workflows")
             workflows.forEach { workflow ->
                 val workflowPath = "workflow.${workflow.id}"
+                val workflowTags = ExecutionResources.forWorkflow(library, workflow.id).promptTags.mapTo(mutableSetOf()) { it.id }
                 slugs(workflow.nodes.map { "$workflowPath.node.${it.id}" to it.slug }, "$workflowPath.nodes")
                 workflow.nodes.forEach { node ->
                     val nodePath = "$workflowPath.node.${node.id}"
-                    tags(node.tagIds, nodePath)
+                    tags(node.tagIds, nodePath, workflowTags)
                     slugs(node.blocks.map { "$nodePath.block.${it.id}" to it.slug }, "$nodePath.blocks")
-                    node.blocks.forEach { tags(it.tagIds, "$nodePath.block.${it.id}") }
+                    node.blocks.forEach { tags(it.tagIds, "$nodePath.block.${it.id}", workflowTags) }
                 }
             }
         }

@@ -140,7 +140,8 @@ internal fun MacroHelp(onInsert: (String) -> Unit) {
 
 @Composable
 internal fun EditorPage(title: String, onBack: () -> Unit, onSave: () -> Unit, dirty: Boolean = false, saving: Boolean = false, contentSpacing: Dp = 16.dp,
-    titleContent: (@Composable () -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
+    titleContent: (@Composable () -> Unit)? = null, scrollKey: Any? = null,
+    navigationContent: (@Composable () -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     var confirmBack by remember { mutableStateOf(false) }
     var showIssues by remember { mutableStateOf(false) }
     val sourceNavigation = LocalSourceNavigation.current
@@ -171,7 +172,12 @@ internal fun EditorPage(title: String, onBack: () -> Unit, onSave: () -> Unit, d
         containerColor = CustomColors.topBarColors.containerColor,
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
-            Column(Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(contentSpacing), content = content)
+            Column(Modifier.fillMaxSize()) {
+                navigationContent?.invoke()
+                key(scrollKey) {
+                    Column(Modifier.weight(1f).fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(contentSpacing), content = content)
+                }
+            }
             if (saving) Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f), modifier = Modifier.fillMaxSize().pointerInput(Unit) {
                 awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } }
             }) { Box(contentAlignment = androidx.compose.ui.Alignment.Center) { CircularProgressIndicator() } }
@@ -184,6 +190,15 @@ internal fun EditorPage(title: String, onBack: () -> Unit, onSave: () -> Unit, d
         confirmButton = { TextButton(onClick = { confirmBack = false; onSave() }, enabled = !saving) { Text("保存并返回") } },
         dismissButton = { Row { TextButton(onClick = { confirmBack = false }) { Text("继续编辑") }; TextButton(onClick = { confirmBack = false; onBack() }) { Text("放弃修改") } } }
     )
+}
+
+@Composable
+internal fun EditorSectionTabs(titles: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+    TabRow(selectedTabIndex = selected) {
+        titles.forEachIndexed { index, title ->
+            Tab(selected = index == selected, onClick = { onSelect(index) }, text = { Text(title) })
+        }
+    }
 }
 
 /** Shared binding picker; filtering never changes unseen selections. */

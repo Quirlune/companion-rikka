@@ -85,13 +85,14 @@ internal fun CompanionProvidersPage(library: Library, busy: Boolean,
 @Composable
 internal fun CompanionProviderDetailPage(providerId: String, library: Library, busy: Boolean,
     getCredential: (CredentialSlot) -> String, onCommit: suspend (CompanionProviderPlan) -> List<Issue>,
-    onEditProfile: (String) -> Unit, onSelectDefault: (String) -> Unit, onBack: () -> Unit) {
+    onSelectDefault: (String) -> Unit, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
     val context = LocalContext.current.applicationContext
     val client = koinInject<OkHttpClient>()
     val latestLibrary by rememberUpdatedState(library)
     var snapshot by remember(providerId) { mutableStateOf(CompanionProviderAdapter.capture(library)) }
+    val modelDrafts = remember(providerId) { mutableStateMapOf<Uuid, ModelCallDefaultsDraft>() }
     val nativeId = remember(providerId, snapshot.connectionIds) {
         runCatching { Uuid.parse(providerId) }.getOrNull()?.takeIf { it in snapshot.connectionIds }
             ?: snapshot.providerId(providerId)
@@ -119,8 +120,8 @@ internal fun CompanionProviderDetailPage(providerId: String, library: Library, b
     BackHandler { requestBack() }
 
     // Updating another resource must not replace the connection form's unsaved provider image.
-    LaunchedEffect(library.connections, library.profiles, dirty, committing) {
-        if (!dirty && !committing) {
+    LaunchedEffect(library.connections, library.profiles, dirty, committing, modelDrafts.isNotEmpty()) {
+        if (!dirty && !committing && modelDrafts.isEmpty()) {
             snapshot = CompanionProviderAdapter.capture(library)
             snapshot.extras[nativeId]?.let { extras = it }
             storedSecrets = readStored(snapshot)
@@ -148,8 +149,16 @@ internal fun CompanionProviderDetailPage(providerId: String, library: Library, b
     fun submit(desired: List<ProviderSetting>, keys: Map<CredentialSlot, Pair<String, String>> = emptyMap(), deleting: Boolean = false,
                complete: (Boolean) -> Unit = {}) {
         if (!editingEnabled) { complete(false); return }
+        val requestedModels = desired.flatMap { it.models }.map { it.id }.toSet()
+        val defaults = modelDrafts.filterKeys { it in requestedModels }.mapValues { it.value.parsed() }
+        if (defaults.values.any { it == null }) {
+            toaster.show("调用默认值格式无效，请修正后保存。", type = ToastType.Error)
+            complete(false)
+            return
+        }
         val result = CompanionProviderAdapter.plan(snapshot, desired,
-            connectionExtras = snapshot.extras + (nativeId to extras), editedCredentials = keys)
+            connectionExtras = snapshot.extras + (nativeId to extras), editedCredentials = keys,
+            editedModelDefaults = defaults.mapValues { requireNotNull(it.value) })
         val plan = result.plan
         if (plan == null) {
             toaster.show(result.issues.firstOrNull()?.message ?: "修改无效", type = ToastType.Error)
@@ -217,7 +226,6 @@ internal fun CompanionProviderDetailPage(providerId: String, library: Library, b
                     Box {
                         IconButton(onClick = { menu = true }, enabled = editingEnabled && !dirty) { Icon(HugeIcons.MoreVertical, "调用设置") }
                         DropdownMenu(menu, { menu = false }) {
-                            DropdownMenuItem(text = { Text("调用参数") }, onClick = { menu = false; onEditProfile(profileId) })
                             DropdownMenuItem(text = { Text("设为全局默认") }, enabled = library.selectedProfileId != profileId,
                                 onClick = { menu = false; onSelectDefault(profileId) })
                         }
@@ -225,6 +233,12 @@ internal fun CompanionProviderDetailPage(providerId: String, library: Library, b
                 }
             }
         },
+        modelEditExtraContent = { model, editable ->
+            val profileId = snapshot.profileIds[model.id]
+            ModelCallDefaultsEditor(model.id, snapshot.profiles.firstOrNull { it.id == profileId },
+                editingEnabled && editable, modelDrafts)
+        },
+        onModelEditClosed = { model -> modelDrafts.remove(model.id) },
         loadModels = { requested ->
             val savedExtras = snapshot.extras.getValue(nativeId)
             withContext(Dispatchers.IO) {

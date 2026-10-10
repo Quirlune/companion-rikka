@@ -54,6 +54,8 @@ fun Library.startNewConversation(characterId: String? = null): Library {
     require(characterId == null || characters.any { it.id == characterId }) { "角色卡不存在" }
     val selected = sessions.firstOrNull { it.id == selectedSessionId }
     val fresh = Session(
+        title = ConversationMetadata.defaultTitle(),
+        titlePending = false,
         characterId = characterId ?: selected?.characterId ?: characters.firstOrNull()?.id.orEmpty(),
         mainCallId = selected?.mainCallId ?: mainCalls.firstOrNull()?.id.orEmpty(),
         packageIds = selected?.packageIds?.toList() ?: emptyList(),

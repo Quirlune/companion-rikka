@@ -9,9 +9,10 @@ fun Library.loadedPromptPackages(
     ids.addAll(session.packageIds)
     characters.firstOrNull { it.id == session.characterId }?.let { ids.addAll(it.boundPackageIds) }
     mainCall?.let { ids.addAll(it.boundPackageIds) }
+    ids.addAll(PluginParticipation.members(this, session, ExtensionResourceKind.PACKAGE))
     loadedCallGroups(session, mainCall).forEach { ids.addAll(it.boundPackageIds) }
     val packagesById = packages.associateBy { it.id }
-    return ids.mapNotNull { packagesById[it] }
+    return ids.filter { PluginParticipation.resourceActive(this, session, ExtensionResourceKind.PACKAGE, it) }.mapNotNull { packagesById[it] }
 }
 
 fun Library.loadedCallGroups(
@@ -20,7 +21,9 @@ fun Library.loadedCallGroups(
 ): List<CallGroup> {
     val ids = linkedSetOf<String>()
     ids.addAll(session.groupIds)
+    characters.firstOrNull { it.id == session.characterId }?.let { ids.addAll(it.boundGroupIds) }
     mainCall?.let { ids.addAll(it.boundGroupIds) }
+    ids.addAll(PluginParticipation.members(this, session, ExtensionResourceKind.GROUP))
     val byId = groups.associateBy { it.id }
-    return ids.mapNotNull { byId[it] }
+    return ids.filter { PluginParticipation.resourceActive(this, session, ExtensionResourceKind.GROUP, it) }.mapNotNull { byId[it] }
 }

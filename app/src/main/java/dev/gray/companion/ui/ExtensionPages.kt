@@ -6,6 +6,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -22,8 +23,6 @@ private sealed interface ExtensionPage {
     data object ListPage : ExtensionPage
     data class Detail(val id: String) : ExtensionPage
     data class Definition(val baseline: ConfigurationExtension?, val initial: ConfigurationExtension) : ExtensionPage
-    data class Parameter(val extensionId: String, val parameter: ExtensionParameter,
-        val descriptor: ExtensionFieldDescriptor, val initialValue: String?) : ExtensionPage
 }
 
 /** Configuration only: all accepted changes are applied by the host's controller transaction. */
@@ -35,28 +34,47 @@ internal fun ConfigurationExtensionsPage(
     onOpenResource: (ExtensionResourceRef) -> Unit,
     onBack: () -> Unit,
     onOpenMemory: () -> Unit = {},
+    onSetMemoryEnabled: (Boolean) -> Unit = {},
     onOpenLocation: (ResourceLocation) -> Unit = {},
+    onOpenAutomaticOptions: () -> Unit = {},
+    onSetAutomaticOptionsEnabled: (Boolean) -> Unit = {},
+    onSetExtensionEnabled: (ConfigurationExtension, Boolean) -> Unit = { _, _ -> },
 ) {
-    val pages = remember { mutableStateListOf<ExtensionPage>(ExtensionPage.ListPage) }
-    // Approval is scoped to this visit and the actual set of declared users of each resource.
-    val approvedImpacts = remember { mutableStateMapOf<ExtensionResourceRef, List<ResourceUse>>() }
-    fun back() { if (pages.size > 1) pages.removeAt(pages.lastIndex) else onBack() }
+    var selectedExtensionId by rememberSaveable { mutableStateOf<String?>(null) }
+    val pages = remember {
+        mutableStateListOf<ExtensionPage>(ExtensionPage.ListPage).apply {
+            selectedExtensionId?.let { add(ExtensionPage.Detail(it)) }
+        }
+    }
+    fun openDetail(definition: ConfigurationExtension) {
+        selectedExtensionId = definition.id
+        pages.add(ExtensionPage.Detail(definition.id))
+    }
+    fun back() {
+        if (pages.size > 1) {
+            pages.removeAt(pages.lastIndex)
+            selectedExtensionId = pages.filterIsInstance<ExtensionPage.Detail>().lastOrNull()?.id
+        } else onBack()
+    }
     fun editDefinition(definition: ConfigurationExtension?) {
-        pages.add(ExtensionPage.Definition(definition, definition ?: ConfigurationExtension(name = "新扩展")))
+        pages.add(ExtensionPage.Definition(definition, definition ?: ConfigurationExtension(name = "新扩展", enabled = false)))
     }
     when (val page = pages.last()) {
         ExtensionPage.ListPage -> {
             ExtensionPageFrame("扩展", ::back, busy, actions = {
                 IconButton(onClick = { editDefinition(null) }, enabled = !busy) { Icon(HugeIcons.Add01, "创建扩展") }
             }) {
-                // A system destination, not a name-matched user collection.
-                ExtensionDefinitionRow("记忆", "内置 · 分段摘要、记忆处理与历史视图", busy, onClick = onOpenMemory)
-                library.extensions.forEach { definition -> key(definition.id) {
-                    ExtensionDefinitionRow(definition.name,
-                        "${definition.resources.size} 个组成资源 · ${definition.parameters.size} 个公开参数", busy,
-                        onClick = { pages.add(ExtensionPage.Detail(definition.id)) })
-                } }
-                if (library.extensions.isEmpty()) Text("点 + 创建自己的调用、提示词与宏集合。", style = MaterialTheme.typography.bodyMedium)
+                Text("原生扩展", style = MaterialTheme.typography.titleMedium)
+                val nativeExtensions = library.extensions.filter { it.memory == null && it.code == null }
+                ExtensionCollectionRows(library, nativeExtensions, busy, ::openDetail, onSetExtensionEnabled)
+                if (nativeExtensions.isEmpty()) Text("暂无原生扩展，可创建或导入资产包。", style = MaterialTheme.typography.bodySmall)
+                Text("额外扩展", style = MaterialTheme.typography.titleMedium)
+                ExtensionDefinitionRow("自动选项", "设置模型、数量与回复方向", busy, onClick = onOpenAutomaticOptions,
+                    checked = library.automaticOptions.enabled, onCheckedChange = onSetAutomaticOptionsEnabled)
+                ExtensionDefinitionRow("记忆", "全局设置 · 各聊天分别保存摘要", busy, onClick = onOpenMemory,
+                    checked = library.memoryConfig?.enabled == true, onCheckedChange = onSetMemoryEnabled,
+                    switchEnabled = library.memoryConfig?.extensionId != null)
+                ExtensionCollectionRows(library, library.extensions.filter { it.memory == null && it.code != null }, busy, ::openDetail, onSetExtensionEnabled)
             }
         }
         is ExtensionPage.Detail -> {
@@ -67,16 +85,27 @@ internal fun ConfigurationExtensionsPage(
             }
             else ExtensionDetailPage(library, definition, busy, onApply, ::back,
                 onEdit = { editDefinition(definition) }, onOpenResource = onOpenResource,
-                onParameter = { parameter, descriptor -> pages.add(ExtensionPage.Parameter(definition.id, parameter,
-                    descriptor, ExtensionFieldRegistry.read(library, parameter.target))) })
+                onOpenLocation = onOpenLocation)
         }
         is ExtensionPage.Definition -> key(page.initial.id) {
             ExtensionDefinitionEditor(library, page.baseline, page.initial, busy, onApply, ::back)
         }
-        is ExtensionPage.Parameter -> key(page.extensionId, page.parameter.id) {
-            ExtensionParameterEditor(library, page, busy, approvedImpacts, onApply, ::back, onOpenLocation)
-        }
     }
+}
+
+/** Imported collections use native assets; built-in features retain their dedicated settings routes. */
+@Composable
+private fun ExtensionCollectionRows(library: Library, definitions: List<ConfigurationExtension>, busy: Boolean,
+    onOpen: (ConfigurationExtension) -> Unit, onSetEnabled: (ConfigurationExtension, Boolean) -> Unit) {
+    val selected = library.sessions.firstOrNull { it.id == library.selectedSessionId }
+    definitions.forEach { definition -> key(definition.id) {
+        val participating = definition.enabled ?: (selected?.enabledExtensionIds?.contains(definition.id) == true)
+        ExtensionDefinitionRow(definition.name,
+            "${definition.resources.size} 个关联资产" + (definition.mainScopeId?.let { id ->
+                " · ${library.mainCalls.firstOrNull { it.id == id }?.name ?: "原主调用"}"
+            } ?: " · 全局"), busy,
+            onClick = { onOpen(definition) }, checked = participating, onCheckedChange = { onSetEnabled(definition, it) })
+    } }
 }
 
 @Composable
@@ -92,18 +121,29 @@ private fun ExtensionPageFrame(title: String, onBack: () -> Unit, busy: Boolean,
 }
 
 @Composable
-private fun ExtensionDefinitionRow(title: String, detail: String, busy: Boolean, onClick: () -> Unit) {
+private fun ExtensionDefinitionRow(title: String, detail: String, busy: Boolean, onClick: () -> Unit,
+    checked: Boolean? = null, onCheckedChange: (Boolean) -> Unit = {}, switchEnabled: Boolean = true) {
     CardGroup { item(onClick = { if (!busy) onClick() }, headlineContent = { Text(title) },
-        supportingContent = { Text(detail, maxLines = 2, overflow = TextOverflow.Ellipsis) }) }
+        supportingContent = { Text(detail, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        trailingContent = { if (checked != null) Switch(checked = checked, onCheckedChange = onCheckedChange,
+            enabled = !busy && switchEnabled) }) }
 }
 
 @Composable
 private fun ExtensionDetailPage(library: Library, definition: ConfigurationExtension,
     busy: Boolean, onApply: ((Library) -> ExtensionEditResult) -> Unit, onBack: () -> Unit,
     onEdit: () -> Unit, onOpenResource: (ExtensionResourceRef) -> Unit,
-    onParameter: (ExtensionParameter, ExtensionFieldDescriptor) -> Unit) {
+    onOpenLocation: (ResourceLocation) -> Unit) {
     var menu by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<ConfigurationExtension?>(null) }
+    var pendingCardGroupId by remember(definition.id) { mutableStateOf<String?>(null) }
+    LaunchedEffect(pendingCardGroupId, library.groups) {
+        val id = pendingCardGroupId
+        if (id != null && library.groups.any { it.id == id }) {
+            pendingCardGroupId = null
+            onOpenLocation(ResourceLocation(ExtensionResourceRef(ExtensionResourceKind.GROUP, id), section = "cards"))
+        }
+    }
     ExtensionPageFrame(definition.name, onBack, busy, actions = {
         IconButton(onClick = onEdit, enabled = !busy) { Icon(HugeIcons.PencilEdit01, "编辑扩展定义") }
         Box {
@@ -114,29 +154,94 @@ private fun ExtensionDetailPage(library: Library, definition: ConfigurationExten
             }
         }
     }) {
-        Text("集中整理调用、提示词与宏。公开参数直接修改组成资源；运行时使用仍由原有配置决定。",
+        val session = library.sessions.firstOrNull { it.id == library.selectedSessionId }
+        if (session?.executableWorld != null) Text("此会话保留当时的资源；新加入的扩展请新建聊天使用。关闭开关会立即隐藏其卡片。",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        definition.mainScopeId?.let { id -> Text("卡片适用于：${library.mainCalls.firstOrNull { it.id == id }?.name ?: "原主调用"}",
+            style = MaterialTheme.typography.bodySmall) }
+        definition.code?.let { code ->
+            Text("代码 · ${code.runtime} v${code.version}", style = MaterialTheme.typography.titleMedium)
+            Text("由普通调用的 plugin.run 行为执行；入口 execute(context) 返回文本。导入和开启不会直接执行代码。",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("插件 ID：${definition.id}", style = MaterialTheme.typography.bodySmall)
+            Text(code.source, style = MaterialTheme.typography.bodySmall, maxLines = 12, overflow = TextOverflow.Ellipsis)
+            TextButton(onClick = onEdit, enabled = !busy) { Text("编辑代码") }
+            OutlinedButton(enabled = !busy, onClick = {
+                val node = WorkflowNode(title = "运行插件", actionId = "plugin.run", includeHistory = false,
+                    arguments = mapOf("pluginId" to definition.id), outputKey = "plugin_${newId().replace("-", "")}", recordTrajectory = false)
+                val name = generateSequence(1) { it + 1 }.map { if (it == 1) "${definition.name} · 代码" else "${definition.name} · 代码 $it" }
+                    .first { candidate -> library.groups.none { it.name == candidate } }
+                val group = CallGroup(name = name, workflows = listOf(Workflow(title = "代码功能", nodes = listOf(node))))
+                pendingCardGroupId = group.id
+                onApply { latest -> ExtensionCommands.addDisplayGroup(latest, definition, group) }
+            }) { Text("添加代码调用") }
+        }
+        Text("资产与完整编辑", style = MaterialTheme.typography.titleMedium)
+        Text("以下入口直接打开资产的原生编辑器。调用中可编辑完整提示词顺序、历史引用、模型参数和输出处理；提示词包中可编辑被引用的文本。修改写回同一份共享资源。",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (definition.resources.isEmpty()) Text("尚未添加资产，点击右上角编辑扩展定义。", style = MaterialTheme.typography.bodySmall)
+        definition.resources.forEach { ref -> key(ref.kind, ref.id) {
+            val exists = extensionResourceChoices(library, ref.kind).any { it.first == ref.id }
+            ExtensionDefinitionRow(extensionResourceName(library, ref),
+                "${extensionKindLabel(ref.kind)} · 打开完整编辑器", busy || !exists,
+                onClick = { onOpenResource(ref) })
+            Column(Modifier.padding(start = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val entries = when (ref.kind) {
+                    ExtensionResourceKind.PACKAGE -> library.packages.firstOrNull { it.id == ref.id }?.entries.orEmpty()
+                    ExtensionResourceKind.CHARACTER -> library.characters.firstOrNull { it.id == ref.id }?.entries.orEmpty()
+                    else -> emptyList()
+                }
+                entries.forEach { entry ->
+                    ExtensionDefinitionRow(entry.title.ifBlank { entry.key }, "提示词条目 · 打开原生编辑器", busy,
+                        onClick = { onOpenLocation(ResourceLocation(ref, entryId = entry.id)) })
+                }
+                val workflows = when (ref.kind) {
+                    ExtensionResourceKind.GROUP -> library.groups.firstOrNull { it.id == ref.id }?.workflows.orEmpty()
+                    ExtensionResourceKind.MAIN -> library.mainCalls.firstOrNull { it.id == ref.id }?.configuredWorkflows().orEmpty()
+                    else -> emptyList()
+                }
+                workflows.forEach { workflow ->
+                    ExtensionDefinitionRow(workflow.title, "调用 · 触发、模型与完整行为顺序", busy,
+                        onClick = { onOpenLocation(ResourceLocation(ref, workflowId = workflow.id)) })
+                    workflow.nodes.forEachIndexed { index, node ->
+                        val detail = when (node.actionId) {
+                            "model.generate" -> "模型生成 · 完整提示词、模型参数与输出处理"
+                            "card.define" -> "卡片定义 · 数据来源、字段与提取规则"
+                            "macro.process" -> "宏处理 · 输入来源与状态写入"
+                            else -> "${node.actionId} · 完整行为设置"
+                        }
+                        ExtensionDefinitionRow("${index + 1}. ${node.title}", detail, busy,
+                            onClick = { onOpenLocation(ResourceLocation(ref, workflowId = workflow.id, nodeId = node.id)) })
+                    }
+                }
+                if (ref.kind == ExtensionResourceKind.GROUP)
+                    ExtensionDefinitionRow("卡片", "独立卡片 · 数据字段、重复引用、CSS 与布局", busy,
+                        onClick = { onOpenLocation(ResourceLocation(ref, section = "cards")) })
+            }
+        } }
         if (definition.parameters.isNotEmpty()) {
-            Text("公开参数", style = MaterialTheme.typography.titleMedium)
+            Text("字段快捷入口", style = MaterialTheme.typography.titleMedium)
+            Text("旧参数映射直接定位原生编辑器，保留字段所在的完整上下文。", style = MaterialTheme.typography.bodySmall)
             definition.parameters.forEach { parameter -> key(parameter.id) {
                 val descriptor = ExtensionFieldRegistry.describe(library, parameter.target)
-                val value = if (descriptor == null) null else ExtensionFieldRegistry.read(library, parameter.target)
-                ExtensionDefinitionRow(parameter.title, if (descriptor == null) "目标字段已不可用，请编辑扩展映射"
-                    else extensionValueSummary(descriptor, value), busy || descriptor == null,
-                    onClick = { if (descriptor != null) onParameter(parameter, descriptor) })
+                ExtensionDefinitionRow(parameter.title, descriptor?.title ?: "目标字段已不可用，请编辑扩展映射",
+                    busy || descriptor == null, onClick = { onOpenLocation(ResourceLocations.fromField(parameter.target)) })
             } }
         }
-        Text("组成", style = MaterialTheme.typography.titleMedium)
-        if (definition.resources.isEmpty()) Text("尚未添加组成资源。", style = MaterialTheme.typography.bodySmall)
-        definition.resources.forEach { ref ->
-            ExtensionDefinitionRow(extensionResourceName(library, ref), extensionKindLabel(ref.kind), busy,
-                onClick = { onOpenResource(ref) })
-        }
-        Text("完整配置仍在各资源原有编辑器中。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        OutlinedButton(enabled = !busy, onClick = {
+            val stem = "${definition.name} · 卡片"
+            val name = generateSequence(1) { it + 1 }.map { if (it == 1) stem else "$stem $it" }
+                .first { candidate -> library.groups.none { it.name == candidate } }
+            val group = CallGroup(name = name, workflows = emptyList(), cards = listOf(CardResource(
+                definition = defaultCardDefinition().copy(defaultRegion = CardRegion.CHAT))))
+            pendingCardGroupId = group.id
+            onApply { latest -> ExtensionCommands.addDisplayGroup(latest, definition, group) }
+        }) { Text("新增卡片资源") }
+
     }
     deleting?.let { captured ->
         AlertDialog(onDismissRequest = { if (!busy) deleting = null }, title = { Text("删除「${captured.name}」集合？") },
-            text = { Text("仅删除集合及其参数映射，组成资源和现有调用关联都会保留。") },
+            text = { Text("删除定义与公开参数，并关闭各会话对此插件的参与；组成资源、主调用与手工关联、历史正文保留。") },
             confirmButton = { TextButton(enabled = !busy, onClick = {
                 onApply { latest ->
                     if (latest.extensions.firstOrNull { it.id == captured.id } != captured)
@@ -181,19 +286,29 @@ private fun ExtensionDefinitionEditor(library: Library, baseline: ConfigurationE
         if (stale) Text("定义已改变。当前草稿保留；返回后重新打开可读取最新内容。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         TextFieldLine("扩展名称", draft.name, { draft = draft.copy(name = it) })
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("JavaScript 代码入口", modifier = Modifier.weight(1f))
+            Switch(checked = draft.code != null, enabled = !busy,
+                onCheckedChange = { enabled -> draft = draft.copy(code = if (enabled) PluginCode(source = "function execute(context) {\n  return context.input;\n}") else null) })
+        }
+        draft.code?.let { code ->
+            TextFieldLine("execute(context)", code.source, { draft = draft.copy(code = code.copy(source = it)) }, minLines = 8)
+            Text("JavaScript v1 · UTF-8 代码最多 64 KiB。可读取 input/state/results/messages，返回字符串或 {text:字符串}；没有文件、网络或主机 API，不支持时间和随机数。其他作用通过普通调用行为组合。",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("组成资源", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
             TextButton(onClick = { resourcesOpen = true }) { Text("选择") }
         }
         draft.resources.forEach { ref -> Text("${extensionKindLabel(ref.kind)} · ${extensionResourceName(library, ref)}", style = MaterialTheme.typography.bodyMedium) }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("公开参数", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            IconButton(onClick = { addMapping = true }, enabled = draft.resources.isNotEmpty()) { Icon(HugeIcons.Add01, "添加公开参数") }
+            Text("字段快捷入口", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            IconButton(onClick = { addMapping = true }, enabled = draft.resources.isNotEmpty()) { Icon(HugeIcons.Add01, "添加字段快捷入口") }
         }
         draft.parameters.forEach { parameter -> key(parameter.id) {
             val descriptor = ExtensionFieldRegistry.describe(library, parameter.target)
             ExtensionDefinitionRow(parameter.title, descriptor?.title ?: "目标字段已不可用", busy, onClick = { mapping = parameter })
         } }
-        Text("公开参数可指向调用设置、提示词正文和调用组的宏默认值。完整设置可在组成资源的原编辑器中修改。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("字段快捷入口定位到原生编辑器中的实际字段，不另设简化参数编辑器。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     if (resourcesOpen) ExtensionResourcePicker(library, draft.resources, onSave = { resourcesOpen = false; applyResources(it) }, onDismiss = { resourcesOpen = false })
     if (addMapping || mapping != null) ExtensionMappingEditor(library, draft.resources, mapping,
@@ -240,8 +355,8 @@ private fun ExtensionMappingEditor(library: Library, resources: List<ExtensionRe
     var title by remember(initial?.id) { mutableStateOf(initial?.title.orEmpty()) }
     var target by remember(initial?.id) { mutableStateOf(initial?.target) }
     var resource by remember(initial?.id) { mutableStateOf(initial?.target?.let { ExtensionResourceRef(it.kind, it.resourceId) } ?: resources.firstOrNull()) }
-    ExtensionSheet(if (initial == null) "公开一个参数" else "参数映射", onDismiss) {
-        TextFieldLine("参数名称", title, { title = it })
+    ExtensionSheet(if (initial == null) "添加字段快捷入口" else "字段快捷入口映射", onDismiss) {
+        TextFieldLine("入口名称", title, { title = it })
         ChoiceLine("组成资源", resource, resources.map { (it as ExtensionResourceRef?) to "${extensionKindLabel(it.kind)} · ${extensionResourceName(library, it)}" }) {
             resource = it; target = null
         }
@@ -259,98 +374,6 @@ private fun ExtensionMappingEditor(library: Library, resources: List<ExtensionRe
             }) { Text("采用映射") }
         }
     }
-}
-
-@Composable
-private fun ExtensionParameterEditor(library: Library, page: ExtensionPage.Parameter, busy: Boolean,
-    approvedImpacts: MutableMap<ExtensionResourceRef, List<ResourceUse>>, onApply: ((Library) -> ExtensionEditResult) -> Unit,
-    onBack: () -> Unit, onOpenLocation: (ResourceLocation) -> Unit) {
-    var draft by remember { mutableStateOf(page.initialValue) }
-    var submitted by remember { mutableStateOf(false) }
-    var submittedValue by remember { mutableStateOf<String?>(null) }
-    var pendingImpact by remember { mutableStateOf<List<ResourceUse>?>(null) }
-    var pendingLocation by remember { mutableStateOf<ResourceLocation?>(null) }
-    var navigationPrompt by remember { mutableStateOf(false) }
-    var sourceNotice by remember { mutableStateOf<String?>(null) }
-    val target = page.parameter.target
-    val ref = ExtensionResourceRef(target.kind, target.resourceId)
-    val definition = library.extensions.firstOrNull { it.id == page.extensionId }
-    val currentParameter = definition?.parameters?.firstOrNull { it.id == page.parameter.id }
-    val descriptor = ExtensionFieldRegistry.describe(library, target)
-    val currentValue = ExtensionFieldRegistry.read(library, target)
-    val stale = currentParameter?.target != target || descriptor != page.descriptor || currentValue != page.initialValue
-    LaunchedEffect(currentParameter, descriptor, currentValue, submitted, busy) {
-        if (submitted && !busy && currentParameter?.target == target && descriptor == page.descriptor && currentValue == submittedValue) {
-            onBack()
-            pendingLocation?.let(onOpenLocation)
-        }
-    }
-    val location = ResourceLocations.fromField(target)
-    fun openLocation(next: ResourceLocation) {
-        pendingImpact = null
-        if (draft != page.initialValue) { pendingLocation = next; navigationPrompt = true }
-        else { onBack(); onOpenLocation(next) }
-    }
-    fun apply(impact: List<ResourceUse>) {
-        val candidate = draft
-        submittedValue = candidate; submitted = true
-        onApply { latest ->
-            val parameter = latest.extensions.firstOrNull { it.id == page.extensionId }?.parameters?.firstOrNull { it.id == page.parameter.id }
-            when {
-                parameter?.target != target || ExtensionFieldRegistry.describe(latest, target) != page.descriptor ->
-                    extensionUiFailure("extension.${page.extensionId}", "参数映射或字段类型已改变，请重新打开后保存")
-                ResourceUsageIndex.usages(latest, location) != impact ->
-                    extensionUiFailure("extension.${page.extensionId}", "共享范围已改变，请重新查看影响后保存")
-                else -> ExtensionCommands.setParameter(latest, page.extensionId, page.parameter.id, candidate, page.initialValue)
-            }
-        }
-    }
-    fun save() {
-        if (draft == page.initialValue) { onBack(); return }
-        val impact = ResourceUsageIndex.usages(library, location)
-        if (approvedImpacts[ref] != impact && impact.isNotEmpty()) pendingImpact = impact
-        else apply(impact)
-    }
-    val main = library.mainCalls.firstOrNull { target.kind == ExtensionResourceKind.MAIN && it.id == target.resourceId }
-    val group = library.groups.firstOrNull { target.kind == ExtensionResourceKind.GROUP && it.id == target.resourceId }
-    val references = remember(library, main, group) { promptReferenceChoices(group?.workflows ?: main?.workflows.orEmpty(), library, main, group) }
-    // This editor owns one mapped scalar, so source operations must pass its mapping/value guard.
-    val parameterNavigation = SourceNavigation(library,
-        merge = { sourceNotice = "请保存当前参数，再打开实际字段进行来源修改。" },
-        leave = { candidate, destination, done ->
-            if (candidate == library) openLocation(destination)
-            else sourceNotice = "请先保存当前参数，再在实际字段中独立使用。"
-            done(false)
-        },
-        publish = { _, done -> sourceNotice = "请保存当前参数，再打开实际字段进行来源修改。"; done(false) },
-        edit = ::openLocation)
-    EditorPage(page.parameter.title, onBack, ::save, dirty = draft != page.initialValue, saving = busy) {
-        TextButton(enabled = !busy, onClick = { openLocation(location) }, contentPadding = PaddingValues(0.dp)) {
-            Text("${extensionResourceName(library, ref)} · ${page.descriptor.title}")
-        }
-        if (stale) Text("实际字段或映射已改变。当前输入保留；请返回并重新打开读取最新值。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-        sourceNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-        CompositionLocalProvider(LocalSourceNavigation provides parameterNavigation) {
-            ConfigurationFieldEditor(page.descriptor, draft, references) { draft = it; submitted = false; pendingLocation = null }
-        }
-    }
-    pendingImpact?.let { impact ->
-        AlertDialog(onDismissRequest = { pendingImpact = null; pendingLocation = null }, title = { Text("修改共享资源字段") }, text = {
-            Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("这次修改会写入「${extensionResourceName(library, ref)}」。已声明的使用位置：")
-                ResourceUsageRows(impact, ::openLocation)
-                Text("已保存的对话与恢复快照保留原内容；后续读取取决于各自配置。动态宏地址可能有额外使用方。", style = MaterialTheme.typography.bodySmall)
-            }
-        }, confirmButton = { TextButton(onClick = { approvedImpacts[ref] = impact; pendingImpact = null; apply(impact) }) { Text("保存共享修改") } },
-            dismissButton = { TextButton(onClick = { pendingImpact = null; pendingLocation = null }) { Text("继续编辑") } })
-    }
-    if (navigationPrompt) AlertDialog(onDismissRequest = { navigationPrompt = false; pendingLocation = null },
-        title = { Text("先处理当前参数修改") }, text = { Text("保存成功后再打开来源，或放弃当前输入。") },
-        confirmButton = { TextButton(enabled = !busy, onClick = { navigationPrompt = false; save() }) { Text("保存并打开") } },
-        dismissButton = {
-            TextButton(enabled = !busy, onClick = { val next = pendingLocation; pendingLocation = null; navigationPrompt = false; onBack(); next?.let(onOpenLocation) }) { Text("放弃并打开") }
-            TextButton(onClick = { navigationPrompt = false; pendingLocation = null }) { Text("继续编辑") }
-        })
 }
 
 @Composable
@@ -381,11 +404,3 @@ private fun extensionResourceChoices(library: Library, kind: ExtensionResourceKi
 
 private fun extensionResourceName(library: Library, ref: ExtensionResourceRef): String =
     extensionResourceChoices(library, ref.kind).firstOrNull { it.first == ref.id }?.second ?: "资源已不可用 · ${ref.id}"
-
-private fun extensionValueSummary(field: ExtensionFieldDescriptor, value: String?): String = when {
-    value == null -> "使用默认值"
-    field.choices.any { it.value == value } -> field.choices.first { it.value == value }.title
-    field.type == ActionFieldType.BOOLEAN -> if (value == "true") "开启" else "关闭"
-    value.isBlank() -> "空文本"
-    else -> value
-}

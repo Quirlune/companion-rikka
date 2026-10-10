@@ -5,7 +5,6 @@ import kotlinx.serialization.json.encodeToJsonElement
 import org.junit.Assert.*
 import org.junit.Test
 
-@Suppress("DEPRECATION")
 class ExtensionCommandsTest {
     private val packRef = ExtensionResourceRef(ExtensionResourceKind.PACKAGE, "pack")
     private val groupRef = ExtensionResourceRef(ExtensionResourceKind.GROUP, "group")
@@ -33,9 +32,6 @@ class ExtensionCommandsTest {
         assertEquals(initial.groups, library.groups)
         assertEquals(initial.sessions, library.sessions)
         assertEquals(listOf("first", "second"), library.extensions.map { it.id })
-        assertNull(ExtensionCommands.install(library, "missing-main", "first").library)
-        assertNull(ExtensionCommands.setEnabled(library, "missing-main", "legacy-binding", true).library)
-        assertNull(ExtensionCommands.detach(library, "missing-main", "legacy-binding").library)
     }
 
     @Test fun deletingOrRecomposingCustomMemoryCollectionPreservesUsedResourcesAndBindings() {

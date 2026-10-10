@@ -10,14 +10,29 @@ object ChatArchive {
     fun save(library: Library, sessionId: String, folderId: String): Library {
         require(library.chatFolders.any { it.id == folderId }) { "收藏文件夹不存在" }
         val session = requireNotNull(library.sessions.firstOrNull { it.id == sessionId }) { "对话不存在" }
-        // Core DTOs are immutable; subsequent edits replace the source Session, never this value.
-        return library.copy(savedChats = library.savedChats + SavedChat(folderId = folderId, snapshot = session))
+        // Capture choices at save time: they may have changed since the last completed turn.
+        val resources = session.pendingRun?.frozenResources ?: CompletedWorlds.executionLibrary(library, session)
+        val version = session.pendingRun?.executionVersion ?: session.executableWorld?.executionVersion
+            ?: ExecutionSemantics.CURRENT
+        val world = CompletedWorlds.capture(resources, session, "", version)
+        val snapshot = session.copy(executableWorld = world)
+        return library.copy(savedChats = library.savedChats + SavedChat(folderId = folderId, snapshot = snapshot))
+    }
+
+    /** Copy all conversation state; only the owner identity and displayed name change. */
+    fun duplicate(library: Library, sessionId: String): Library {
+        val source = requireNotNull(library.sessions.firstOrNull { it.id == sessionId }) { "对话不存在" }
+        val id = newId()
+        val duplicate = source.copy(id = id, title = source.title + " 副本",
+            pendingRun = source.pendingRun?.rebindForRestore(source.id, id))
+        return library.copy(sessions = listOf(duplicate) + library.sessions, selectedSessionId = id)
     }
 
     fun restore(library: Library, savedChatId: String): Library {
         val saved = requireNotNull(library.savedChats.firstOrNull { it.id == savedChatId }) { "收藏对话不存在" }
         val restoredId = newId()
         val chat = saved.snapshot.copy(id = restoredId,
+            folderId = saved.snapshot.folderId?.takeIf { id -> library.chatFolders.any { it.id == id } },
             pendingRun = saved.snapshot.pendingRun?.rebindForRestore(saved.snapshot.id, restoredId),
             updatedAt = System.currentTimeMillis())
         return library.copy(sessions = listOf(chat) + library.sessions, selectedSessionId = chat.id)

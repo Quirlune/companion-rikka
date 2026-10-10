@@ -127,38 +127,5 @@ class MessageOperationsTest {
         assertEquals(recorded.turnRecords, decoded.turnRecords)
     }
 
-    @Test fun titleRequestUsesConfiguredModelAndOnePassBoundedHistory() {
-        val global = ModelProfile(id = "global", model = "global-model")
-        val override = ModelProfile(id = "override", model = "override-model")
-        val workflow = Workflow(id = "primary", modelProfileId = override.id)
-        val main = MainCall(id = "main", name = "main", workflows = listOf(workflow), primaryWorkflowId = workflow.id)
-        val session = Session(mainCallId = main.id, titlePending = false, messages = listOf(
-            ChatMessage(id = "old", role = Role.USER, text = "old omitted"),
-            ChatMessage(id = "two", role = Role.USER, text = "second"),
-            ChatMessage(id = "three", role = Role.ASSISTANT, text = "{locale}" + "x".repeat(600)),
-            ChatMessage(id = "four", role = Role.USER, text = "fourth"),
-            ChatMessage(id = "five", role = Role.ASSISTANT, text = "fifth"),
-            ChatMessage(id = "deleted", role = Role.ASSISTANT, text = "hidden", deleted = true),
-            ChatMessage(id = "side", role = Role.ASSISTANT, text = "side", outputSlot = OutputSlot.AFTER_BODY)
-        ))
-        val config = ChatTitleConfig(prompt = "locale={locale}|content={content}")
-        val library = Library(mainCalls = listOf(main), profiles = listOf(global, override),
-            selectedProfileId = global.id, titleConfig = config)
-        assertNull(ChatTitles.request(library.copy(titleConfig = config.copy(enabled = false)), session, "中文"))
-        assertNull(ChatTitles.request(library.copy(titleConfig = config.copy(modelProfileId = "missing")), session, "中文"))
-        val request = ChatTitles.request(library, session, "中文")!!
-        assertEquals(override.id, request.profile.id)
-        assertEquals(1, request.messages.size)
-        val prompt = request.messages.single().text
-        assertTrue(prompt.startsWith("locale=中文|content="))
-        val floors = prompt.substringAfter("|content=").split("\n\n")
-        assertEquals(4, floors.size)
-        assertTrue(floors.first().contains("second"))
-        assertEquals(500, floors[1].length)
-        assertTrue(floors[1].contains("{locale}"))
-        assertTrue(floors.last().contains("fifth"))
-        assertFalse(prompt.contains("old omitted"))
-        assertFalse(prompt.contains("hidden"))
-        assertFalse(prompt.contains("side"))
-    }
+
 }

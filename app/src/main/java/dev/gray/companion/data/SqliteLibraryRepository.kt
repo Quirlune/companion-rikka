@@ -23,15 +23,24 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
         val db = helper.readableDatabase
         val rows = mutableMapOf<String, MutableList<String>>()
         val persisted = mutableMapOf<Pair<String, String>, Pair<Int, String>>()
-        db.rawQuery("SELECT kind,payload,id,ordinal FROM records ORDER BY ordinal,rowid", null).use { cursor ->
-            while (cursor.moveToNext()) {
-                rows.getOrPut(cursor.getString(0)) { mutableListOf() }.add(cursor.getString(1))
-                persisted[cursor.getString(0) to cursor.getString(2)] = cursor.getInt(3) to cursor.getString(1)
-            }
-        }
         val meta = mutableMapOf<String, String>()
-        db.rawQuery("SELECT key,value FROM metadata", null).use { cursor ->
-            while (cursor.moveToNext()) meta[cursor.getString(0)] = cursor.getString(1)
+        // Headers and all chunks must describe the same database snapshot.
+        db.beginTransactionNonExclusive()
+        try {
+            readRecords(db) { kind, id, ordinal, payload ->
+                rows.getOrPut(kind) { mutableListOf() }.add(payload)
+                persisted[kind to id] = ordinal to payload
+            }
+            val headers = mutableListOf<Pair<String, Long>>()
+            db.rawQuery("SELECT key,length(value) FROM metadata", null).use { cursor ->
+                while (cursor.moveToNext()) headers += cursor.getString(0) to cursor.getLong(1)
+            }
+            headers.forEach { (key, length) ->
+                meta[key] = readChunkedText(db, "metadata", "value", "key=?", arrayOf(key), length)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
         }
         val schema = meta["schema"]?.toIntOrNull() ?: if (rows.isEmpty()) 1 else error("Library metadata is damaged")
         val known = setOf("character", "main_call", "package", "group", "profile", "session", "connection", "chat_folder", "saved_chat", "persona", "prompt_tag", "config_edit", "extension")
@@ -56,7 +65,9 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
             configurationEdits = decode(rows["config_edit"], ConfigurationEditReceipt.serializer()),
             extensions = decode(rows["extension"], ConfigurationExtension.serializer()),
             user = meta["user"]?.let { json.decodeFromString(UserIdentity.serializer(), it) } ?: UserIdentity(),
-            titleConfig = meta["title_config"]?.let { json.decodeFromString(ChatTitleConfig.serializer(), it) } ?: ChatTitleConfig()
+            titleConfig = meta["title_config"]?.let { json.decodeFromString(ChatTitleConfig.serializer(), it) } ?: ChatTitleConfig(),
+            automaticOptions = meta["automatic_options"]?.let { json.decodeFromString(AutomaticOptionsConfig.serializer(), it) } ?: AutomaticOptionsConfig(),
+            memoryConfig = meta["memory_config"]?.let { json.decodeFromString(GlobalMemoryConfig.serializer(), it) }
         )
         val library = LibraryFormat.upgrade(decoded)
         val encoded = mutableMapOf<Pair<String, String>, EncodedRecord>()
@@ -89,6 +100,45 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
     private fun <T> decode(rows: List<String>?, serializer: KSerializer<T>): List<T> =
         rows.orEmpty().map { json.decodeFromString(serializer, it) }
 
+    private data class RecordHeader(val kind: String, val id: String, val ordinal: Int, val length: Long)
+
+    /** A session (or receipt/archive) may exceed Android's per-row CursorWindow capacity. */
+    private fun readRecords(db: SQLiteDatabase, accept: (String, String, Int, String) -> Unit) {
+        val headers = mutableListOf<RecordHeader>()
+        db.rawQuery("SELECT kind,id,ordinal,length(payload) FROM records ORDER BY ordinal,rowid", null).use { cursor ->
+            while (cursor.moveToNext()) headers += RecordHeader(
+                cursor.getString(0), cursor.getString(1), cursor.getInt(2), cursor.getLong(3))
+        }
+        headers.forEach { header ->
+            val payload = readChunkedText(db, "records", "payload", "kind=? AND id=?",
+                arrayOf(header.kind, header.id), header.length)
+            accept(header.kind, header.id, header.ordinal, payload)
+        }
+    }
+
+    /** SQLite length/substr count Unicode code points, not Kotlin UTF-16 code units.
+     * Only fixed internal SQL identifiers are supplied; record keys remain bound parameters. */
+    private fun readChunkedText(db: SQLiteDatabase, table: String, column: String,
+        selection: String, keys: Array<String>, length: Long): String {
+        check(length in 0..Int.MAX_VALUE.toLong()) { "Stored JSON length is unsupported" }
+        val text = StringBuilder()
+        var offset = 0L
+        while (offset < length) {
+            // At most 256 KiB of UTF-16 even for exclusively supplementary characters.
+            val count = minOf(64L * 1024, length - offset).toInt()
+            val args = arrayOf((offset + 1).toString(), count.toString()) + keys
+            db.rawQuery("SELECT substr($column,?,?) FROM $table WHERE $selection", args).use { cursor ->
+                check(cursor.moveToFirst() && !cursor.isNull(0)) { "Stored JSON record is missing" }
+                val chunk = cursor.getString(0)
+                check(chunk.codePointCount(0, chunk.length) == count) { "Stored JSON chunk is incomplete" }
+                text.append(chunk)
+                check(!cursor.moveToNext()) { "Stored JSON record key is not unique" }
+            }
+            offset += count
+        }
+        return text.toString()
+    }
+
     override suspend fun save(library: Library): Unit = withContext(Dispatchers.IO) {
         require(library.schemaVersion == LibraryFormat.CURRENT_VERSION) { "Unsupported library schema" }
         val db = helper.writableDatabase
@@ -97,8 +147,8 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
         db.beginTransaction()
         try {
             val previous = persistedRecords ?: buildMap {
-                db.rawQuery("SELECT kind,id,ordinal,payload FROM records", null).use { cursor ->
-                    while (cursor.moveToNext()) put(cursor.getString(0) to cursor.getString(1), cursor.getInt(2) to cursor.getString(3))
+                readRecords(db) { kind, id, ordinal, payload ->
+                    put(kind to id, ordinal to payload)
                 }
             }
             fun <T : Any> add(kind: String, values: List<T>, serializer: KSerializer<T>, id: (T) -> String) {
@@ -142,6 +192,8 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
             putMeta(db, "selected_persona", library.selectedPersonaId)
             putMeta(db, "user", json.encodeToString(UserIdentity.serializer(), library.user))
             putMeta(db, "title_config", json.encodeToString(ChatTitleConfig.serializer(), library.titleConfig))
+            putMeta(db, "automatic_options", json.encodeToString(AutomaticOptionsConfig.serializer(), library.automaticOptions))
+            putMeta(db, "memory_config", library.memoryConfig?.let { json.encodeToString(GlobalMemoryConfig.serializer(), it) })
             putMeta(db, "reasoning_parsing", json.encodeToString(ReasoningParsingConfig.serializer(), library.reasoningParsing))
             db.setTransactionSuccessful()
         } catch (failure: Exception) {

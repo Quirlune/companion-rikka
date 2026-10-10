@@ -1,13 +1,11 @@
 package dev.gray.companion.core
 
-import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 
 /** A local receipt is deliberately separate from the exported resource wire format. */
@@ -68,15 +66,12 @@ data class ConfigurationApplyResult(
 object ConfigurationCommands {
     const val FORMAT = "companion.config.v1"
     private val json = LibraryFormat.json
-    private val kinds = listOf("character", "mainCall", "package", "group", "persona", "tag", "profile", "connection", "extension")
-    private val resources = mapOf(
-        "characters" to "character", "mainCalls" to "mainCall", "packages" to "package", "groups" to "group",
-        "personas" to "persona", "tags" to "tag", "profiles" to "profile", "connections" to "connection", "extensions" to "extension"
-    )
-    private val settingKeys = listOf("selectedProfileId", "selectedPersonaId", "reasoningParsing", "titleConfig")
+    private val kinds = ResourceKindCatalog.names
+    private val resources = ResourceKindCatalog.arrays
+    private val settingKeys = listOf("selectedProfileId", "selectedPersonaId", "reasoningParsing", "titleConfig", "automaticOptions", "memoryConfig")
 
-    fun preview(text: String, base: Library): ConfigurationPreview = try {
-        preview(objectAt(json.parseToJsonElement(text), "config"), base)
+    fun preview(text: String, base: Library, additionalValidation: (Library) -> List<Issue> = { emptyList() }): ConfigurationPreview = try {
+        preview(objectAt(json.parseToJsonElement(text), "config"), base, additionalValidation)
     } catch (failure: ConfigProblem) {
         ConfigurationPreview(null, listOf(Issue(failure.path, failure.message ?: "配置包无效")))
     } catch (_: Exception) {
@@ -84,7 +79,7 @@ object ConfigurationCommands {
     }
 
     /** Already parsed archive content follows the same strict keys, candidate and receipt path. */
-    fun preview(document: JsonObject, base: Library): ConfigurationPreview = try {
+    fun preview(document: JsonObject, base: Library, additionalValidation: (Library) -> List<Issue> = { emptyList() }): ConfigurationPreview = try {
         val root = document
         keys(root, setOf("format", "label", "resources", "commands"), "config")
         if (stringAt(root["format"], "config.format") != FORMAT) fail("config.format", "不支持的配置包格式")
@@ -96,7 +91,7 @@ object ConfigurationCommands {
             table.forEach { (name, values) ->
                 val array = values as? JsonArray ?: fail("config.resources.$name", "资源须为数组")
                 array.forEachIndexed { index, value ->
-                    working = put(working, resources.getValue(name), objectAt(value, "config.resources.$name[$index]"))
+                    working = put(working, resources.getValue(name), objectAt(value, "config.resources.$name[$index]"), "config.resources.$name[$index]")
                 }
             }
         }
@@ -106,7 +101,9 @@ object ConfigurationCommands {
                 working = command(working, objectAt(value, "config.commands[$index]"), "config.commands[$index]")
             }
         }
-        finishPreview(base, working, label)
+        finishPreview(base, working, label, additionalValidation)
+    } catch (failure: InvalidResourceField) {
+        ConfigurationPreview(null, listOf(Issue(failure.path, failure.message ?: "资源字段无效")))
     } catch (failure: ConfigProblem) {
         ConfigurationPreview(null, listOf(Issue(failure.path, failure.message ?: "配置包无效")))
     } catch (_: Exception) {
@@ -114,20 +111,23 @@ object ConfigurationCommands {
     }
 
     /** Convert a previously decoded, resource-only native import without generating its IDs again. */
-    fun previewResources(resources: Library, base: Library, label: String = "资源导入"): ConfigurationPreview = try {
+    fun previewResources(resources: Library, base: Library, label: String = "资源导入",
+                         additionalValidation: (Library) -> List<Issue> = { emptyList() }): ConfigurationPreview = try {
         if (resources.sessions.isNotEmpty() || resources.chatFolders.isNotEmpty() || resources.savedChats.isNotEmpty() ||
             resources.selectedSessionId != null) fail("resources", "含会话或收藏的原生包不能作为可撤回配置导入")
         var working = base
-        for (kind in kinds) for (value in resourceValues(resources, kind)) {
+        for (kind in ResourceKindCatalog.ordered.map { it.name }) for (value in resourceValues(resources, kind)) {
             val id = idOf(value, "resources.$kind")
             val existing = resourceJson(working, kind, id)
             if (existing != null) {
                 if (kind == "tag" && existing == value) continue
-                fail("resources.$kind.$id", "资源 ID 已存在；原生导入不能覆盖现有配置")
+                fail("resources.$kind", "资源 ID 已存在；原生导入不能覆盖现有配置")
             }
-            working = replaceResource(working, kind, id, value, null)
+            working = replaceResource(working, kind, id, value, null, "resources.$kind")
         }
-        finishPreview(base, working, label.ifBlank { "资源导入" })
+        finishPreview(base, working, label.ifBlank { "资源导入" }, additionalValidation)
+    } catch (failure: InvalidResourceField) {
+        ConfigurationPreview(null, listOf(Issue(failure.path, failure.message ?: "资源字段无效")))
     } catch (failure: ConfigProblem) {
         ConfigurationPreview(null, listOf(Issue(failure.path, failure.message ?: "资源导入无效")))
     } catch (_: Exception) {
@@ -135,13 +135,15 @@ object ConfigurationCommands {
     }
 
     /** The controller calls this under its library mutex, then saves the returned library and receipt together. */
-    fun apply(plan: ConfigurationPlan, current: Library): ConfigurationApplyResult = transform(
-        current, plan.changes.map(CollectionCompatibility::canonicalChange), plan.settings, forward = true, label = plan.label
+    fun apply(plan: ConfigurationPlan, current: Library, additionalValidation: (Library) -> List<Issue> = { emptyList() }): ConfigurationApplyResult = transform(
+        current, plan.changes.map(CollectionCompatibility::canonicalChange), plan.settings, forward = true, label = plan.label,
+        additionalValidation = additionalValidation
     )
 
     /** Typed editor candidate, with the same normalization, excluded-state guard and validation as imports. */
-    fun previewEdit(before: Library, candidate: Library, label: String = "配置编辑"): ConfigurationPreview = try {
-        finishPreview(before, candidate, label)
+    fun previewEdit(before: Library, candidate: Library, label: String = "配置编辑",
+                    additionalValidation: (Library) -> List<Issue> = { emptyList() }): ConfigurationPreview = try {
+        finishPreview(before, candidate, label, additionalValidation)
     } catch (failure: ConfigProblem) {
         ConfigurationPreview(null, listOf(Issue(failure.path, failure.message ?: "配置编辑无效")))
     } catch (_: Exception) {
@@ -149,53 +151,57 @@ object ConfigurationCommands {
     }
 
     /** Only values this receipt installed may be restored; unrelated later changes are retained. */
-    fun undo(receipt: ConfigurationEditReceipt, current: Library): ConfigurationApplyResult = transform(
-        current, CollectionCompatibility.canonicalReceipt(receipt).changes, receipt.settings, forward = false, label = receipt.label
+    fun undo(receipt: ConfigurationEditReceipt, current: Library,
+             additionalValidation: (Library) -> List<Issue> = { emptyList() }): ConfigurationApplyResult = transform(
+        current, CollectionCompatibility.canonicalReceipt(receipt).changes, receipt.settings, forward = false, label = receipt.label,
+        additionalValidation = additionalValidation
     )
 
-    private fun finishPreview(base: Library, working: Library, label: String): ConfigurationPreview {
+    private fun finishPreview(base: Library, working: Library, label: String,
+                              additionalValidation: (Library) -> List<Issue>): ConfigurationPreview {
         requireCanonicalLive(base)
         excludedChange(base, working)?.let { fail(it, "配置包不能修改会话、收藏或运行状态") }
         val normalized = LibraryFormat.upgrade(working.withStandardCharacterFields())
         excludedChange(base, normalized)?.let { fail(it, "配置包不能修改会话、收藏或运行状态") }
-        val issues = LibraryValidator.validate(normalized).filter { it.error }
+        val issues = (LibraryValidator.validate(normalized) + additionalValidation(normalized)).filter { it.error }
         if (issues.isNotEmpty()) return ConfigurationPreview(null, issues)
         val plan = ConfigurationPlan(label, diffResources(base, normalized), diffSettings(base, normalized))
         return ConfigurationPreview(plan)
     }
 
     private fun transform(current: Library, changes: List<ConfigurationChange>, settings: List<ConfigurationSettingChange>,
-                          forward: Boolean, label: String): ConfigurationApplyResult = try {
+                          forward: Boolean, label: String,
+                          additionalValidation: (Library) -> List<Issue>): ConfigurationApplyResult = try {
         requireCanonicalLive(current)
         if (changes.map { it.kind to it.id }.distinct().size != changes.size || settings.map { it.key }.distinct().size != settings.size)
             fail("config", "配置计划含重复目标")
-        for (change in changes) {
-            if (change.kind !in kinds) fail("config.${change.kind}", "未知资源类型")
+        for ((index, change) in changes.withIndex()) {
+            if (change.kind !in kinds) fail("config.changes[$index].kind", "未知资源类型")
             val expected = if (forward) change.before else change.after
             if (resourceJson(current, change.kind, change.id) != canonicalImage(change.kind, change.id, expected))
-                fail("config.${change.kind}.${change.id}", "资源已被后续编辑，不能直接${if (forward) "应用" else "撤回"}")
+                fail("config.changes[$index]", "资源已被后续编辑，不能直接${if (forward) "应用" else "撤回"}")
         }
         for (change in settings) {
-            if (change.key !in settingKeys) fail("config.${change.key}", "未知配置项")
+            if (change.key !in settingKeys) fail("config.settings", "未知配置项")
             val expected = if (forward) change.before else change.after
             if (settingValue(current, change.key) != expected)
                 fail("config.${change.key}", "设置已被后续编辑，不能直接${if (forward) "应用" else "撤回"}")
         }
         var working = current
-        changes.forEach { change ->
+        changes.forEachIndexed { changeIndex, change ->
             val value = if (forward) change.after else change.before
             val index = if (forward) change.afterIndex else change.beforeIndex
-            working = replaceResource(working, change.kind, change.id, value, index)
+            working = replaceResource(working, change.kind, change.id, value, index, "config.changes[$changeIndex].value")
         }
         settings.forEach { change ->
             working = setSetting(working, change.key, (if (forward) change.after else change.before) ?: JsonNull)
         }
         val normalized = LibraryFormat.upgrade(working.withStandardCharacterFields())
         excludedChange(current, normalized)?.let { fail(it, "配置操作会改变会话、收藏或运行状态") }
-        changes.forEach { change ->
+        changes.forEachIndexed { changeIndex, change ->
             val expected = if (forward) change.after else change.before
             if (resourceJson(normalized, change.kind, change.id) != canonicalImage(change.kind, change.id, expected))
-                fail("config.${change.kind}.${change.id}", "当前资源关系使配置结果与预览不一致")
+                fail("config.changes[$changeIndex]", "当前资源关系使配置结果与预览不一致")
         }
         settings.forEach { change ->
             val expected = if (forward) change.after else change.before
@@ -204,14 +210,16 @@ object ConfigurationCommands {
         }
         val touched = changes.map { it.kind to it.id }.toSet()
         val incidental = diffResources(current, normalized).firstOrNull { (it.kind to it.id) !in touched }
-        if (incidental != null) fail("config.${incidental.kind}.${incidental.id}", "配置规范化会改动未触及资源")
+        if (incidental != null) fail("config.resources", "配置规范化会改动未触及资源")
         val settingNames = settings.map { it.key }.toSet()
         val incidentalSetting = diffSettings(current, normalized).firstOrNull { it.key !in settingNames }
         if (incidentalSetting != null) fail("config.${incidentalSetting.key}", "配置规范化会改动未触及设置")
-        val issues = LibraryValidator.validate(normalized).filter { it.error }
+        val issues = (LibraryValidator.validate(normalized) + additionalValidation(normalized)).filter { it.error }
         if (issues.isNotEmpty()) return ConfigurationApplyResult(null, issues = issues)
         if (changes.isEmpty() && settings.isEmpty()) ConfigurationApplyResult(current)
         else ConfigurationApplyResult(normalized, if (forward) ConfigurationEditReceipt(label = label, changes = changes, settings = settings) else null)
+    } catch (failure: InvalidResourceField) {
+        ConfigurationApplyResult(null, issues = listOf(Issue(failure.path, failure.message ?: "资源字段无效")))
     } catch (failure: ConfigProblem) {
         ConfigurationApplyResult(null, issues = listOf(Issue(failure.path, failure.message ?: "配置操作冲突")))
     } catch (_: Exception) {
@@ -232,7 +240,7 @@ object ConfigurationCommands {
         return when (op) {
             "put" -> {
                 keys(command, setOf("op", "kind", "value"), path)
-                put(library, kind, objectAt(command["value"], "$path.value"))
+                put(library, kind, objectAt(command["value"], "$path.value"), "$path.value")
             }
             "mergePatch" -> {
                 keys(command, setOf("op", "kind", "id", "slug", "patch"), path)
@@ -242,33 +250,33 @@ object ConfigurationCommands {
                 if ("id" in patch) fail("$path.patch.id", "稳定 ID 不可修改")
                 keys(patch, old.keys, "$path.patch")
                 val merged = mergePatch(old, patch, "$path.patch")
-                replaceResource(library, kind, id, merged, null)
+                replaceResource(library, kind, id, merged, null, "$path.patch")
             }
             "remove" -> {
                 keys(command, setOf("op", "kind", "id", "slug"), path)
                 val id = targetId(library, kind, command, path)
-                replaceResource(library, kind, id, null, null)
+                replaceResource(library, kind, id, null, null, path)
             }
             else -> {
                 keys(command, setOf("op", "kind", "id", "slug", "packages", "groups"), path)
                 if (kind !in setOf("character", "mainCall", "group")) fail(path, "此资源不支持绑定命令")
                 if ("packages" !in command && "groups" !in command) fail(path, "绑定命令缺少目标列表")
-                if ("groups" in command && kind != "mainCall") fail("$path.groups", "只有主调用可绑定调用组")
+                if ("groups" in command && kind !in setOf("character", "mainCall")) fail("$path.groups", "只有角色或主调用可绑定调用组")
                 val id = targetId(library, kind, command, path)
                 val old = objectAt(resourceJson(library, kind, id), path)
                 val patch = buildMap<String, JsonElement> {
                     command["packages"]?.let { put("boundPackageIds", idsAt(it, "$path.packages")) }
                     command["groups"]?.let { put("boundGroupIds", idsAt(it, "$path.groups")) }
                 }
-                replaceResource(library, kind, id, JsonObject(old + patch), null)
+                replaceResource(library, kind, id, JsonObject(old + patch), null, path)
             }
         }
     }
 
-    private fun put(library: Library, kind: String, value: JsonObject): Library {
-        val id = value["id"]?.let { stringAt(it, "$kind.id") } ?: newId()
-        if (id.isBlank()) fail("$kind.id", "资源 ID 不能为空")
-        return replaceResource(library, kind, id, JsonObject(value + ("id" to JsonPrimitive(id))), null)
+    private fun put(library: Library, kind: String, value: JsonObject, path: String): Library {
+        val id = value["id"]?.let { stringAt(it, "$path.id") } ?: newId()
+        if (id.isBlank()) fail("$path.id", "资源 ID 不能为空")
+        return replaceResource(library, kind, id, JsonObject(value + ("id" to JsonPrimitive(id))), null, path)
     }
 
     private fun targetId(library: Library, kind: String, command: JsonObject, path: String): String {
@@ -276,19 +284,12 @@ object ConfigurationCommands {
         val slug = command["slug"]?.let { stringAt(it, "$path.slug") }
         if ((id == null) == (slug == null)) fail(path, "须用 id 或 slug 唯一定位资源")
         if (id != null) {
-            if (resourceJson(library, kind, id) == null) fail("$path.id", "资源不存在：$id")
+            if (resourceJson(library, kind, id) == null) fail("$path.id", "资源不存在")
             return id
         }
-        if (kind in setOf("profile", "connection", "extension")) fail("$path.slug", "此资源类型没有 slug，请使用 ID")
-        val matches = when (kind) {
-            "character" -> library.characters.filter { it.slug == slug }.map { it.id }
-            "mainCall" -> library.mainCalls.filter { it.slug == slug }.map { it.id }
-            "package" -> library.packages.filter { it.slug == slug }.map { it.id }
-            "group" -> library.groups.filter { it.slug == slug }.map { it.id }
-            "persona" -> library.personas.filter { it.slug == slug }.map { it.id }
-            "tag" -> library.promptTags.filter { it.slug == slug }.map { it.id }
-            else -> emptyList()
-        }
+        val descriptor = ResourceKindCatalog.get(kind) ?: fail("$path.kind", "未知资源类型")
+        if (descriptor.slug == null) fail("$path.slug", "此资源类型没有 slug，请使用 ID")
+        val matches = descriptor.idsForSlug(library, slug ?: "")
         if (matches.size != 1) fail("$path.slug", "slug 必须匹配唯一资源")
         return matches.single()
     }
@@ -307,7 +308,7 @@ object ConfigurationCommands {
     }
 
     private fun diffResources(before: Library, after: Library): List<ConfigurationChange> = buildList {
-        for (kind in kinds) {
+        for (kind in ResourceKindCatalog.ordered.map { it.name }) {
             val old = resourceValues(before, kind).withIndex().associate { idOf(it.value, kind) to (it.index to it.value) }
             val next = resourceValues(after, kind).withIndex().associate { idOf(it.value, kind) to (it.index to it.value) }
             for (id in (old.keys + next.keys).distinct()) {
@@ -331,15 +332,27 @@ object ConfigurationCommands {
         "selectedPersonaId" -> library.selectedPersonaId?.let(::JsonPrimitive) ?: JsonNull
         "reasoningParsing" -> json.encodeToJsonElement(ReasoningParsingConfig.serializer(), library.reasoningParsing)
         "titleConfig" -> json.encodeToJsonElement(ChatTitleConfig.serializer(), library.titleConfig)
+        "automaticOptions" -> json.encodeToJsonElement(AutomaticOptionsConfig.serializer(), library.automaticOptions)
+        "memoryConfig" -> library.memoryConfig?.let { json.encodeToJsonElement(GlobalMemoryConfig.serializer(), it) } ?: JsonNull
         else -> fail("config.$key", "未知配置项")
     }
 
     private fun setSetting(library: Library, key: String, value: JsonElement): Library = when (key) {
         "selectedProfileId" -> library.copy(selectedProfileId = if (value == JsonNull) null else stringAt(value, "config.$key"))
         "selectedPersonaId" -> library.copy(selectedPersonaId = if (value == JsonNull) null else stringAt(value, "config.$key"))
-        "reasoningParsing" -> library.copy(reasoningParsing = json.decodeFromJsonElement(ReasoningParsingConfig.serializer(), value))
-        "titleConfig" -> library.copy(titleConfig = json.decodeFromJsonElement(ChatTitleConfig.serializer(), value))
+        "reasoningParsing" -> library.copy(reasoningParsing = decodeSetting(ReasoningParsingConfig.serializer(), value, "config.$key"))
+        "titleConfig" -> library.copy(titleConfig = decodeSetting(ChatTitleConfig.serializer(), value, "config.$key"))
+        "automaticOptions" -> library.copy(automaticOptions = decodeSetting(AutomaticOptionsConfig.serializer(), value, "config.$key"))
+        "memoryConfig" -> library.copy(memoryConfig = if (value == JsonNull) null else decodeSetting(GlobalMemoryConfig.serializer(), value, "config.$key"))
         else -> fail("config.$key", "不允许修改此设置")
+    }
+
+    private fun <T> decodeSetting(serializer: kotlinx.serialization.KSerializer<T>, value: JsonElement, path: String): T {
+        return try { json.decodeFromJsonElement(serializer, value) }
+            catch (_: Exception) {
+                SafeJsonFieldDiagnostics.requireValid(serializer.descriptor, value, path)
+                throw InvalidResourceField(path, "设置字段无效")
+            }
     }
 
     private fun excludedChange(before: Library, after: Library): String? = when {
@@ -352,66 +365,21 @@ object ConfigurationCommands {
         else -> null
     }
 
-    private fun resourceValues(library: Library, kind: String): List<JsonElement> = when (kind) {
-        "character" -> library.characters.map { json.encodeToJsonElement(CharacterCard.serializer(), it) }
-        "mainCall" -> library.mainCalls.map { json.encodeToJsonElement(MainCall.serializer(), CollectionCompatibility.canonicalMain(it)) }
-        "package" -> library.packages.map { json.encodeToJsonElement(PromptPackage.serializer(), it) }
-        "group" -> library.groups.map { json.encodeToJsonElement(CallGroup.serializer(), it) }
-        "persona" -> library.personas.map { json.encodeToJsonElement(UserPersona.serializer(), it) }
-        "tag" -> library.promptTags.map { json.encodeToJsonElement(PromptTag.serializer(), it) }
-        "profile" -> library.profiles.map { json.encodeToJsonElement(ModelProfile.serializer(), it) }
-        "connection" -> library.connections.map { json.encodeToJsonElement(ApiConnection.serializer(), it) }
-        "extension" -> library.extensions.map { json.encodeToJsonElement(ConfigurationExtension.serializer(), it) }
-        else -> fail("config.$kind", "未知资源类型")
-    }
+    private fun resourceValues(library: Library, kind: String): List<JsonElement> =
+        (ResourceKindCatalog.get(kind) ?: fail("config.kind", "未知资源类型")).values(library)
 
-    private fun resourceJson(library: Library, kind: String, id: String): JsonElement? = when (kind) {
-        "character" -> library.characters.firstOrNull { it.id == id }?.let { json.encodeToJsonElement(CharacterCard.serializer(), it) }
-        "mainCall" -> library.mainCalls.firstOrNull { it.id == id }?.let { json.encodeToJsonElement(MainCall.serializer(), CollectionCompatibility.canonicalMain(it)) }
-        "package" -> library.packages.firstOrNull { it.id == id }?.let { json.encodeToJsonElement(PromptPackage.serializer(), it) }
-        "group" -> library.groups.firstOrNull { it.id == id }?.let { json.encodeToJsonElement(CallGroup.serializer(), it) }
-        "persona" -> library.personas.firstOrNull { it.id == id }?.let { json.encodeToJsonElement(UserPersona.serializer(), it) }
-        "tag" -> library.promptTags.firstOrNull { it.id == id }?.let { json.encodeToJsonElement(PromptTag.serializer(), it) }
-        "profile" -> library.profiles.firstOrNull { it.id == id }?.let { json.encodeToJsonElement(ModelProfile.serializer(), it) }
-        "connection" -> library.connections.firstOrNull { it.id == id }?.let { json.encodeToJsonElement(ApiConnection.serializer(), it) }
-        "extension" -> library.extensions.firstOrNull { it.id == id }?.let { json.encodeToJsonElement(ConfigurationExtension.serializer(), it) }
-        else -> fail("config.$kind", "未知资源类型")
-    }
+    private fun resourceJson(library: Library, kind: String, id: String): JsonElement? =
+        (ResourceKindCatalog.get(kind) ?: fail("config.kind", "未知资源类型")).find(library, id)
 
     private fun idOf(value: JsonElement, path: String): String =
         stringAt((value as? JsonObject)?.get("id"), "$path.id")
 
     /** Saved receipts may predate appended fields; compare typed defaults, without renaming or migrating chats. */
     private fun canonicalImage(kind: String, id: String, value: JsonElement?): JsonElement? =
-        value?.let { resourceJson(replaceResource(Library(), kind, id, it, null), kind, id) }
+        value?.let { resourceJson(replaceResource(Library(), kind, id, it, null, "config.$kind"), kind, id) }
 
-    private fun replaceResource(library: Library, kind: String, id: String, value: JsonElement?, index: Int?): Library = when (kind) {
-        "character" -> library.copy(characters = replace(library.characters, id, value, index, CharacterCard.serializer()) { it.id })
-        "mainCall" -> library.copy(mainCalls = replace(library.mainCalls, id, CollectionCompatibility.canonicalMainImage(value), index, MainCall.serializer()) { it.id })
-        "package" -> library.copy(packages = replace(library.packages, id, value, index, PromptPackage.serializer()) { it.id })
-        "group" -> library.copy(groups = replace(library.groups, id, value, index, CallGroup.serializer()) { it.id })
-        "persona" -> library.copy(personas = replace(library.personas, id, value, index, UserPersona.serializer()) { it.id })
-        "tag" -> library.copy(promptTags = replace(library.promptTags, id, value, index, PromptTag.serializer()) { it.id })
-        "profile" -> library.copy(profiles = replace(library.profiles, id, value, index, ModelProfile.serializer()) { it.id })
-        "connection" -> library.copy(connections = replace(library.connections, id, value, index, ApiConnection.serializer()) { it.id })
-        "extension" -> library.copy(extensions = replace(library.extensions, id, value, index, ConfigurationExtension.serializer()) { it.id })
-        else -> fail("config.$kind", "未知资源类型")
-    }
-
-    private fun <T> replace(values: List<T>, id: String, value: JsonElement?, index: Int?, serializer: KSerializer<T>,
-                            identity: (T) -> String): List<T> {
-        val updated = values.toMutableList()
-        val oldIndex = updated.indexOfFirst { identity(it) == id }
-        if (value == null) {
-            if (oldIndex >= 0) updated.removeAt(oldIndex)
-        } else {
-            val decoded = json.decodeFromJsonElement(serializer, value)
-            if (identity(decoded) != id) fail("config.$id", "资源 ID 与目标不一致")
-            if (oldIndex >= 0) updated[oldIndex] = decoded
-            else updated.add((index ?: updated.size).coerceIn(0, updated.size), decoded)
-        }
-        return updated
-    }
+    private fun replaceResource(library: Library, kind: String, id: String, value: JsonElement?, index: Int?, path: String): Library =
+        (ResourceKindCatalog.get(kind) ?: fail("config.kind", "未知资源类型")).replace(library, id, value, index, path)
 
     private fun idsAt(value: JsonElement, path: String): JsonArray {
         val array = value as? JsonArray ?: fail(path, "绑定值须为 ID 数组")
@@ -429,7 +397,10 @@ object ConfigurationCommands {
     }
 
     private fun keys(value: JsonObject, allowed: Set<String>, path: String) {
-        (value.keys - allowed).firstOrNull()?.let { fail("$path.$it", "未知字段") }
+        (value.keys - allowed).firstOrNull()?.let { key ->
+            val segment = if (key.length <= 80 && key.matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))) key else "[unknown]"
+            fail("$path.$segment", "未知字段")
+        }
     }
 
     private fun requireCanonicalLive(library: Library) {

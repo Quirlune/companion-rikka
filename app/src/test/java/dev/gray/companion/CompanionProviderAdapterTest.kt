@@ -9,6 +9,35 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 class CompanionProviderAdapterTest {
+    @Test fun nativeModelEditCommitsCallDefaultsInOneConflictCheckedPlan() {
+        val base = library()
+        val snapshot = CompanionProviderAdapter.capture(base)
+        val provider = snapshot.providers.first() as ProviderSetting.OpenAI
+        val model = provider.models.first()
+        val desired = snapshot.providers.map { if (it.id == provider.id) provider.copy(models = provider.models.map { old ->
+            if (old.id == model.id) old.copy(displayName = "Unified", abilities = listOf(me.rerere.ai.provider.ModelAbility.REASONING)) else old
+        }) else it }
+        val defaults = CompanionModelCallDefaults(.75f, .95f, 2048, ModelReasoning.AUTO)
+        val prepared = CompanionProviderAdapter.plan(snapshot, desired, editedModelDefaults = mapOf(model.id to defaults))
+        assertTrue(prepared.issues.toString(), prepared.issues.none { it.error })
+        val plan = requireNotNull(prepared.plan)
+        val profileId = snapshot.profileIds.getValue(model.id)
+        val next = CompanionProviderAdapter.apply(plan, base)
+        assertTrue(next.issues.toString(), next.issues.none { it.error })
+        val changed = requireNotNull(next.library).profiles.single { it.id == profileId }
+        assertEquals("Unified", changed.name)
+        assertEquals(defaults.temperature, changed.temperature)
+        assertEquals(defaults.topP, changed.topP)
+        assertEquals(defaults.maxTokens, changed.maxTokens)
+        assertEquals(defaults.reasoning, changed.reasoning)
+        val recaptured = CompanionProviderAdapter.capture(next.library!!).providers.flatMap { it.models }.single { it.id == model.id }
+        assertEquals(listOf(me.rerere.ai.provider.ModelAbility.REASONING), recaptured.abilities)
+        assertEquals(base.profiles.filterNot { it.id == profileId }, next.library!!.profiles.filterNot { it.id == profileId })
+        assertEquals(base.connections, next.library!!.connections)
+        val later = base.copy(profiles = base.profiles.map { if (it.id == profileId) it.copy(maxTokens = 999) else it })
+        assertNull(CompanionProviderAdapter.apply(plan, later).library)
+    }
+
     @Test fun originalBuiltInsArePersistentIdempotentAndPreserveExistingConfiguration() {
         val preset = me.rerere.rikkahub.data.datastore.DEFAULT_PROVIDERS.first() as ProviderSetting.OpenAI
         val base = library().copy(connections = library().connections +

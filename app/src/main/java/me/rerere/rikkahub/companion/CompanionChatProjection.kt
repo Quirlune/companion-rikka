@@ -11,7 +11,7 @@ import dev.gray.companion.core.Session
 import dev.gray.companion.core.Protocol
 import dev.gray.companion.core.ReasoningSnapshot
 import dev.gray.companion.core.ModelCatalog
-import dev.gray.companion.core.MessageOperations
+import dev.gray.companion.core.ConversationPaths
 import dev.gray.companion.core.userName
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.CustomBody
@@ -49,11 +49,11 @@ internal fun projectCompanionChat(
         turnId = { it.turnId },
         outputSlot = { it.outputSlot },
     ).map { output ->
-        val key = "${session.id}:${output.workflowId}:${output.nodeId}:${output.outputSlot}:${output.turnId}"
+        val id = pendingOutputId(session.id, output)
         MessageNode(
-            id = stableUuid(key),
+            id = id,
             messages = listOf(UIMessage(
-                id = stableUuid(key),
+                id = id,
                 role = MessageRole.ASSISTANT,
                 parts = buildList {
                     output.reasoningSnapshot?.takeIf { it.text.isNotBlank() || it.nativeMessage == null }
@@ -75,6 +75,10 @@ internal fun projectCompanionChat(
         ),
     )
 }
+
+/** One identity shared by pending message projection and its optional body presentation. */
+internal fun pendingOutputId(sessionId: String, output: PendingOutput): Uuid =
+    stableUuid("$sessionId:${output.workflowId}:${output.nodeId}:${output.outputSlot}:${output.turnId}")
 
 /** Stable appearance/catalogue projection; the UI remembers it separately from streamed text. */
 internal fun projectCompanionSettings(base: Settings, library: Library, session: Session): Settings {
@@ -137,6 +141,7 @@ internal fun projectCompanionProviders(library: Library): List<ProviderSetting> 
 }
 
 internal sealed interface CompanionBranchChoice {
+    data class User(val messageId: String, val revisionId: String) : CompanionBranchChoice
     data class Text(val messageId: String, val revisionId: String) : CompanionBranchChoice
     data class Opening(val messageId: String, val revisionId: String) : CompanionBranchChoice
     data class Generation(
@@ -154,7 +159,7 @@ internal data class CompanionHistoryProjection(
     val bodyDisplays: Map<Uuid, BodyDisplaySnapshot>,
 )
 
-/** Display-only MessageNodes keep the original branch selector and selected-index behavior. */
+/** Display-only nodes project compatible prompt paths and their own generation candidates. */
 internal fun projectCompanionHistory(session: Session): CompanionHistoryProjection {
     val visible = orderTurnRegions(
         session.messages.filterNot { it.deleted },
@@ -164,11 +169,11 @@ internal fun projectCompanionHistory(session: Session): CompanionHistoryProjecti
     val users = visible.filter { it.role == Role.USER && it.outputSlot == OutputSlot.BODY }.associateBy { it.id }
     val repliesByTurn = visible.filter { it.role == Role.ASSISTANT }.groupBy { it.turnId }
     val records = session.turnRecords.filter { it.variants.isNotEmpty() }.associateBy { it.userMessageId }
-    val activeById = session.messages.associateBy { it.id }
     val anchorTurns = records.mapNotNull { (turnId, _) ->
-        val user = users[turnId] ?: return@mapNotNull null
+        if (users[turnId] == null) return@mapNotNull null
         val replies = repliesByTurn[turnId].orEmpty()
-        val anchor = replies.firstOrNull { it.outputSlot == OutputSlot.BODY } ?: replies.firstOrNull() ?: user
+        val anchor = replies.firstOrNull { it.outputSlot == OutputSlot.BODY } ?: replies.firstOrNull()
+            ?: return@mapNotNull null
         anchor.id to turnId
     }.toMap()
 
@@ -197,60 +202,54 @@ internal fun projectCompanionHistory(session: Session): CompanionHistoryProjecti
         } + Triple(activeId, message.text, message.activeTextRevisionCreatedAt ?: message.createdAt))
             .sortedWith(compareBy<Triple<String, String, Long>> { it.third }.thenBy { it.first })
 
-        val variants = turnRecord?.variants.orEmpty()
+        val variants = anchorTurn?.let { ConversationPaths.generationVariants(session, it) }.orEmpty()
+        val publishedRecord = message.turnId?.let(records::get)
+        val publishedVariant = publishedRecord?.variants?.firstOrNull { it.id == publishedRecord.selectedVariantId }
+        // During regeneration the preview has fresh replies but still carries the old receipt.
+        // Only receipt-owned replies may borrow its candidates; journal replies are display-only.
+        val uncommittedReply = message.role == Role.ASSISTANT && publishedRecord != null &&
+            (publishedVariant == null ||
+                (message.id !in publishedVariant.replyIds && publishedVariant.replies.none { it.id == message.id }))
         val branchChoices = mutableListOf<CompanionBranchChoice>()
         val uiMessages = mutableListOf<UIMessage>()
         var selectedIndex = 0
-        if (variants.isNotEmpty() && turnUser != null && turnRecord != null) {
-            variants.forEach { variant ->
-                val replies = MessageOperations.repliesForVariant(session, turnRecord, variant, activeById)
-                val representative = replies.firstOrNull { !it.deleted && it.outputSlot == OutputSlot.BODY }
-                    ?: replies.firstOrNull { !it.deleted } ?: turnUser
-                val frozen = representative.textRevisions.firstOrNull { it.bodyDisplay != null }
-                val original = representative.textRevisions.firstOrNull { it.id == representative.id }
-                val generationId = when {
-                    representative.bodyDisplay != null -> representative.activeTextRevisionId ?: representative.id
-                    frozen != null -> frozen.id
-                    else -> original?.id ?: representative.activeTextRevisionId ?: representative.id
-                }
-                val generationText = when {
-                    representative.bodyDisplay != null -> representative.text
-                    frozen != null -> frozen.text
-                    else -> original?.text ?: representative.text
-                }
-                val generationTime = when {
-                    representative.bodyDisplay != null -> representative.activeTextRevisionCreatedAt ?: representative.createdAt
-                    frozen != null -> frozen.createdAt
-                    else -> original?.createdAt ?: representative.activeTextRevisionCreatedAt ?: representative.createdAt
-                }
-                val generationDisplay = representative.bodyDisplay ?: frozen?.bodyDisplay ?: original?.bodyDisplay
-                val uiId = stableUuid("generation:${turnUser.id}:${variant.id}")
-                if (variant.id == turnRecord.selectedVariantId &&
-                    (representative.activeTextRevisionId ?: representative.id) == generationId) {
-                    selectedIndex = uiMessages.size
-                }
-                uiMessages += representative.copy(text = generationText).toDisplayMessage(uiId, generationTime)
-                generationDisplay?.let { bodyDisplays[uiId] = it }
-                branchChoices += CompanionBranchChoice.Generation(
-                    turnUser.id, variant.id,
-                    representative.id, generationId,
-                )
+        if (uncommittedReply) {
+            val uiId = stableUuid("preview:${message.id}:$activeId")
+            uiMessages += message.toDisplayMessage(uiId, message.activeTextRevisionCreatedAt ?: message.createdAt)
+            message.bodyDisplay?.let { bodyDisplays[uiId] = it }
+            logicalIds[uiId] = message.id
+        } else if (message.role == Role.USER && message.outputSlot == OutputSlot.BODY) {
+            ConversationPaths.userVersions(session, message.id).forEach { revision ->
+                val uiId = stableUuid("user:${message.id}:${revision.id}")
+                if (revision.id == activeId) selectedIndex = uiMessages.size
+                uiMessages += message.copy(text = revision.text).toDisplayMessage(uiId, revision.createdAt)
+                revision.bodyDisplay?.let { bodyDisplays[uiId] = it }
+                branchChoices += CompanionBranchChoice.User(message.id, revision.id)
                 logicalIds[uiId] = message.id
             }
-            val selectedGenerationId = branchChoices.filterIsInstance<CompanionBranchChoice.Generation>()
-                .firstOrNull { it.variantId == turnRecord.selectedVariantId }?.revisionId
-            val editedCandidates = (message.textRevisions.map { Triple(it.id, it.text, it.createdAt) } +
-                Triple(activeId, message.text, message.activeTextRevisionCreatedAt ?: message.createdAt))
-                .filterNot { it.first == selectedGenerationId }
-                .sortedWith(compareBy<Triple<String, String, Long>> { it.third }.thenBy { it.first })
-            editedCandidates.forEach { (revisionId, text, createdAt) ->
-                val uiId = stableUuid("text:${message.id}:$revisionId")
-                if (revisionId == activeId) selectedIndex = uiMessages.size
-                uiMessages += message.copy(text = text).toDisplayMessage(uiId, createdAt)
-                message.displayForRevision(revisionId)?.let { bodyDisplays[uiId] = it }
-                branchChoices += if (message.authoredOpening) CompanionBranchChoice.Opening(message.id, revisionId)
-                    else CompanionBranchChoice.Text(message.id, revisionId)
-                logicalIds[uiId] = message.id
+        } else if (variants.isNotEmpty() && turnUser != null && turnRecord != null) {
+            variants.forEach { variant ->
+                // ConversationPaths resolves active and inactive replies under the same prompt/ancestry.
+                val representative = variant.replies.firstOrNull { !it.deleted && it.outputSlot == OutputSlot.BODY }
+                    ?: variant.replies.firstOrNull { !it.deleted } ?: return@forEach
+                val representativeActiveId = representative.activeTextRevisionId ?: representative.id
+                val revisions = (representative.textRevisions.map { Triple(it.id, it.text, it.createdAt) } +
+                    Triple(representativeActiveId, representative.text,
+                        representative.activeTextRevisionCreatedAt ?: representative.createdAt))
+                    .distinctBy { it.first }
+                    .sortedWith(compareBy<Triple<String, String, Long>> { it.third }.thenBy { it.first })
+                revisions.forEach { (revisionId, text, createdAt) ->
+                    val uiId = stableUuid("generation:${turnUser.id}:${variant.id}:$revisionId")
+                    if (variant.id == turnRecord.selectedVariantId && revisionId == activeId) {
+                        selectedIndex = uiMessages.size
+                    }
+                    uiMessages += representative.copy(text = text).toDisplayMessage(uiId, createdAt)
+                    representative.displayForRevision(revisionId)?.let { bodyDisplays[uiId] = it }
+                    branchChoices += CompanionBranchChoice.Generation(
+                        turnUser.id, variant.id, representative.id, revisionId,
+                    )
+                    logicalIds[uiId] = message.id
+                }
             }
         } else {
             textCandidates.forEach { (revisionId, text, createdAt) ->

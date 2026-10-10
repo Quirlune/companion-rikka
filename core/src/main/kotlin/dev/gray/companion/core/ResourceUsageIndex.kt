@@ -43,9 +43,17 @@ object ResourceUsageIndex {
             library.mainCalls.forEach { binding(ExtensionResourceRef(ExtensionResourceKind.MAIN, it.id), it.boundPackageIds, "boundPackageIds") }
             library.groups.forEach { binding(ExtensionResourceRef(ExtensionResourceKind.GROUP, it.id), it.boundPackageIds, "boundPackageIds") }
         }
-        if (ref.kind == ExtensionResourceKind.GROUP) library.mainCalls.forEach { binding(ExtensionResourceRef(ExtensionResourceKind.MAIN, it.id), it.boundGroupIds, "boundGroupIds") }
+        if (ref.kind == ExtensionResourceKind.GROUP) {
+            library.characters.forEach { binding(ExtensionResourceRef(ExtensionResourceKind.CHARACTER, it.id), it.boundGroupIds, "boundGroupIds") }
+            library.mainCalls.forEach { binding(ExtensionResourceRef(ExtensionResourceKind.MAIN, it.id), it.boundGroupIds, "boundGroupIds") }
+        }
         library.extensions.forEach { extension ->
             if (ref in extension.resources && target.entryId == null) use(null, "extension.${extension.id}.resources.${ref.id}", "扩展组成：${extension.name}", ResourceUseKind.EXTENSION, true)
+            extension.memory?.let { memory ->
+                if (ref.kind == ExtensionResourceKind.GROUP && memory.groupId == ref.id && target.entryId == null &&
+                    (target.workflowId == null || target.workflowId in listOfNotNull(memory.workflowId, memory.aggregationWorkflowId)))
+                    use(null, "extension.${extension.id}.memory", "原生记忆规则：${extension.name}", ResourceUseKind.EXTENSION)
+            }
             extension.parameters.filter { it.target.kind == ref.kind && it.target.resourceId == ref.id && (target.entryId == null || it.target.entryId == target.entryId) }.forEach {
                 use(ResourceLocations.fromField(it.target), "extension.${extension.id}.parameters.${it.id}", "扩展公开参数：${extension.name} / ${it.title}", ResourceUseKind.EXTENSION, true)
             }
@@ -68,12 +76,14 @@ object ResourceUsageIndex {
                     }) use(null, "$path.span.${token.start}.${token.endExclusive}", "$title：${token.expression}", ResourceUseKind.TEMPLATE)
             }
         }
-        library.personas.forEach { outsideTemplate("persona.${it.id}.prompt", "用户身份 ${it.name}", it.prompt) }
-        outsideTemplate("library.titleConfig.prompt", "标题提示词", library.titleConfig.prompt)
         val ownedWorkflows = ResourceTemplateSlots.workflows(library, ref).map { it.id }.toSet()
         val ownedNodes = ResourceTemplateSlots.workflows(library, ref).flatMap { it.nodes }.map { it.id }.toSet()
+        val ownedBlocks = ResourceTemplateSlots.workflows(library, ref)
+            .filter { target.workflowId == null || it.id == target.workflowId }.flatMap { it.nodes }
+            .filter { target.nodeId == null || it.id == target.nodeId }.flatMap { it.blocks }
+            .filter { target.blockId == null || it.id == target.blockId }.map { it.id }.toSet()
         ResourceLocations.resources(library).forEach { owner ->
-            if (owner == ref && target.entryId == null) return@forEach
+            if (owner == ref && target.entryId == null && target.workflowId == null && target.nodeId == null && target.blockId == null) return@forEach
             ResourceTemplateSlots.workflows(library, owner).forEach { workflow ->
                 val location = ResourceLocation(owner, workflowId = workflow.id)
                 val completed = workflow.afterWorkflowId ?: workflow.trigger.takeIf { it.startsWith(RuntimeEvents.WORKFLOW_COMPLETED_PREFIX) }?.removePrefix(RuntimeEvents.WORKFLOW_COMPLETED_PREFIX)
@@ -89,6 +99,10 @@ object ResourceUsageIndex {
                     }
                     listOfNotNull(descriptor?.injectionTargetWorkflowField, descriptor?.injectionTargetNodeField).forEach { key ->
                         if (node.arguments[key] in ownedWorkflows + ownedNodes) use(nl.copy(section = "arguments.$key"), ResourceLocations.path(nl) + ".argument.$key", "提示注入 ${node.title} 指向此资源的节点", ResourceUseKind.BINDING)
+                    }
+                    descriptor?.injectionTargetBlockField?.let { key ->
+                        if (node.arguments[key] in ownedBlocks) use(nl.copy(section = "arguments.$key"),
+                            ResourceLocations.path(nl) + ".argument.$key", "提示注入 ${node.title} 指向此注入槽", ResourceUseKind.BINDING)
                     }
                 }
             }
@@ -175,12 +189,12 @@ object ResourceUsageIndex {
                 }
             }
             is PromptReferenceLanguage.QueryPlan -> {
-                if (compiled.name == null || compiled.folder != null || compiled.call != null || compiled.historySelection != null) return emptyList()
-                fun source(slug: String) = compiled.source == PromptReferenceLanguage.SourceScope.Loaded || (compiled.source as? PromptReferenceLanguage.SourceScope.Named)?.slug == slug
+                if (DynamicPromptQueries.accepts(compiled)) return DynamicPromptQueries.targets(library, compiled).map { it.location }
+                val predicate = StaticPromptQueries.predicate(compiled, library.promptTags).predicate ?: return emptyList()
                 when (compiled.sourceType) {
-                    PromptReferenceLanguage.SourceType.CHARACTER -> characters.filter { source(it.slug) }.flatMap { card -> card.entries.filter { it.slug == compiled.name }.map {
+                    PromptReferenceLanguage.SourceType.CHARACTER -> characters.filter { predicate.matchesSource(it.slug) }.flatMap { card -> card.entries.filter(predicate::matchesEntry).map {
                         ResourceLocations.fromField(ExtensionFieldRef(ExtensionResourceKind.CHARACTER, card.id, ExtensionField.ENTRY_TEXT, entryId = it.id)) } }
-                    PromptReferenceLanguage.SourceType.PACK -> library.packages.filter { source(it.slug) }.flatMap { pack -> pack.entries.filter { it.slug == compiled.name }.map {
+                    PromptReferenceLanguage.SourceType.PACK -> library.packages.filter { predicate.matchesSource(it.slug) }.flatMap { pack -> pack.entries.filter(predicate::matchesEntry).map {
                         ResourceLocations.fromField(ExtensionFieldRef(ExtensionResourceKind.PACKAGE, pack.id, ExtensionField.ENTRY_TEXT, entryId = it.id)) } }
                     else -> emptyList()
                 }

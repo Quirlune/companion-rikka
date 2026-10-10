@@ -30,7 +30,7 @@ internal fun ModelsScreen(
     val linkedModelCounts = remember(library.profiles) {
         library.profiles.mapNotNull { it.apiConnectionId }.groupingBy { it }.eachCount()
     }
-    val assignedWorkflowCounts = remember(library.mainCalls, library.groups) {
+    val assignedWorkflowCounts = remember(library.mainCalls, library.groups, library.automaticOptions) {
         buildMap<String, Int> {
             fun add(workflow: Workflow) {
                 workflow.modelProfileId?.let { id -> put(id, (get(id) ?: 0) + 1) }
@@ -40,6 +40,10 @@ internal fun ModelsScreen(
             }
             library.mainCalls.forEach { main -> main.configuredWorkflows().forEach(::add) }
             library.groups.forEach { group -> group.workflows.forEach(::add) }
+            listOfNotNull(if (library.automaticOptions.blocks == null) library.automaticOptions.modelProfileId
+                else library.automaticOptions.generation.profileId).forEach { id ->
+                put(id, (get(id) ?: 0) + 1)
+            }
         }
     }
     val visibleConnections = remember(library.connections, normalizedQuery) {
@@ -167,7 +171,7 @@ internal fun ModelsScreen(
                                 defaultEnabled = library.selectedProfileId != profile.id,
                                 defaultLabel = if (library.selectedProfileId == profile.id) "当前默认" else "设为默认",
                                 deleteEnabled = assignedWorkflows == 0,
-                                deleteDisabledReason = "被 $assignedWorkflows 处调用或节点配置使用",
+                                deleteDisabledReason = "被 $assignedWorkflows 处调用、节点或内置功能使用",
                                 onEdit = { onEdit(Editing(EditorKind.PROFILE, profile.id)) },
                                 onDelete = { deleteProfile = profile },
                             )
@@ -182,7 +186,7 @@ internal fun ModelsScreen(
         AlertDialog(
             onDismissRequest = { deleteProfile = null },
             title = { Text("删除模型？") },
-            text = { Text("确定删除“${profile.name.ifBlank { "未命名模型" }}”吗？被调用或节点单独指定的模型不能删除。") },
+            text = { Text("确定删除“${profile.name.ifBlank { "未命名模型" }}”吗？被调用、节点或内置功能指定的模型不能删除。") },
             confirmButton = {
                 TextButton(onClick = {
                     onUpdate { lib ->

@@ -99,6 +99,8 @@ internal fun promptReferenceChoices(
     add(choice("完整处理后结构化历史", "{{type:builtin.in:history.name:context}}", "history", "聊天历史", "按主调用历史规则与记忆摘要投影；整块插入时保留消息角色", historyOwners))
     add(choice("最早三层原文", "{{type:builtin.in:history.name:messages.from:start-1.through:start-3}}", "history", "聊天历史", "按最早三条 BODY 楼层选取", historyOwners))
     add(choice("最近三层原文", "{{type:builtin.in:history.name:messages.from:end-3.through:end-1}}", "history", "聊天历史", "按最近三条 BODY 楼层选取", historyOwners))
+    add(choice("最近三条原始助手消息", "{{type:builtin.in:history.name:messages.speaker:assistant.from:end-3.through:end-1}}", "history", "聊天历史", "先筛原 Assistant，再选最近三条；API 发送角色可独立调整", historyOwners))
+    add(choice("最近一条原始用户消息", "{{type:builtin.in:history.name:messages.speaker:user.from:end-1.through:end-1}}", "history", "聊天历史", "读取最新的原 User 楼层，保留来源身份", historyOwners))
     add(choice("中间区段原文", "{{type:builtin.in:history.name:messages.from:percent-34.through:percent-66}}", "history", "聊天历史", "按历史楼层位置的百分比选取", historyOwners))
     session?.historyMemory?.views.orEmpty().forEach { (viewId, revisions) ->
         revisions.lastOrNull()?.let { latest ->
@@ -163,11 +165,20 @@ internal fun promptReferenceChoices(
             "${owner.detail} · ${call.afterWorkflowId?.let { "指定调用完成后（${it.take(8)}）" } ?: callPhaseLabel(call.trigger)} · ${callScheduleLabel(call)}", menuTitle = "${owner.title} · $callTitle", location = owner.location?.copy(workflowId = call.id))
         call.nodes.forEach { node ->
             val nodeTitle = node.title.ifBlank { "未命名节点" }
+            val ownerType = owner.id.substringBefore(':')
+            val ownerId = owner.id.substringAfter(':')
+            val resourceSlug = when (ownerType) {
+                "main" -> selectedMain?.takeIf { it.id == ownerId }?.slug ?: library?.mainCalls?.firstOrNull { it.id == ownerId }?.slug
+                "group" -> callGroup?.takeIf { it.id == ownerId }?.slug ?: library?.groups?.firstOrNull { it.id == ownerId }?.slug
+                else -> null
+            }
+            val slugMacro = resourceSlug?.takeIf { MacroNaming.isValidSlug(it) && MacroNaming.isValidSlug(call.slug) && MacroNaming.isValidSlug(node.slug) }
+                ?.let { "{{type:$ownerType.in:$it.call:${call.slug}.name:${node.slug}}}" }
             val owners = listOf(owner.copy(inMenu = false), callOwner,
                 PromptReferenceSource("node:${node.id}", nodeTitle, nodeActionPurpose(node), inMenu = false,
                     location = owner.location?.copy(workflowId = call.id, nodeId = node.id)))
             val inactive = if (!call.enabled || !node.enabled) " · 配置已停用" else ""
-            add(choice("$nodeTitle · 本轮结果", "{{result.${node.outputKey}}}", "calls", "调用结果",
+            add(choice("$nodeTitle · 本轮结果", slugMacro ?: "{{result.${node.outputKey}}}", "calls", "调用结果",
                 "${nodeActionPurpose(node)} · 本轮该节点成功完成后可用$inactive", owners, node.id,
                 "调用自动发布结果宏，无需放入提示词包"))
             node.regexOutputCopy.takeIf { it.enabled && it.outputKey.isNotBlank() }?.let { copy ->
@@ -365,6 +376,7 @@ private fun HistoryReferenceComposer(choices: List<PromptReferenceChoice>, onIns
     var open by remember { mutableStateOf(false) }
     var processed by remember { mutableStateOf(false) }
     var source by remember { mutableStateOf("display") }
+    var sourceRole by remember { mutableStateOf<Role?>(null) }
     var range by remember { mutableStateOf(true) }
     var fromAnchor by remember { mutableStateOf("end") }
     var fromNumber by remember { mutableStateOf("3") }
@@ -386,6 +398,9 @@ private fun HistoryReferenceComposer(choices: List<PromptReferenceChoice>, onIns
             source = it; viewId = null; fixedRevision = false
         }
         if (source == "model") Text("早期楼层若没有归档模型原文，会明确提示缺失。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ChoiceLine("来源发言方", sourceRole, historySourceRoleChoices) { sourceRole = it }
+        if (sourceRole != null) Text("先筛原发言方，再在匹配楼层中计算范围；不指定范围时读取全部匹配来源。发送 API 角色在当前引用的历史设置中另行调整。",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             SuggestionChip(onClick = { range = true; fromAnchor = "start"; fromNumber = "1"; throughAnchor = "start"; throughNumber = "3" }, label = { Text("最早三层") })
             SuggestionChip(onClick = { range = true; fromAnchor = "end"; fromNumber = "3"; throughAnchor = "end"; throughNumber = "1" }, label = { Text("最近三层") })
@@ -395,9 +410,9 @@ private fun HistoryReferenceComposer(choices: List<PromptReferenceChoice>, onIns
         if (range) {
             val anchors = listOf("start" to "从开头", "end" to "从末尾", "percent" to "百分比")
             ChoiceLine("起点", fromAnchor, anchors) { fromAnchor = it }
-            OutlinedTextField(fromNumber, { fromNumber = it.filter(Char::isDigit) }, label = { Text(if (fromAnchor == "percent") "起点百分比（0–100）" else "起点楼层（从 1 开始）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            OutlinedTextField(fromNumber, { fromNumber = it.filter(Char::isDigit) }, label = { Text(if (fromAnchor == "percent") "起点百分比（0–100）" else if (sourceRole != null) "匹配来源起点（从 1 开始）" else "起点楼层（从 1 开始）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
             ChoiceLine("终点（包含）", throughAnchor, anchors) { throughAnchor = it }
-            OutlinedTextField(throughNumber, { throughNumber = it.filter(Char::isDigit) }, label = { Text(if (throughAnchor == "percent") "终点百分比（0–100）" else "终点楼层（从 1 开始）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            OutlinedTextField(throughNumber, { throughNumber = it.filter(Char::isDigit) }, label = { Text(if (throughAnchor == "percent") "终点百分比（0–100）" else if (sourceRole != null) "匹配来源终点（从 1 开始）" else "终点楼层（从 1 开始）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         }
         if (views.isNotEmpty()) {
             ChoiceLine("历史副本", viewId, listOf<Pair<String?, String>>(null to "当前历史") + views.map { (id, title) -> (id as String?) to title }) { viewId = it; fixedRevision = false }
@@ -411,6 +426,7 @@ private fun HistoryReferenceComposer(choices: List<PromptReferenceChoice>, onIns
         val expression = buildString {
             append("{{type:builtin.in:history.name:${if (processed) "context" else "messages"}")
             append(".source:$source")
+            sourceRole?.let { append(".speaker:${it.name.lowercase()}") }
             if (range) append(".from:$fromAnchor-$fromNumber.through:$throughAnchor-$throughNumber")
             viewId?.let { append(".view:$it") }
             if (viewId != null && fixedRevision) append(".revision:$revision")

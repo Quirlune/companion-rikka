@@ -34,7 +34,11 @@ import kotlinx.serialization.Serializable
 @Serializable data class PromptInjection(
     val id: String, val block: PromptBlock, val origin: ResultOrigin,
     val targetWorkflowId: String? = null, val targetNodeId: String? = null,
-    val scope: InjectionScope = InjectionScope.TURN, val turnId: String? = null
+    val scope: InjectionScope = InjectionScope.TURN, val turnId: String? = null,
+    val pluginOwnerIds: List<String> = emptyList(),
+    val targetBlockId: String? = null,
+    val queueOrder: Int = 0,
+    val contextOrder: Int? = null
 )
 @Serializable enum class MacroTileKind { TEXT, NUMBER, PROGRESS, STATUS, HTML }
 @Serializable enum class MacroTilePlacement { CHAT, SIDEBAR }

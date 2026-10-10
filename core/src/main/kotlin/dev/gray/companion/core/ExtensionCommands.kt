@@ -1,10 +1,25 @@
 package dev.gray.companion.core
 
-/** Independent collections point to real resources and fields. They own no runtime loading state. */
+/** Global extension policy edits real resources; historical session participation remains readable. */
 object ExtensionCommands {
+    fun setEnabled(library: Library, expected: ConfigurationExtension, enabled: Boolean): ExtensionEditResult {
+        if (expected.memory != null) return failure("extension.${expected.id}", "记忆请使用原生记忆开关")
+        if (library.extensions.firstOrNull { it.id == expected.id } != expected)
+            return failure("extension.${expected.id}", "扩展定义已改变，请刷新后切换")
+        val candidate = library.copy(extensions = library.extensions.map {
+            if (it.id == expected.id) it.copy(enabled = enabled) else it
+        })
+        return finish(candidate.copy(sessions = candidate.sessions.map { session ->
+            if (enabled) session else session.copy(promptInjections = session.promptInjections.filter {
+                PluginParticipation.injectionActive(candidate, session, it.pluginOwnerIds, it.origin.resourceId)
+            })
+        }), if (enabled) "已开启扩展" else "已关闭扩展；历史数据保留")
+    }
+
     fun createDefinition(library: Library, definition: ConfigurationExtension): ExtensionEditResult {
         if (library.extensions.any { it.id == definition.id }) return failure("extension.${definition.id}", "集合 ID 已存在")
-        return finish(library.copy(extensions = library.extensions + definition), "创建集合：${definition.name}")
+        val live = if (definition.memory == null && definition.enabled == null) definition.copy(enabled = false) else definition
+        return finish(library.copy(extensions = library.extensions + live), "创建集合：${definition.name}")
     }
 
     fun updateDefinition(library: Library, definition: ConfigurationExtension): ExtensionEditResult {
@@ -14,28 +29,65 @@ object ExtensionCommands {
     }
 
     fun deleteDefinition(library: Library, extensionId: String): ExtensionEditResult {
-        if (library.extensions.none { it.id == extensionId }) return failure("extension.$extensionId", "集合不存在")
-        // Built-in Memory is a separate system entry, never a name-based exception in this catalogue.
-        return finish(library.copy(extensions = library.extensions.filterNot { it.id == extensionId }),
-            "删除集合定义；保留所有组成资源、字段值及实际关联")
+        val definition = library.extensions.firstOrNull { it.id == extensionId } ?: return failure("extension.$extensionId", "集合不存在")
+        if (definition.memory != null)
+            return failure("extension.$extensionId.memory", "原生记忆请通过会话开关关闭；保存的规则与摘要保留")
+        if (library.sessions.any { extensionId in it.enabledExtensionIds && it.pendingRun != null })
+            return failure("extension.$extensionId", "仍有参与此插件的会话断点，请先恢复或结束该轮")
+        // Ordinary collection deletion preserves its shared resources and accepted archives.
+        return finish(library.copy(extensions = library.extensions.filterNot { it.id == extensionId },
+            sessions = library.sessions.map { PluginParticipation.disable(it, extensionId) }),
+            "删除插件定义并撤销其会话参与；保留组成资源、共享关联和历史正文")
     }
 
-    @Deprecated("Collections are independent; edit ordinary resource associations directly")
-    @Suppress("UNUSED_PARAMETER")
-    fun install(library: Library, mainCallId: String, extensionId: String): ExtensionEditResult =
-        retired("extension.$extensionId")
+    fun setParticipation(library: Library, expected: ConfigurationExtension, sessionId: String,
+                         included: Boolean, expectedIncluded: Boolean): ExtensionEditResult {
+        if (expected.memory != null)
+            return MemoryPluginCommands.setParticipation(library, expected, sessionId, included, expectedIncluded)
+        if (library.extensions.firstOrNull { it.id == expected.id } != expected)
+            return failure("extension.${expected.id}", "插件定义已改变，请重新打开后切换")
+        if (library.selectedSessionId != sessionId) return failure("session.$sessionId", "当前会话已切换")
+        val session = library.sessions.firstOrNull { it.id == sessionId } ?: return failure("session.$sessionId", "当前会话不存在")
+        if (session.pendingRun != null) return failure("session.$sessionId", "请先处理当前会话断点，再切换插件")
+        if (included && session.executableWorld?.library?.extensions?.none { it.id == expected.id } == true)
+            return failure("session.$sessionId.plugins", "旧环境没有此插件，请新建聊天使用当前配置")
+        if ((expected.id in session.enabledExtensionIds) != expectedIncluded)
+            return failure("session.$sessionId.plugins", "插件参与状态已改变，请重新打开后切换")
+        val next = if (included) session.copy(enabledExtensionIds = (session.enabledExtensionIds + expected.id).distinct())
+            else PluginParticipation.disable(session, expected.id)
+        return finish(library.copy(sessions = library.sessions.map { if (it.id == sessionId) next else it }),
+            if (included) "插件参与当前会话；主调用与手工关联保留" else "关闭当前会话插件并撤销其活动注入；历史正文和共享状态保留")
+    }
 
-    @Deprecated("Collections are independent and have no enabled state")
-    @Suppress("UNUSED_PARAMETER")
-    fun setEnabled(library: Library, mainCallId: String, bindingId: String, enabled: Boolean): ExtensionEditResult =
-        retired("main.$mainCallId.extensions")
+    /** Create one ordinary display owner and its collection reference together, without a main/session. */
+    fun addDisplayGroup(library: Library, expected: ConfigurationExtension, group: CallGroup): ExtensionEditResult {
+        if (library.extensions.firstOrNull { it.id == expected.id } != expected)
+            return failure("extension.${expected.id}", "扩展定义已改变，请重新打开后添加磁贴配置")
+        if (library.groups.any { it.id == group.id })
+            return failure("group.${group.id}", "磁贴配置资源 ID 已存在")
+        val next = expected.copy(resources = expected.resources + ExtensionResourceRef(ExtensionResourceKind.GROUP, group.id))
+        return finish(library.copy(groups = library.groups + group,
+            extensions = library.extensions.map { if (it.id == expected.id) next else it }), "添加扩展磁贴配置：${group.name}")
+    }
 
-    @Deprecated("Collections are independent; deleting a definition preserves resources and associations")
-    @Suppress("UNUSED_PARAMETER")
-    fun detach(library: Library, mainCallId: String, bindingId: String): ExtensionEditResult =
-        retired("main.$mainCallId.extensions")
-
-    private fun retired(path: String) = failure(path, "扩展现为独立集合，不再安装、启停或解除安装；请在原编辑器直接修改资源关联")
+    /** Actual session association only, never a collection enable ledger or a main-call edit. */
+    fun setDisplayGroupForSession(library: Library, expected: ConfigurationExtension,
+                                  sessionId: String, groupId: String, included: Boolean): ExtensionEditResult {
+        if (library.extensions.firstOrNull { it.id == expected.id } != expected)
+            return failure("extension.${expected.id}", "扩展定义已改变，请重新打开后修改会话关联")
+        if (ExtensionResourceRef(ExtensionResourceKind.GROUP, groupId) !in expected.resources || library.groups.none { it.id == groupId })
+            return failure("extension.${expected.id}.resources", "磁贴配置不在当前扩展组成中或已不存在")
+        if (library.selectedSessionId != sessionId)
+            return failure("session.$sessionId", "当前会话已切换，请重新选择磁贴配置")
+        val session = library.sessions.firstOrNull { it.id == sessionId }
+            ?: return failure("session.$sessionId", "当前会话不存在")
+        if (session.pendingRun != null)
+            return failure("session.$sessionId", "当前会话仍有断点，请先恢复或结束这一轮，再修改磁贴关联")
+        val groups = if (included) (session.groupIds + groupId).distinct() else session.groupIds.filterNot { it == groupId }
+        return finish(library.copy(sessions = library.sessions.map {
+            if (it.id == sessionId) it.copy(groupIds = groups) else it
+        }), if (included) "磁贴配置加入当前会话" else "移除当前会话的磁贴配置关联；资源及角色、主调用关联保留")
+    }
 
     fun setParameter(library: Library, extensionId: String, parameterId: String, value: String?, expectedValue: String?): ExtensionEditResult {
         val definition = library.extensions.firstOrNull { it.id == extensionId } ?: return failure("extension.$extensionId", "集合不存在")
@@ -43,20 +95,6 @@ object ExtensionCommands {
         if (ExtensionResourceRef(parameter.target.kind, parameter.target.resourceId) !in definition.resources)
             return failure("extension.$extensionId.parameters.$parameterId", "参数目标不在集合组成中")
         return ExtensionFieldRegistry.write(library, parameter.target, value, expectedValue)
-    }
-
-    /** Direct actual associations only; a collection's membership does not load anything. */
-    fun impact(library: Library, target: ExtensionFieldRef): ExtensionImpact {
-        val ref = ExtensionResourceRef(target.kind, target.resourceId)
-        val extensions = library.extensions.filter { ref in it.resources }.map { it.id }
-        val mains = library.mainCalls.filter { main -> when (target.kind) {
-            ExtensionResourceKind.MAIN -> main.id == target.resourceId
-            ExtensionResourceKind.PACKAGE -> target.resourceId in main.boundPackageIds || library.groups.any {
-                it.id in main.boundGroupIds && target.resourceId in it.boundPackageIds }
-            ExtensionResourceKind.GROUP -> target.resourceId in main.boundGroupIds
-            ExtensionResourceKind.CHARACTER -> false
-        } }.map { it.id }
-        return ExtensionImpact(mains, extensions)
     }
 
     fun validate(library: Library): List<Issue> = buildList {
@@ -91,7 +129,7 @@ object ExtensionCommands {
     }
     private fun finish(candidate: Library, change: String): ExtensionEditResult {
         val canonical = CollectionCompatibility.canonicalLive(candidate)
-        val issues = LibraryValidator.validate(canonical).filter { it.error }
+        val issues = (LibraryValidator.validate(canonical) + MemoryPlugins.validate(canonical)).filter { it.error }.distinct()
         return ExtensionEditResult(canonical.takeIf { issues.isEmpty() }, issues, listOf(change))
     }
     private fun failure(path: String, message: String) = ExtensionEditResult(null, listOf(Issue(path, message)))

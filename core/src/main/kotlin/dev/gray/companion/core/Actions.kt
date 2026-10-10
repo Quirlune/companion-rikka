@@ -27,7 +27,9 @@ import kotlinx.serialization.Transient
     @Transient val injectionTargetNodeField: String? = null,
     @Transient val removesInjection: Boolean = false,
     val presentation: ActionPresentation = ActionPresentation.STANDARD,
-    val execution: ActionExecution = ActionExecution.HANDLER
+    val execution: ActionExecution = ActionExecution.HANDLER,
+    @Transient val pureReplay: PureReplayKind? = null,
+    @Transient val injectionTargetBlockField: String? = null
 )
 
 data class ActionContext(
@@ -45,13 +47,16 @@ data class ActionContext(
     val library: Library? = null,
     val workflowId: String = "",
     val executionVersion: Int = ExecutionSemantics.CURRENT,
-    val macroTarget: MacroTargetSnapshot? = null
+    val macroTarget: MacroTargetSnapshot? = null,
+    val historyRead: HistoryPromptRead? = null
 )
 
 @Serializable data class PromptInjectionPatch(
     val id: String, val block: PromptBlock? = null,
     val targetWorkflowId: String? = null, val targetNodeId: String? = null,
-    val scope: InjectionScope = InjectionScope.TURN
+    val scope: InjectionScope = InjectionScope.TURN,
+    val targetBlockId: String? = null,
+    val contextOrder: Int? = null
 )
 
 @Serializable data class ActionOutcome(
@@ -60,7 +65,8 @@ data class ActionContext(
     val macroWrites: Map<String, String> = emptyMap(),
     val activationWrites: Map<String, Boolean> = emptyMap(),
     val injectionWrites: List<PromptInjectionPatch> = emptyList(),
-    val historyWrites: HistoryMemoryPatch = HistoryMemoryPatch()
+    val historyWrites: HistoryMemoryPatch = HistoryMemoryPatch(),
+    val historyRead: HistoryPromptRead? = null
 )
 fun interface ActionHandler { suspend fun execute(context: ActionContext): ActionOutcome }
 data class RegisteredAction(val descriptor: ActionDescriptor, val handler: ActionHandler)
@@ -81,13 +87,21 @@ class ActionRegistry {
     @Synchronized fun snapshot(): Map<String, RegisteredAction> = actions.toMap()
 
     companion object {
-        fun defaults() = ActionRegistry()
+        fun defaults(pluginExecutor: PluginCodeExecutor? = null) = ActionRegistry()
             .register(ActionDescriptor("model.generate", "模型生成", "使用所选模型生成文本", usesModel = true,
                 execution = ActionExecution.PURE_MODEL)) { context ->
                 val profile = context.profile ?: error("未选择模型")
                 ActionOutcome(context.gateway.generateAttempt(profile, context.messages, context.onDelta))
             }
-            .register(ActionDescriptor("text.render", "组合文本", "无需模型，将输入模板中的宏展开为新的调用宏；不创建界面")) { context -> ActionOutcome(context.input) }
+            .register(ActionDescriptor("text.render", "组合文本", "无需模型，将输入模板中的宏展开为新的调用宏；不创建界面", pureReplay = PureReplayKind.TEXT_RENDER)) { context -> ActionOutcome(context.input) }
+            .register(ActionDescriptor("plugin.run", "插件代码", "执行已启用插件的纯文本代码；结果可供其他行为读取", listOf(
+                ActionFieldDescriptor("pluginId", "插件标识", required = true)
+            ), pureReplay = PureReplayKind.PLUGIN_TEXT)) { context ->
+                PluginCodeActions.run(context, pluginExecutor ?: error("当前环境未提供插件代码执行器"))
+            }
+            .register(ActionDescriptor("card.define", "定义卡片", "从宏或输入提取字段，生成可由用户放置的显示组件", pureReplay = PureReplayKind.CARD_DEFINE)) { context ->
+                CardDisplays.define(context)
+            }
             .register(ActionDescriptor("state.set", "设置状态", "写入会话状态", listOf(
                 ActionFieldDescriptor("key", "状态键", required = true),
                 ActionFieldDescriptor("value", "值", ActionFieldType.TEMPLATE)
@@ -178,7 +192,7 @@ class ActionRegistry {
                 ActionFieldDescriptor("mode", "模式", defaultValue = "EXTRACT", choices = listOf(
                     ActionChoice("EXTRACT", "提取"), ActionChoice("REPLACE", "替换"))),
                 ActionFieldDescriptor("replacement", "替换内容")
-            ))) { context ->
+            ), pureReplay = PureReplayKind.TEXT_EXTRACT)) { context ->
                 if (ExecutionSemantics(context.executionVersion).legacyProcessing) return@register ActionOutcome(SafePatterns.extract(
                     context.arguments.getValue("pattern"), context.input, context.arguments.getValue("captureGroup").toInt()).orEmpty())
                 ActionOutcome(RegexOutputCopies.transform(RegexOutputCopy(pattern = context.arguments.getValue("pattern"),
@@ -192,7 +206,11 @@ class ActionRegistry {
                 ActionFieldDescriptor("mode", "选择方式", defaultValue = "ROOTS", choices = listOf(
                     ActionChoice("ROOTS", "最外层摘要"), ActionChoice("UNMERGED_LEAVES", "未合并的小摘要"))),
                 ActionFieldDescriptor("count", "选择数量（0 为全部）", ActionFieldType.NUMBER, defaultValue = "0", integer = true),
-                ActionFieldDescriptor("requireCount", "不足数量时不选择", ActionFieldType.BOOLEAN, defaultValue = "false")
+                ActionFieldDescriptor("requireCount", "不足数量时不选择", ActionFieldType.BOOLEAN, defaultValue = "false"),
+                ActionFieldDescriptor("protectFirstFloors", "保护原始前楼层", ActionFieldType.NUMBER, defaultValue = "0", integer = true),
+                ActionFieldDescriptor("minimumNewFloors", "触发原始楼层数", ActionFieldType.NUMBER, defaultValue = "200", integer = true),
+                ActionFieldDescriptor("keepRecentFloors", "触发时保留原始末尾楼层", ActionFieldType.NUMBER, defaultValue = "40", integer = true),
+                ActionFieldDescriptor("maximumBatchFloors", "每批最多原始楼层", ActionFieldType.NUMBER, defaultValue = "200", integer = true)
             ))) { context ->
                 require(ExecutionSemantics(context.executionVersion).hierarchicalMemory) { "此恢复版本不支持层级记忆选择" }
                 val session = requireNotNull(context.session)
@@ -200,7 +218,11 @@ class ActionRegistry {
                 val selection = HistoryViews.selection(context.arguments.getValue("source"), context.executionVersion) ?: error("History 来源引用无效")
                 ActionOutcome(HistoryActions.select(session, main, selection, context.arguments["leafWorkflowId"].orEmpty(),
                     context.arguments.getValue("mode"), context.arguments.getValue("count").toInt(),
-                    context.arguments.getValue("requireCount").toBooleanStrict()))
+                    context.arguments.getValue("requireCount").toBooleanStrict(),
+                    rules = if (ExecutionSemantics(context.executionVersion).globalMemory &&
+                        GlobalMemory.extension(requireNotNull(context.library))?.memory?.aggregationWorkflowId == context.workflowId)
+                        GlobalMemory.stageRules(context.node.copy(arguments = context.arguments)) else null,
+                    library = context.library, executionVersion = context.executionVersion))
             }
             .register(ActionDescriptor("history.memory.read", "读取分段记忆", "读取指定记忆 ID 对应的摘要与来源标识", listOf(
                 ActionFieldDescriptor("ids", "记忆 ID", ActionFieldType.TEMPLATE)
@@ -208,7 +230,8 @@ class ActionRegistry {
                 require(ExecutionSemantics(context.executionVersion).hierarchicalMemory) { "此恢复版本不支持层级记忆读取" }
                 val session = requireNotNull(context.session)
                 val main = requireNotNull(context.library).mainCalls.first { it.id == session.mainCallId }
-                ActionOutcome(HistoryActions.read(session, main, HistoryActions.selectedIds(context.arguments["ids"].orEmpty(), "", 0)))
+                ActionOutcome(HistoryActions.read(session, main, HistoryActions.selectedIds(context.arguments["ids"].orEmpty(), "", 0),
+                    context.library.takeIf { ExecutionSemantics(context.executionVersion).globalMemory }))
             }
             .register(ActionDescriptor("history.memory.write", "记录分段记忆", "保存摘要与真实原文楼层的映射", listOf(
                 ActionFieldDescriptor("source", "History 来源", required = true, defaultValue = "{{history}}"),
@@ -218,12 +241,20 @@ class ActionRegistry {
                 val session = requireNotNull(context.session)
                 val selection = HistoryViews.selection(context.arguments.getValue("source"), context.executionVersion) ?: error("History 来源引用无效")
                 val main = requireNotNull(context.library).mainCalls.first { it.id == session.mainCallId }
-                val children = if (ExecutionSemantics(context.executionVersion).hierarchicalMemory) HistoryActions.selectedIds(
+                val declaredChildren = if (ExecutionSemantics(context.executionVersion).hierarchicalMemory) HistoryActions.selectedIds(
                     context.arguments["childrenIds"].orEmpty(), "", 0, distinct = false) else emptyList()
+                val globalParent = ExecutionSemantics(context.executionVersion).globalMemory &&
+                    GlobalMemory.extension(requireNotNull(context.library))?.memory?.aggregationWorkflowId == context.workflowId
+                val children = if (globalParent) {
+                    val actual = context.dependencyOutputs.values.mapNotNull { it.historyRead }.flatMap { it.childSegmentIds }.distinct()
+                    require(actual.size >= 2 && actual.all { it in declaredChildren }) { "大摘要提示词须实际引用至少两段完整小摘要" }
+                    declaredChildren.filter { it in actual }
+                } else declaredChildren
                 val patch = if (children.isNotEmpty()) HistoryActions.parent(session, main, selection, children,
-                    context.arguments["title"].orEmpty(), context.input, context.workflowId) else HistoryMemoryPatch(segments = listOf(
+                    context.arguments["title"].orEmpty(), context.input, context.workflowId,
+                    context.library.takeIf { ExecutionSemantics(context.executionVersion).globalMemory }, context.executionVersion) else HistoryMemoryPatch(segments = listOf(
                     HistoryMemory.segmentFromSources(context.arguments["title"].orEmpty(), context.input,
-                        HistoryViews.sources(session, selection, main), context.workflowId)))
+                        HistoryViews.sources(session, selection, main, context.executionVersion), context.workflowId)))
                 ActionOutcome(patch.segments.last().id, historyWrites = patch)
             }
             .register(ActionDescriptor("history.view.copy", "History 压缩或展开副本", "通过记忆 ID 创建独立历史视图，不复制原文", listOf(
@@ -246,7 +277,7 @@ class ActionRegistry {
                 val patch = HistoryViews.copy(session, selection, target,
                     context.arguments["name"].orEmpty(), HistorySegmentMode.valueOf(context.arguments.getValue("mode")), ids, main,
                     inheritTargetModes = context.arguments["inheritTargetModes"]?.toBooleanStrict() ?: false,
-                    executionVersion = context.executionVersion)
+                    executionVersion = context.executionVersion, library = context.library)
                 ActionOutcome(target, historyWrites = patch)
             }
             .register(ActionDescriptor("prompt.inject", "注入提示词", "向主调用目标模型节点注入提示块", listOf(
@@ -259,11 +290,20 @@ class ActionRegistry {
                 ActionFieldDescriptor("depth", "历史深度", ActionFieldType.NUMBER, defaultValue = "0", integer = true),
                 ActionFieldDescriptor("targetWorkflowId", "目标调用"),
                 ActionFieldDescriptor("targetNodeId", "目标节点"),
+                ActionFieldDescriptor("targetBlockId", "目标注入槽"),
+                ActionFieldDescriptor("contextOrder", "上下文顺序", ActionFieldType.NUMBER, defaultValue = "1", integer = true),
                 ActionFieldDescriptor("emptyBehavior", "空内容处理", defaultValue = "ALLOW", choices = listOf(
                     ActionChoice("ALLOW", "照常注入"), ActionChoice("SKIP", "跳过"), ActionChoice("REMOVE", "移除"))),
                 ActionFieldDescriptor("scope", "生命周期", defaultValue = InjectionScope.TURN.name, choices = listOf(
                     ActionChoice("TURN", "当前轮"), ActionChoice("SESSION", "整个会话")))
-            ), injectionIdField = "id", injectionTargetWorkflowField = "targetWorkflowId", injectionTargetNodeField = "targetNodeId")) { context ->
+            ), injectionIdField = "id", injectionTargetWorkflowField = "targetWorkflowId", injectionTargetNodeField = "targetNodeId",
+                injectionTargetBlockField = "targetBlockId")) { context ->
+                val targetBlockId = context.arguments["targetBlockId"]?.trim()?.ifEmpty { null }
+                require(targetBlockId == null || ExecutionSemantics(context.executionVersion).anchoredPromptSlots) { "此恢复版本不支持指定注入槽" }
+                val contextOrder = if (ExecutionSemantics(context.executionVersion).independentContextOrder)
+                    requireNotNull((context.arguments["contextOrder"] ?: "1").trim().toIntOrNull()?.takeIf { it >= 1 }) {
+                        "上下文顺序须为正整数"
+                    } else null
                 val id = context.arguments.getValue("id").trim()
                 val role = Role.valueOf(context.arguments.getValue("role").trim().uppercase())
                 val position = PromptPosition.valueOf(context.arguments.getValue("position").trim().uppercase())
@@ -281,7 +321,7 @@ class ActionRegistry {
                 val block = PromptBlock(id = id, template = context.input, role = role, position = position, depth = depth)
                 ActionOutcome(context.input, injectionWrites = listOf(PromptInjectionPatch(id, block,
                     context.arguments["targetWorkflowId"]?.trim()?.ifEmpty { null },
-                    context.arguments["targetNodeId"]?.trim()?.ifEmpty { null }, scope)))
+                    context.arguments["targetNodeId"]?.trim()?.ifEmpty { null }, scope, targetBlockId, contextOrder)))
             }
             .register(ActionDescriptor("prompt.remove", "移除注入", "按所有者与标识移除提示块", listOf(
                 ActionFieldDescriptor("id", "注入标识", required = true)
@@ -295,7 +335,7 @@ internal fun ActionDescriptor.executionIssue(): String? {
     if (execution != ActionExecution.PURE_MODEL) return null
     if (!usesModel) return "纯模型动作必须声明 usesModel"
     if (stateWriteKeyField != null || macroWriteKeyField != null || injectionIdField != null ||
-        injectionTargetWorkflowField != null || injectionTargetNodeField != null || removesInjection)
+        injectionTargetWorkflowField != null || injectionTargetNodeField != null || injectionTargetBlockField != null || removesInjection)
         return "纯模型动作不能声明状态、宏或提示词注入写入"
     return null
 }
@@ -303,23 +343,25 @@ internal fun ActionDescriptor.executionIssue(): String? {
 internal fun ActionOutcome.hasEffects(): Boolean = stateWrites.isNotEmpty() || emittedEvents.isNotEmpty() ||
     macroWrites.isNotEmpty() || activationWrites.isNotEmpty() || injectionWrites.isNotEmpty() || !historyWrites.isEmpty()
 
-private fun readCopySource(library: Library, session: Session, source: String, target: MacroTargetSnapshot? = null): String? {
+internal fun readCopySource(library: Library, session: Session, source: String, target: MacroTargetSnapshot? = null,
+                           onRead: ((String, String?, MacroVersion?) -> Unit)? = null): String? {
     val raw = source.trim().removeSurrounding("{{", "}}").trim()
     val address = canonicalWriteAddress(raw.substringBefore('@')) ?: error("源宏地址无效")
     val selector = raw.substringAfter('@', "latest")
     require(validVersionSelector(selector)) { "源宏版本选择无效" }
+    // A captured write target is a pre-write value, not a read of a newly accepted dependency.
     if (selector == "latest" && target?.address == address) return target.text.takeIf { target.enabled }
     val version = MacroReferences.selectVersion(library, session, address, selector)
     if (selector == "latest" && version == null && address in session.currentOnlyMacros &&
         (address.startsWith("result.") || address.startsWith("state."))) return null
     if (address.startsWith("state.") && selector == "latest")
         return session.state[address.substring(6)]?.takeIf { version?.enabled != false }
-    if (version != null) return version.text.takeIf { version.enabled }
+    if (version != null) return version.text.takeIf { version.enabled }.also { onRead?.invoke(address, it, version) }
     if (selector != "latest") return null
     return when {
         address.startsWith("state.") -> session.state[address.substring(6)]
         else -> MacroReferences.baseValue(library, session, address)
-    }
+    }.also { onRead?.invoke(address, it, null) }
 }
 
 internal fun ActionDescriptor.validate(arguments: Map<String, String>, path: String): List<Issue> = buildList {

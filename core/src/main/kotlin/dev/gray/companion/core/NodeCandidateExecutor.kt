@@ -19,20 +19,22 @@ internal class NodeCandidateExecutor(
         ref: PlannedNode,
         invocation: ActionContext,
         correction: String?,
+        onProcessedPreview: suspend (String, ReasoningSnapshot?) -> Unit,
         onReasoningUpdate: suspend (ReasoningSnapshot) -> Unit,
         onClearStream: suspend () -> Unit
     ): ValidatedCandidate {
+        val library = invocation.library ?: ExecutionResources.forWorkflow(library, ref.workflow.id, semantics.version)
         val pureModel = ref.action?.descriptor?.execution == ActionExecution.PURE_MODEL
         suspend fun executeCandidate(context: ActionContext,
                                      onReasoning: suspend (ReasoningSnapshot) -> Unit = {}): ValidatedCandidate {
             val model = ref.action?.descriptor?.usesModel == true
             if (!semantics.reasoningArchives || !model) {
                 val outcome = semaphore.withPermit { ref.action!!.handler.execute(context) }
-                return ValidatedCandidate(outcomeValidator.validate(ref, invocation, outcome),
+                return BodyOnlyArchives.candidate(outcomeValidator.validate(ref, invocation, outcome), semantics.version,
                     outcome.text.takeIf { model && (semantics.retainModelResults || pureModel && ref.node.outputSlot == OutputSlot.BODY) })
             }
             val parsing = ref.node.reasoningParsing ?: library.reasoningParsing
-            val captured = CandidateModelGateway(context.gateway, parsing, onReasoning)
+            val captured = CandidateModelGateway(context.gateway, parsing, semantics.version, onReasoning)
             try {
                 val outcome = semaphore.withPermit { ref.action!!.handler.execute(context.copy(gateway = captured)) }
                 fun requireCanonicalBody(text: String) {
@@ -41,18 +43,18 @@ internal class NodeCandidateExecutor(
                 val capture = captured.singleCapture
                 if (capture != null) {
                     requireCanonicalBody(capture.body)
-                    return ValidatedCandidate(outcomeValidator.validate(ref, invocation, outcome),
+                    return BodyOnlyArchives.candidate(outcomeValidator.validate(ref, invocation, outcome), semantics.version,
                         capture.body, capture.fullText, capture.reasoning)
                 }
                 if (captured.requestCount == 0) {
                     val parsed = ReasoningTextParser.parse(outcome.text, parsing)
                     requireCanonicalBody(parsed.text)
-                    return ValidatedCandidate(outcomeValidator.validate(ref, invocation, outcome.copy(text = parsed.text)),
+                    return BodyOnlyArchives.candidate(outcomeValidator.validate(ref, invocation, outcome.copy(text = parsed.text)), semantics.version,
                         parsed.text, reasoningSnapshot = parsed.reasoning,
                         provenanceNote = "动作声明模型结果，但未经过模型网关；完整响应来源未经核验")
                 }
                 requireCanonicalBody(outcome.text)
-                return ValidatedCandidate(outcomeValidator.validate(ref, invocation, outcome),
+                return BodyOnlyArchives.candidate(outcomeValidator.validate(ref, invocation, outcome), semantics.version,
                     provenanceNote = if (captured.requestCount > 1) "动作组合了多个模型请求；不推定单一原文和思考来源"
                         else "动作未返回完整模型响应；不推定原文和思考来源")
             } catch (failure: ReasoningFormatFailure) {
@@ -64,15 +66,23 @@ internal class NodeCandidateExecutor(
         val profile = invocation.profile ?: throw NodeExecutionFailure(ref, "未选择模型", RecoveryFailureKind.CONFIGURATION, retryable = false)
         val capacity = gateway.maxParallelCandidates(profile).coerceIn(1, 2)
         val sourceAddress = "result.${ref.node.outputKey}"
-        val hasDirectContract = outcomeValidator.hasDirectContract(sourceAddress)
+        val hasDirectContract = outcomeValidator.hasDirectContract(sourceAddress, invocation)
         val streamFirst = ref.node.visible && !hasDirectContract &&
             (semantics.provisionalProcessedOutput || ref.node.outputProcessing.isEmpty() &&
                 !(ref.node.regexOutputCopy.enabled && ref.node.regexOutputCopy.display && ref.node.outputSlot == OutputSlot.BODY))
+        val processPreview = semantics.streamingProcessedOutput &&
+            (ref.node.outputProcessing.isNotEmpty() || ref.node.regexOutputCopy.enabled &&
+                ref.node.regexOutputCopy.display && ref.node.outputSlot == OutputSlot.BODY)
         var serialFallback = false
         var lastFailure = NodeExecutionFailure(ref, "模型调用失败", RecoveryFailureKind.MODEL_REQUEST)
         for (round in 0..2) {
             val width = if (round == 0 || serialFallback) 1 else capacity
             var streamed = false
+            val streamedBody = StringBuilder()
+            var lastPreview = ""
+            var lastPreviewSize = 0
+            var lastPreviewAt = 0L
+            var latestReasoning: ReasoningSnapshot? = null
             val received = Channel<Pair<ValidatedCandidate?, NodeExecutionFailure?>>(width)
             val winner = supervisorScope {
                 val tasks = (0 until width).map { async {
@@ -89,13 +99,30 @@ internal class NodeCandidateExecutor(
                             onDelta = { delta ->
                                 if (round == 0 && streamFirst) {
                                     streamed = true
-                                    invocation.onDelta(delta)
+                                    if (processPreview) {
+                                        streamedBody.append(delta)
+                                        val size = streamedBody.length
+                                        val now = System.nanoTime()
+                                        // Small replies update immediately. Longer replies coalesce work on the
+                                        // growing prefix without delaying the strict final correction.
+                                        if (size <= 512 || size - lastPreviewSize >= maxOf(32, size / 64) ||
+                                            now - lastPreviewAt >= 80_000_000L) {
+                                            lastPreviewSize = size
+                                            lastPreviewAt = now
+                                            val preview = outcomeValidator.previewBody(ref, invocation, streamedBody.toString()).orEmpty()
+                                            if (preview != lastPreview) {
+                                                lastPreview = preview
+                                                onProcessedPreview(preview, latestReasoning)
+                                            }
+                                        }
+                                    } else invocation.onDelta(delta)
                                 }
                             }
                         )
                         executeCandidate(requestContext) { reasoning ->
                             if (round == 0 && streamFirst && ref.workflow.effectiveTrigger() != RuntimeEvents.HISTORY_PROCESS) {
                                 streamed = true
+                                latestReasoning = reasoning
                                 onReasoningUpdate(reasoning)
                             }
                         } to null

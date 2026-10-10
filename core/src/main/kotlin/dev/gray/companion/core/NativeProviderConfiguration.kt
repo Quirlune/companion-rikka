@@ -23,12 +23,17 @@ object NativeProviderConfiguration {
         val issues = mutableListOf<Issue>()
         val pending = ArrayDeque<Pair<String, Any>>()
         val seen = Collections.newSetFromMap(IdentityHashMap<Any, Boolean>())
+        fun validateResources(resources: Library, path: String, executionVersion: Int? = null) {
+            issues += ExecutionResources.validate(resources, executionVersion).map { it.copy(path = "$path.${it.path}") }
+        }
         pending.addLast("library" to library)
         while (pending.isNotEmpty()) {
             val (path, value) = pending.removeFirst()
             if (!seen.add(value)) continue
             when (value) {
                 is Library -> {
+                    validateResources(value, path)
+                    value.memoryExecutionView?.let { pending.addLast("$path.memoryExecutionView.library" to it.library) }
                     value.connections.forEach { pending.addLast("$path.connections.${it.id}" to it) }
                     value.profiles.forEach { pending.addLast("$path.profiles.${it.id}" to it) }
                     value.sessions.forEach { pending.addLast("$path.sessions.${it.id}" to it) }
@@ -36,9 +41,36 @@ object NativeProviderConfiguration {
                 }
                 is ApiConnection -> issues += validateProvider(value.nativeProvider, "$path.nativeProvider")
                 is ModelProfile -> issues += validateModel(value.nativeModel, "$path.nativeModel")
-                is Session -> value.pendingRun?.let { pending.addLast("$path.pendingRun" to it) }
+                is Session -> {
+                    value.pendingRun?.let { pending.addLast("$path.pendingRun" to it) }
+                    value.executableWorld?.let { pending.addLast("$path.executableWorld" to it) }
+                    value.turnRecords.forEachIndexed { index, record ->
+                        pending.addLast("$path.turnRecords.$index.checkpoint.runtime" to record.checkpoint.runtime)
+                        record.variants.forEachIndexed { variantIndex, variant ->
+                            pending.addLast("$path.turnRecords.$index.variants.$variantIndex.after" to variant.after)
+                        }
+                    }
+                }
+                is RuntimeSnapshot -> value.completedWorld?.let { pending.addLast("$path.completedWorld" to it) }
+                is CompletedWorld -> {
+                    // Version admission belongs to the containing execution, even if this Library
+                    // instance has already been visited through another snapshot.
+                    validateResources(value.library, "$path.library", value.executionVersion)
+                    if (value.library.sessions.isNotEmpty() || value.library.savedChats.isNotEmpty() ||
+                        value.library.chatFolders.isNotEmpty())
+                        issues += Issue("$path.library", "分支资源环境不能包含会话或收藏")
+                    pending.addLast("$path.library" to value.library)
+                    value.environments.forEachIndexed { index, environment ->
+                        val session = environment.session
+                        if (session.turnRecords.isNotEmpty() || session.pendingRun != null || session.executableWorld != null)
+                            issues += Issue("$path.environments.$index.session", "重算环境不能递归包含分支或恢复记录")
+                        pending.addLast("$path.environments.$index.session" to session)
+                    }
+                }
                 is RunRecovery -> {
+                    validateResources(value.frozenResources, "$path.frozenResources", value.executionVersion)
                     pending.addLast("$path.frozenResources" to value.frozenResources)
+                    pending.addLast("$path.checkpoint.runtime" to value.checkpoint.runtime)
                     pending.addLast("$path.initialSession" to value.initialSession)
                     value.regenerationBase?.let { pending.addLast("$path.regenerationBase" to it) }
                     value.environments.forEachIndexed { index, environment ->

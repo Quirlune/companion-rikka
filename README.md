@@ -1,46 +1,31 @@
-# Companion
+# velune
 
-Android companion and world/RP workflows, using the original native RikkaHub frontend with an independent Kotlin execution core.
+Android 对话与角色工作流应用，复用 RikkaHub 原生前端，使用独立 Kotlin 核心管理提示词、调用、分支、扩展、卡片与记忆。
 
-Character cards anchor a conversation. Main calls contain the primary response and optional workflows. Prompt packages store referenced material. Call groups package optional behavior. Macros, conditions, history projection, inline text processing and native status displays connect these resources.
+当前源码基线：**0.57-preview / versionCode225**，资源 wire30，新执行语义23，SQLite1。兼容包名和资源格式继续使用 `companion`；应用名称为 velune。
 
-Native resource editors provide a shared display name / English slug dialog and a multi-select tag catalogue under prompt packages. Memory settings are an independent destination below call groups; the drawer user header opens persona selection/editing. Static character/package queries support loaded and activated entry selection by slug and tags. Dynamic output query addresses and folder selection remain unbound; existing result addresses stay authoritative.
+## 给模型的入口
 
-Regex output copies, workflow-completed triggers, source-backed memory and independently versioned History views use the same execution/recovery core. Generic local HTML/CSS macro templates supplement native text/progress/XML displays without adding a JSON-specific dashboard.
+- **制作扩展**：[AI 导入与扩展指南](docs/AI_IMPORT_GUIDE.txt) → [机器字段参考](docs/AI_IMPORT_API_REFERENCE.json) → [完整示例与工具](docs/examples/)。
+- **修改程序**：[AGENTS.md](AGENTS.md) → [当前架构](docs/ARCHITECTURE.md) → [开发维护手册](docs/DEVELOPMENT.md)。
+- **转到 Codex 云端开发**：[云端接手说明](docs/CODEX_CLOUD.md)。
+- **查实际交付证据**：[HANDOFF](docs/HANDOFF.md)，以最近条目为准。历史笔记不是当前设计规范。
 
-New executions always archive model results with their captured original text. Program writes normally replace the current value, with optional trajectory recording and an independent option for regex copies. Complete per-round snapshots remain available for branches, variants and recovery. An optional main-call body source freezes a processed macro's TEXT or inert HTML into the original message and generation branch; older floors never resolve today's macros or templates. HTML has explicit semantic text for History/copy/export.
+主调用负责正文与独立正文外观。扩展关联调用组，调用组包含调用与独立卡片；卡片从输出提取字段，可放正文、侧栏、输入框上方或顶部菜单。记忆和自动选项是有专用设置页的额外扩展，提示词仍在完整编辑器内可见可改。
 
-History exposes archived model body and final display body as separate projections over saved messages. Source-linked small summaries can form parent summaries; reference-backed views retain compression choices without copying whole chats. Each History occurrence may configure its own range, floor wrappers and outgoing API roles in the native macro editor. Original author identity stays separate from the API role. A sole History block emits structured messages; mixed text uses the outer block's role.
+## 构建
 
-Configuration JSON packages support resource imports and declarative edits/bindings with preview, atomic application and conflict-aware undo. Multiple authored openings use the native message variant arrows. Optional reasoning-tag parsing excludes reasoning from both body History sources while retaining its own archive; streamed regex output receives final correction.
-
-Current delivery: **0.35-preview**, architecture revision35, resource wire10 (reads1–10), new execution8 (old journals1–7 retain their accepted semantics), SQLite schema1 and recovery format1. The maintainability refactor centralizes compatibility policies/runtime transfers and separates model candidates, import preparation and resource-edit rules from orchestration. This is a development project. Real provider behavior, broad device adaptation and runtime plugin installation are not claimed as complete.
-
-## Source and architecture
-
-- `core/`: platform-independent resource, prompt, workflow and recovery logic.
-- `app/src/main/java/dev/gray/companion/`: Android controller, repository, gateway and editors.
-- `app/src/main/java/me/rerere/rikkahub/companion/`: projection into the reused native frontend.
-- [Current architecture](docs/ARCHITECTURE.md) describes invariants and extension boundaries.
-- [Maintainability and extension map](docs/MAINTAINABILITY.md) routes routine changes to their owner and records the revision34 refactor contracts.
-- [Continuation handoff](docs/HANDOFF.md) records the delivered state, local preview paths, evidence and next-task instructions.
-- [Prompt reference language v1](docs/PROMPT_LANGUAGE.md) distinguishes implemented History/static selectors from future compiler contracts; existing legacy macros remain compatible.
-- [Configuration packages](docs/CONFIGURATION_PACKAGES.md) describes imports, previews, atomic edits and undo.
-- [Upstream README](docs/UPSTREAM_README.md) preserves the original project documentation.
-
-Based on [RikkaHub](https://github.com/rikkahub/rikkahub), starting from commit `4391d5a5e4c9dd19f4713e3a759b4f6b325ae58b`. The repository retains upstream history and the AGPL-3.0 license. Original documentation and credits remain in the source tree.
-
-## Development
-
-Clone with submodules. Use JDK 21 and the Android SDK/NDK versions declared by the Gradle project. Configure the local SDK path in untracked `local.properties`, or use Android Studio's project setup.
+准备 JDK21、项目要求的 Android SDK，初始化子模块，再使用仓库内 Gradle wrapper。详细版本和最少检查见 [DEVELOPMENT](docs/DEVELOPMENT.md)。
 
 ```sh
 git clone --recurse-submodules https://github.com/Quirlune/companion-rikka.git
 cd companion-rikka
-./gradlew :core:test --tests 'dev.gray.companion.core.RecoveryTest'
-./gradlew :app:assembleDebug
+bash ./gradlew :core:test --tests 'dev.gray.companion.core.SummaryXmlTest'
+bash ./gradlew :app:assembleDebug
 ```
 
-Windows uses `gradlew.bat`. API keys and signing keys remain local; source checkout and prompt editing do not require a configured model. The existing desktop preview launcher belongs to the local workspace, not the repository's portable setup.
+Windows 使用 `gradlew.bat`。本地与云端默认 debug 签名可能不同，不能保证覆盖安装；不要为升级而卸载有数据的应用。普通开发不需要真实模型密钥。
 
-Inherited GitHub publishing workflows are archived in `.github/upstream-workflows/`; Actions are disabled in this development repository until intentionally configured.
+## 来源
+
+基于 [RikkaHub](https://github.com/rikkahub/rikkahub)，保留上游历史与 AGPL-3.0 许可证。初始上游提交 `4391d5a5e4c9dd19f4713e3a759b4f6b325ae58b`。原介绍保留在 [UPSTREAM_README](docs/UPSTREAM_README.md)。上游发布工作流归档于 `.github/upstream-workflows/`，不要顺手启用发布。

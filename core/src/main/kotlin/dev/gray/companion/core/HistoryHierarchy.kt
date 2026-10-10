@@ -34,6 +34,12 @@ internal class HistoryHierarchy(
         }
     }
 
+    fun belongsToFamilies(id: String, workflowIds: Set<String>): Boolean {
+        val item = segments[id] ?: return false
+        return if (item.childSegmentIds.isEmpty()) item.workflowId in workflowIds
+            else item.childSegmentIds.all { belongsToFamilies(it, workflowIds) }
+    }
+
     fun roots(eligible: Collection<HistoryMemorySegment>): List<HistoryMemorySegment> {
         val children = eligible.flatMapTo(mutableSetOf()) { it.childSegmentIds }
         return eligible.filter { it.id !in children }.sortedWith(compareBy<HistoryMemorySegment> {

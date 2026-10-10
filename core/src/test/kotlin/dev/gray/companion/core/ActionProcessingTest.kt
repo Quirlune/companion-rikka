@@ -129,8 +129,8 @@ class ActionProcessingTest {
         assertTrue(seenMessages.any { it.role == Role.USER && it.text == "hello!" })
         assertTrue(seenMessages.any { it.role == Role.SYSTEM && it.text == "abc!" })
         assertEquals("done", result.replies.single().text)
-        // Current executions stream provisional model body, then replace it with the processed body.
-        assertEquals("raw", updates.filter { it.visible && !it.replace }.joinToString("") { it.text })
+        // Current executions preview the accumulated body through the output processor.
+        assertEquals("done", updates.filter { it.visible && it.replace }.first().text)
         assertEquals("done", updates.last { it.visible && it.replace }.text)
         assertEquals("raw", result.replies.single().rawText)
         assertEquals(listOf("done"), updates.mapNotNull { it.progress }.last().replies.map { it.text })

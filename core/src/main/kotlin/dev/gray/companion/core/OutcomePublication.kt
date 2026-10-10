@@ -23,11 +23,14 @@ internal class OutcomePublisher(
         rawModelText: String? = null,
         fullResponseText: String? = null, reasoningSnapshot: ReasoningSnapshot? = null
     ): RecoveryReceipt {
+        val library = ExecutionResources.forWorkflow(library, ref.workflow.id, executionVersion)
         val origin = ResultOrigin(resourceByWorkflow.getValue(ref.workflow.id), ref.workflow.id,
             ref.node.id, ref.node.resultCategory)
+        if (semantics.independentContextOrder && outcome.injectionWrites.any { it.block != null && (it.contextOrder ?: 1) < 1 })
+            throw NodeExecutionFailure(ref, "上下文顺序须为正整数", RecoveryFailureKind.CONFIGURATION, retryable = false)
         val patches = outcome.injectionWrites.map { patch ->
             val target = if (patch.block == null) null else injectionTarget(
-                main, actions, patch.targetWorkflowId, patch.targetNodeId)
+                main, actions, patch.targetWorkflowId, patch.targetNodeId, patch.targetBlockId, executionVersion)
             patch to target
         }
         if (patches.any { (patch, target) ->
@@ -91,8 +94,8 @@ internal class OutcomePublisher(
                 MacroReferences.publish(history, address, value, enabled, origin, turn, userMessageId, contentOrigin,
                     minimumVersion = head?.version ?: 0, precedingGap = head?.gap,
                     rawText = rawModelText.takeIf { modelOwnResult },
-                    fullResponseText = fullResponseText.takeIf { modelOwnResult },
-                    reasoningSnapshot = reasoningSnapshot.takeIf { modelOwnResult })
+                    fullResponseText = BodyOnlyArchives.fullResponse(fullResponseText, executionVersion).takeIf { modelOwnResult },
+                    reasoningSnapshot = BodyOnlyArchives.reasoning(reasoningSnapshot, executionVersion).takeIf { modelOwnResult })
                 heads.remove(address)
             } else {
                 val number = Math.addExact(maxOf(head?.version ?: 0, history[address]?.lastOrNull()?.version ?: 0), 1)
@@ -137,7 +140,12 @@ internal class OutcomePublisher(
             injectionRemovals = patches.map { (patch, _) -> InjectionIdentity(origin.resourceId, patch.id) },
             injectionAdds = patches.mapNotNull { (patch, target) -> patch.block?.let { block ->
                 PromptInjection(patch.id, block, origin.copy(category = ""), target!!.workflowId, target.nodeId,
-                    patch.scope, if (patch.scope == InjectionScope.TURN) userMessageId else null)
+                    patch.scope, if (patch.scope == InjectionScope.TURN) userMessageId else null,
+                    pluginOwnerIds = if (semantics.bodyOnlyArchives)
+                        PluginParticipation.injectionOwners(library, current, origin.resourceId) else emptyList(),
+                    targetBlockId = target.blockId,
+                    queueOrder = if (executionVersion == 10) ref.priority else 0,
+                    contextOrder = if (semantics.independentContextOrder) patch.contextOrder ?: 1 else null)
             } },
             historyWrites = historyPatch, headWrites = headWrites, headRemovals = headRemovals
         )
@@ -148,7 +156,8 @@ internal class OutcomePublisher(
             ChatMessage(role = Role.ASSISTANT, text = text, outputSlot = ref.node.outputSlot,
                 turnId = userMessageId, workflowId = ref.workflow.id, nodeId = ref.node.id,
                 speakerName = library.characters.firstOrNull { it.id == current.characterId }?.name,
-                rawText = rawModelText.takeIf { ref.node.outputSlot == OutputSlot.BODY }, reasoningSnapshot = reasoningSnapshot)
+                rawText = rawModelText.takeIf { ref.node.outputSlot == OutputSlot.BODY },
+                reasoningSnapshot = BodyOnlyArchives.displayReasoning(reasoningSnapshot, executionVersion))
         else null
         return RecoveryReceipt(ref.key, outcome, reply, publication)
     }

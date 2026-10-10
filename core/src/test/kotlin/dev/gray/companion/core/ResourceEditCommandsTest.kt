@@ -96,7 +96,7 @@ class ResourceEditCommandsTest {
         assertTrue(ResourceEditCommands.apply(guarded, cycle).issues.any { "依赖已改变" in it.message })
     }
 
-    @Test fun copyRemapsInternalGraphHistoryTilesAndKeepsCollectionsIndependent() {
+    @Test fun copyRemapsInternalGraphHistoryAndDiscardsRetiredTiles() {
         fun checked(result: ExtensionEditResult): Library {
             assertNotNull(result.issues.joinToString("\n") { "${it.path}: ${it.message}" }, result.library)
             return requireNotNull(result.library)
@@ -121,8 +121,9 @@ class ResourceEditCommandsTest {
         assertEquals(copied.workflows.first().id, copied.workflows.last().afterWorkflowId)
         assertEquals(listOf(copied.workflows.first().nodes.first().id), copied.workflows.first().nodes.last().dependsOn)
         assertNotEquals(old.history.processor.workflow.id, copied.history.processor.workflow.id)
-        assertEquals(copied.tiles.single().id, copied.bodySourceTileId)
-        assertEquals("{{result.tone}}", copied.tiles.single().template)
+        assertTrue(copied.tiles.isEmpty())
+        assertNull(copied.bodySourceTileId)
+        assertEquals("", copied.bodyTextTemplate)
         assertTrue(copied.extensionBindings.isEmpty())
         assertTrue(copied.extensionBindingOrigins.isEmpty())
         assertEquals(library.extensions, next.extensions)

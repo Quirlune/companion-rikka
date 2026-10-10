@@ -45,7 +45,8 @@ object ResourceLocations {
     fun resolveIssue(library: Library, issue: Issue): ResourceLocation? {
         val issuePath = issue.path
         // Longest exact registered target wins, retaining argument and every child ID.
-        val fields = resources(library).flatMap { ExtensionFieldRegistry.list(library, it) }.map { fromField(it.target) }
+        val descriptors = resources(library).flatMap { ExtensionFieldRegistry.list(library, it) }
+        val fields = descriptors.map { fromField(it.target) }
         fields.sortedByDescending { path(it).length }.firstOrNull { issuePath == path(it) || issuePath.startsWith(path(it) + ".") }?.let { return it }
         // Registry failures retain IDs even when the addressed child disappeared in another editor.
         for (ref in resources(library)) {
@@ -74,12 +75,12 @@ object ResourceLocations {
                         node.blocks.forEach { add(ResourceLocation(ref, workflowId = workflow.id, nodeId = node.id, blockId = it.id)) }
                     }
                 }
-                val tiles = when (ref.kind) {
-                    ExtensionResourceKind.MAIN -> library.mainCalls.first { it.id == ref.id }.tiles
-                    ExtensionResourceKind.GROUP -> library.groups.first { it.id == ref.id }.tiles
+                val cards = when (ref.kind) {
+                    ExtensionResourceKind.MAIN -> library.mainCalls.first { it.id == ref.id }.cards
+                    ExtensionResourceKind.GROUP -> library.groups.first { it.id == ref.id }.cards
                     else -> emptyList()
                 }
-                tiles.forEach { if (issuePath == "tile.${it.id}" || issuePath.startsWith("tile.${it.id}.")) add(ResourceLocation(ref, section = "tiles.${it.id}")) }
+                cards.forEach { if (issuePath == "card.${it.id}" || issuePath.startsWith("card.${it.id}.")) add(ResourceLocation(ref, section = "cards.${it.id}")) }
             }
         }
         val matches = locations.mapNotNull { candidate ->
@@ -88,7 +89,7 @@ object ResourceLocations {
             val prefixes = listOfNotNull(path(candidate),
                 path(candidate).takeIf { candidate.resource.kind == ExtensionResourceKind.PACKAGE }?.replaceFirst("package.", "pack."),
                 candidate.entryId?.let { "entry.$it" }, workflowPath,
-                candidate.section?.takeIf { it.startsWith("tiles.") }?.let { "tile.${it.removePrefix("tiles.")}" })
+                candidate.section?.takeIf { it.startsWith("cards.") }?.let { "card.${it.removePrefix("cards.")}" })
             prefixes.filter { issuePath == it || issuePath.startsWith("$it.") }.maxOfOrNull { it.length }?.let { candidate to it }
         }
         val longest = matches.maxOfOrNull { it.second } ?: return null
@@ -96,24 +97,12 @@ object ResourceLocations {
         val corresponding = fields.filter { it.resource == found.resource && it.entryId == found.entryId &&
             it.workflowId == found.workflowId && it.nodeId == found.nodeId && it.blockId == found.blockId }
         val suffix = issuePath.substringAfterLast('.')
-        val preferred = when (suffix) {
-            "text" -> ExtensionField.ENTRY_TEXT
-            "template" -> ExtensionField.BLOCK_TEMPLATE
-            "description" -> ExtensionField.CHARACTER_DESCRIPTION
-            "role" -> ExtensionField.BLOCK_ROLE
-            "enabled" -> when { found.blockId != null -> ExtensionField.BLOCK_ENABLED; found.nodeId != null -> ExtensionField.NODE_ENABLED; found.workflowId != null -> ExtensionField.WORKFLOW_ENABLED; found.entryId != null -> ExtensionField.ENTRY_ENABLED; else -> null }
-            "temperature" -> ExtensionField.NODE_TEMPERATURE
-            "topP" -> ExtensionField.NODE_TOP_P
-            "maxTokens" -> ExtensionField.NODE_MAX_TOKENS
-            "reasoning" -> ExtensionField.NODE_REASONING
-            "modelProfileId" -> ExtensionField.WORKFLOW_MODEL
-            "profileId" -> ExtensionField.NODE_MODEL
-            "priority" -> ExtensionField.WORKFLOW_PRIORITY
-            "queued" -> ExtensionField.WORKFLOW_QUEUED
-            else -> if (found.blockId != null && issuePath.endsWith("block.${found.blockId}")) ExtensionField.BLOCK_TEMPLATE else null
-        }
+        val correspondingTargets = corresponding.mapNotNull { it.field }.toSet()
+        val preferred = descriptors.singleOrNull { it.target in correspondingTargets && it.issueKey == suffix }?.target
+            ?: corresponding.singleOrNull { it.field?.field == ExtensionField.BLOCK_TEMPLATE &&
+                issuePath.endsWith("block.${found.blockId}") }?.field
         if (".argument." in issuePath) corresponding.singleOrNull { it.field?.field == ExtensionField.NODE_ARGUMENT && it.field.argDescriptorKey == issuePath.substringAfter(".argument.") }?.let { return it }
-        return corresponding.singleOrNull { preferred != null && it.field?.field == preferred } ?: found.copy(section = found.section ?: suffix)
+        return corresponding.singleOrNull { preferred != null && it.field == preferred } ?: found.copy(section = found.section ?: suffix)
     }
 
     /** All identifiable sources are returned. Multiple result producers require an explicit UI choice. */
@@ -149,12 +138,15 @@ object ResourceTemplateSlots {
         else -> emptyList()
     }
 
-    fun list(library: Library): List<ResourceTemplateSlot> = buildList {
+    fun list(library: Library, executionVersion: Int = ExecutionSemantics.CURRENT): List<ResourceTemplateSlot> = buildList {
         for (ref in ResourceLocations.resources(library)) {
             val root = ResourceLocation(ref)
             fun text(location: ResourceLocation, section: String, value: String) { add(ResourceTemplateSlot(location.copy(section = section), value)) }
             fun condition(location: ResourceLocation, value: Condition?) {
-                value?.let { text(location, "condition.key", it.key); text(location, "condition.value", it.value); text(location, "condition.expression", it.expression) }
+                value?.let {
+                    val prefix = location.section?.let { "$it.condition" } ?: "condition"
+                    text(location, "$prefix.key", it.key); text(location, "$prefix.value", it.value); text(location, "$prefix.expression", it.expression)
+                }
             }
             fun recognition(location: ResourceLocation, value: Recognition?, prefix: String = "recognition") {
                 value ?: return
@@ -182,6 +174,10 @@ object ResourceTemplateSlots {
                 for (node in workflow.nodes) {
                     val nl = wl.copy(nodeId = node.id)
                     text(nl, "inputTemplate", node.inputTemplate)
+                    node.cardDefinition?.fields?.forEachIndexed { index, field ->
+                        text(nl, "cardDefinition.fields.$index.source", field.source)
+                    }
+                    condition(nl.copy(section = "cardDefinition"), node.cardDefinition?.condition)
                     condition(nl, node.condition); recognition(nl, node.recognition)
                     processing(nl, node.inputProcessing, "inputProcessing"); processing(nl, node.outputProcessing, "outputProcessing")
                     text(nl, "macroProcess.initial", node.macroProcess.initial)
@@ -194,6 +190,7 @@ object ResourceTemplateSlots {
                         val target = ExtensionFieldRef(ref.kind, ref.id, ExtensionField.BLOCK_TEMPLATE, workflowId = workflow.id, nodeId = node.id, blockId = block.id)
                         val bl = nl.copy(blockId = block.id)
                         add(ResourceTemplateSlot(if (ExtensionFieldRegistry.describe(library, target) != null) ResourceLocations.fromField(target) else bl.copy(section = "template"), block.template))
+                        block.slotReferences.forEachIndexed { index, reference -> text(bl, "slotReferences.$index", reference) }
                         condition(bl, block.condition); recognition(bl, block.recognition)
                         processing(bl, block.processing, "processing")
                     }
@@ -201,7 +198,7 @@ object ResourceTemplateSlots {
             }
             val main = library.mainCalls.firstOrNull { ref.kind == ExtensionResourceKind.MAIN && it.id == ref.id }
             main?.let {
-                text(root, "bodyTextTemplate", it.bodyTextTemplate)
+                if (ExecutionSemantics(executionVersion).legacyTiles) text(root, "bodyTextTemplate", it.bodyTextTemplate)
                 text(root, "history.prefix", it.history.prefix); text(root, "history.suffix", it.history.suffix)
                 text(root, "history.floorPrefix", it.history.floorPrefix); text(root, "history.floorSuffix", it.history.floorSuffix)
                 it.history.insertions.forEach { insertion -> text(root, "history.insertions.${insertion.id}.template", insertion.template) }
@@ -209,7 +206,17 @@ object ResourceTemplateSlots {
                 it.history.floors.forEach { floor -> text(root, "history.floors.${floor.messageId}.prefix", floor.prefix.orEmpty()); text(root, "history.floors.${floor.messageId}.suffix", floor.suffix.orEmpty()) }
             }
             val group = library.groups.firstOrNull { ref.kind == ExtensionResourceKind.GROUP && it.id == ref.id }
-            (main?.tiles ?: group?.tiles).orEmpty().forEach { tile -> text(root, "tiles.${tile.id}.template", tile.template) }
+            if (ExecutionSemantics(executionVersion).legacyTiles) {
+                (main?.tiles ?: group?.tiles).orEmpty().forEach { tile -> text(root, "tiles.${tile.id}.template", tile.template) }
+            }
+            (main?.cards ?: group?.cards).orEmpty().forEach { card ->
+                val location = root.copy(section = "cards.${card.id}.definition")
+                text(root, "cards.${card.id}.sourceTemplate", card.sourceTemplate)
+                card.definition.fields.forEachIndexed { index, field ->
+                    text(root, "cards.${card.id}.definition.fields.$index.source", field.source)
+                }
+                condition(location, card.definition.condition)
+            }
         }
     }
 }

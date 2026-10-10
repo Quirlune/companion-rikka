@@ -7,7 +7,7 @@ object ResultReferences {
     fun declarations(library: Library, session: Session): List<ResultDeclaration> = buildList {
         fun addWorkflows(resourceId: String, workflows: List<Workflow>) {
             workflows.filter { it.enabled }.forEach { workflow ->
-                workflow.nodes.filter { it.enabled }.forEach { node ->
+                workflow.nodes.filter { it.enabled && PluginParticipation.nodeActive(library, session, it) }.forEach { node ->
                     val keys = linkedSetOf(node.outputKey)
                     if (node.regexOutputCopy.enabled) keys += node.regexOutputCopy.outputKey
                     if (node.actionId in setOf("macro.write", "macro.activate", "macro.process")) {

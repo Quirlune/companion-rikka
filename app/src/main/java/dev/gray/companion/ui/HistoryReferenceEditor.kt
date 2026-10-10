@@ -9,6 +9,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.gray.companion.core.*
 
+internal val historySourceRoleChoices = listOf<Pair<Role?, String>>(
+    null to "全部原始发言方", Role.USER to "原始用户（User）", Role.ASSISTANT to "原始助手（Assistant）", Role.SYSTEM to "原始系统（System）")
+
 /** Changes one History token in a prompt. This form never writes chat floors or main-call history settings. */
 @Composable
 internal fun HistoryReferenceEditor(
@@ -44,6 +47,11 @@ internal fun HistoryReferenceEditor(
             }
             if (selection.sourceKind == HistorySourceKind.MODEL_RAW) Text("早期楼层若没有归档模型原文，会报告缺失。",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            ChoiceLine("来源发言方", selection.sourceRole, historySourceRoleChoices) {
+                selection = selection.copy(sourceRole = it)
+            }
+            Text("按原聊天发言方筛选，再从匹配楼层中选择范围；下方发送 API 角色只改变本次投影，原楼层与发言者不变。",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             ChoiceLine("历史副本", selectedView, viewOptions) { selection = selection.copy(viewId = it, revision = null) }
             if (selectedView != null) {
                 ToggleLine("固定副本版本", selection.revision != null) {
@@ -52,7 +60,9 @@ internal fun HistoryReferenceEditor(
                 selection.revision?.let { revision -> NumberLine("副本版本号", revision, 1) { selection = selection.copy(revision = it) } }
             }
             HorizontalDivider()
-            Text("楼层范围", style = MaterialTheme.typography.titleMedium)
+            Text(if (selection.sourceRole == null) "楼层范围" else "匹配来源中的楼层范围", style = MaterialTheme.typography.titleMedium)
+            if (selection.sourceRole != null) Text("从开头／末尾计算的是筛选后第几条；每楼格式里的 {{floor}} 仍使用原历史楼层编号。",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 SuggestionChip(onClick = { selection = selection.copy(range = HistoryRange(
                     HistoryPoint(HistoryAnchor.START, 1.0), HistoryPoint(HistoryAnchor.START, 3.0)), rangeExplicit = true) },
@@ -72,7 +82,7 @@ internal fun HistoryReferenceEditor(
                     range = selection.range.copy(from = it), rangeExplicit = true) }
                 HistoryPointForm("范围终点（包含）", selection.range.through) { selection = selection.copy(
                     range = selection.range.copy(through = it), rangeExplicit = true) }
-            } else Text("不指定时，处理后当前历史沿用主调用的默认范围。",
+            } else Text(if (selection.sourceRole != null) "不指定范围时读取全部匹配楼层，不套用主调用的默认范围。" else "不指定时，处理后当前历史沿用主调用的默认范围。",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             HorizontalDivider()
             Text("本引用的每楼格式", style = MaterialTheme.typography.titleMedium)
@@ -80,6 +90,8 @@ internal fun HistoryReferenceEditor(
                 selection = selection.copy(format = if (it) (selection.format ?: HistoryReferenceFormat()) else null)
             }
             selection.format?.let { format ->
+                Text("独立投影使用这里的每楼与发言方规则，不再继承主调用的整体前后缀、消息合并、指定消息覆盖或历史插入项；楼层范围仍由上方选择。",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("前后缀默认留空；原始发言者与发给模型的 API 角色分别设置。",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 ChoiceLine("通用发送 API 角色", format.apiRole, listOf<Pair<Role?, String>>(

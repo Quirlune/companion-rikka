@@ -25,7 +25,11 @@ object MessageOperations {
         if (user.id != recovery.turnId || before.turnRecords.any { it.userMessageId == user.id })
             return unavailable("turn", "此轮已有记录或消息来源不一致")
         val checkpoint = recovery.checkpoint
-        if (checkpoint != captureCheckpoint(before)) return unavailable("turn", "恢复前检查点不一致")
+        // The new captured definitions are additive; compare the same runtime boundary as old
+        // journals without requiring the live caller to fabricate its captured resource world.
+        if (checkpoint.copy(runtime = checkpoint.runtime.copy(completedWorld = null)) !=
+            captureCheckpoint(before).let { it.copy(runtime = it.runtime.copy(completedWorld = null)) })
+            return unavailable("turn", "恢复前检查点不一致")
         val variant = variantFrom(result, checkpoint)?.copy(id = recovery.id)
             ?: return unavailable("turn", "宏版本前缀与运行前记录不一致")
         val selected = variant.copy(replies = emptyList(), replyIds = result.replies.map { it.id })
@@ -132,7 +136,8 @@ object MessageOperations {
         val user = latestUser(before) ?: return unavailable("turn", "找不到当前用户消息")
         if (before.turnRecords.any { it.userMessageId == user.id })
             return unavailable("turn", "此轮已有记录；重新生成请使用独立提交操作")
-        val checkpoint = captureCheckpoint(before)
+        val checkpoint = captureCheckpoint(before).let { it.copy(runtime = it.runtime.copy(
+            completedWorld = CompletedWorlds.checkpointWorld(result.completedWorld))) }
         val variant = variantFrom(result, checkpoint) ?: return unavailable("turn", "宏版本前缀与运行前记录不一致")
         val selected = variant.copy(replies = emptyList(), replyIds = variant.replies.map { it.id })
         val record = TurnRecord(user.id, checkpoint, listOf(selected), selected.id)
@@ -166,22 +171,9 @@ object MessageOperations {
         ), record.checkpoint.runtime))
     }
 
-    /** Historical rounds regenerate on a new conversation; the source future remains untouched. */
-    fun regenerationBase(session: Session, messageId: String): MessageOperationResult {
-        val target = session.messages.firstOrNull { it.id == messageId && !it.deleted }
-            ?: return unavailable("message.$messageId", "消息不存在或已删除")
-        val userId = (if (target.role == Role.USER) target.id else target.turnId)
-            ?: return unavailable("message.$messageId", "这条回复没有用户轮次来源")
-        if (latestUser(session)?.id == userId) {
-            val prepared = prepareRegeneration(session, messageId)
-            return if (prepared.succeeded) MessageOperationResult(session) else prepared
-        }
-        val record = session.turnRecords.firstOrNull { it.userMessageId == userId }
-            ?: return unavailable("message.$messageId", "较早的轮次没有运行状态检查点")
-        val selectedId = record.selectedVariantId
-            ?: return unavailable("message.$messageId", "这一轮没有可恢复的生成候选")
-        return forkAtVariant(session, userId, selectedId)
-    }
+    /** Historical candidates keep their conversation identity and archive their continuation. */
+    fun regenerationBase(session: Session, messageId: String): MessageOperationResult =
+        ConversationPaths.regenerationBase(session, messageId)
 
     /** Fork through a complete historical round with the chosen variant's recorded world. */
     fun forkAtVariant(session: Session, turnId: String, variantId: String): MessageOperationResult {
@@ -466,7 +458,7 @@ object MessageOperations {
             if (values.size > count) suffix[address] = values.drop(count)
         }
         if (checkpoint.macroLengths.any { (address, count) -> result.macroHistory[address].orEmpty().size < count }) return null
-        return TurnVariant(replies = result.replies, after = result.runtimeSnapshot(), macroAppends = suffix)
+        return TurnVariant(replies = result.replies, after = CompletedWorlds.compact(result.runtimeSnapshot()), macroAppends = suffix)
     }
 
     private fun macroPrefix(history: Map<String, List<MacroVersion>>, lengths: Map<String, Int>): Map<String, List<MacroVersion>>? {
@@ -478,9 +470,10 @@ object MessageOperations {
         (prefix.keys + appends.keys).associateWith { address -> prefix[address].orEmpty() + appends[address].orEmpty() }
 
     private fun materialize(session: Session, result: RunResult): Session =
-        session.withRuntime(result.runtimeSnapshot()).copy(macroHistory = result.macroHistory)
+        session.withRuntime(result.runtimeSnapshot()).copy(macroHistory = result.macroHistory,
+            executableWorld = if (session.executableWorld != null) result.completedWorld ?: session.executableWorld else null)
 
-    private fun restore(session: Session, runtime: RuntimeSnapshot): Session = session.withRuntime(runtime)
+    private fun restore(session: Session, runtime: RuntimeSnapshot): Session = CompletedWorlds.restore(session, runtime)
 
     private fun unavailable(path: String, message: String) = MessageOperationResult(issues = listOf(Issue(path, message)))
 }

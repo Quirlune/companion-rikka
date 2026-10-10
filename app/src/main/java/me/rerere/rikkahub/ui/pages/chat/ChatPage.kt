@@ -2,6 +2,7 @@ package me.rerere.rikkahub.ui.pages.chat
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -9,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
@@ -38,6 +41,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -60,6 +64,8 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.LeftToRightListBullet
+import me.rerere.hugeicons.stroke.MoreVertical
+import me.rerere.hugeicons.stroke.Search01
 import me.rerere.hugeicons.stroke.Menu03
 import me.rerere.hugeicons.stroke.MessageAdd01
 import me.rerere.hugeicons.stroke.View
@@ -595,6 +601,10 @@ internal fun TopBar(
     onUpdateTitle: (String) -> Unit,
     onOpenDrawer: (() -> Unit)? = null,
     onOpenMacroSidebar: (() -> Unit)? = null,
+    companionSubtitle: String? = null,
+    companionMenu: Boolean = false,
+    companionMenuEnabled: Boolean = true,
+    companionMenuContent: (@Composable (onClose: () -> Unit) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
@@ -637,9 +647,9 @@ internal fun TopBar(
                         style = MaterialTheme.typography.bodyMedium,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    if (model != null && provider != null) {
+                    if (companionSubtitle != null || (model != null && provider != null)) {
                         Text(
-                            text = "${assistant.name.ifBlank { stringResource(R.string.assistant_page_default_assistant) }} / ${model.displayName} (${provider.name})",
+                            text = companionSubtitle ?: "${assistant.name.ifBlank { stringResource(R.string.assistant_page_default_assistant) }} / ${model?.displayName} (${provider?.name})",
                             overflow = TextOverflow.Ellipsis,
                             maxLines = 1,
                             color = LocalContentColor.current.copy(0.65f),
@@ -652,23 +662,35 @@ internal fun TopBar(
             }
         },
         actions = {
-            if (onOpenMacroSidebar != null) IconButton(onClick = onOpenMacroSidebar) {
-                Icon(HugeIcons.View, "打开宏侧栏")
-            }
-            IconButton(
-                onClick = {
-                    onClickMenu()
+            if (companionMenu) {
+                var expanded by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { expanded = true }, enabled = companionMenuEnabled) {
+                        Icon(HugeIcons.MoreVertical, "卡片菜单", modifier = Modifier.rotate(90f))
+                    }
+                    DropdownMenu(expanded = expanded && companionMenuEnabled, onDismissRequest = { expanded = false }) {
+                        companionMenuContent?.invoke { expanded = false }
+                    }
                 }
-            ) {
-                Icon(if (previewMode) HugeIcons.Cancel01 else HugeIcons.LeftToRightListBullet, "Chat Options")
-            }
+            } else {
+                if (onOpenMacroSidebar != null) IconButton(onClick = onOpenMacroSidebar) {
+                    Icon(HugeIcons.View, "打开宏侧栏")
+                }
+                IconButton(
+                    onClick = {
+                        onClickMenu()
+                    }
+                ) {
+                    Icon(if (previewMode) HugeIcons.Cancel01 else HugeIcons.LeftToRightListBullet, "Chat Options")
+                }
 
-            IconButton(
-                onClick = {
-                    onNewChat()
+                IconButton(
+                    onClick = {
+                        onNewChat()
+                    }
+                ) {
+                    Icon(HugeIcons.MessageAdd01, "New Message")
                 }
-            ) {
-                Icon(HugeIcons.MessageAdd01, "New Message")
             }
         },
     )

@@ -5,6 +5,48 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ConfigurationImportPreparationTest {
+    @Test fun unsupportedCustomPreviewFormatDoesNotBecomeANativeBackup() {
+        val current = LibraryFormat.upgrade(Library())
+        val document = """{"format":"sillytavern.preview.v1","sanitized":true,
+          "character":{"data":{"name":"角色","description":"原文"}}}"""
+        val prepared = ConfigurationImportPreparer.prepare(document, current, "unsupported-format", false)
+        assertNull(prepared.draft)
+        assertTrue(prepared.issues.any { it.error && it.path == "import.format" && it.message.contains("不支持的导入格式") })
+        assertTrue(prepared.preview.changes.isEmpty())
+        assertTrue(prepared.preview.settings.isEmpty())
+        assertFalse(prepared.preview.undoable)
+        assertTrue(current.characters.isEmpty() && current.sessions.isEmpty())
+    }
+
+    @Test fun nativeSerializerIsRequiredForConfigBackupApplyAndUndo() {
+        val base = LibraryFormat.upgrade(Library())
+        val badConfig = """{"format":"companion.config.v1","resources":{"connections":[
+          {"id":"bad-native","name":"Malformed","nativeProvider":{"_formatVersion":1,"includeHistoryReasoning":[]}}
+        ]}}"""
+        val rejected = ConfigurationImportPreparer.prepare(badConfig, base, "bad-config", false)
+        assertNull(rejected.draft)
+        assertTrue(rejected.issues.any { it.error && it.path == "connections.bad-native.nativeProvider" })
+
+        // Core intentionally treats provider options as opaque. Android must reject even a supplied core plan.
+        val corePlan = requireNotNull(ConfigurationCommands.preview(badConfig, base).plan)
+        val supplied = ConfigurationImportDraft.Configuration("supplied", corePlan, emptyList())
+        assertNull(ConfigurationImportPreparer.apply(supplied, base).library)
+        val bad = requireNotNull(ConfigurationCommands.apply(corePlan, base).library)
+        assertNull(ConfigurationImportPreparer.prepare(LibraryFormat.encode(bad), base, "backup", false).draft)
+        val withChat = bad.copy(sessions = listOf(Session(id = "archived")))
+        assertNull(ConfigurationImportPreparer.prepare(LibraryFormat.encode(withChat), base, "chat-backup", false).draft)
+
+        // A repaired live value cannot be undone into an invalid native serializer payload.
+        val repair = ConfigurationCommands.preview("""{"format":"companion.config.v1","commands":[
+          {"op":"mergePatch","kind":"connection","id":"bad-native","patch":{"nativeProvider":null}}
+        ]}""", bad, ConfigurationAdmission::validateNative)
+        val repaired = ConfigurationCommands.apply(requireNotNull(repair.plan), bad, ConfigurationAdmission::validateNative)
+        assertNotNull(repaired.library)
+        val undo = ConfigurationCommands.undo(requireNotNull(repaired.receipt), requireNotNull(repaired.library), ConfigurationAdmission::validateNative)
+        assertNull(undo.library)
+        assertTrue(undo.issues.any { it.path == "connections.bad-native.nativeProvider" })
+    }
+
     @Test fun compiledDocumentKeepsSourceWarningsAndUsesTheSameStrictConfigurationReceipt() {
         val current = LibraryFormat.upgrade(Library(packages = listOf(PromptPackage(
             id = "unrelated", namespace = "unrelated", name = "原有资源"))))
@@ -60,19 +102,25 @@ class ConfigurationImportPreparationTest {
         val existing = Session(id = "existing", messages = listOf(ChatMessage(id = "old", text = "旧消息")))
         val current = LibraryFormat.upgrade(Library(sessions = listOf(existing), selectedSessionId = existing.id))
         val archived = Session(id = "archived", messages = listOf(ChatMessage(id = "new", text = "备份消息")))
-        val imported = LibraryFormat.upgrade(Library(sessions = listOf(archived), selectedSessionId = archived.id))
+        val pack = PromptPackage(id = "archived-pack", namespace = "archived", name = "备份设定")
+        val imported = LibraryFormat.upgrade(Library(packages = listOf(pack), sessions = listOf(archived), selectedSessionId = archived.id))
 
         val prepared = ConfigurationImportPreparer.prepare(LibraryFormat.encode(imported), current, "chat-preview", false)
         assertTrue(prepared.issues.toString(), prepared.issues.none { it.error })
         assertFalse(prepared.preview.undoable)
         assertTrue(prepared.draft is ConfigurationImportDraft.Legacy)
         assertTrue(prepared.issues.any { it.path == "import.chats" && !it.error })
+        assertEquals(listOf("archived-pack"), prepared.preview.changes.map { it.id })
+        assertEquals("create", prepared.preview.changes.single().operation)
+        assertTrue(prepared.preview.issues.any { it.path == "import.summary" && it.message.contains("聊天 1") })
+        assertTrue(prepared.preview.issues.any { it.path == "import.source" && it.message.contains("原生聊天备份") })
         assertEquals(listOf(existing), current.sessions)
 
         val applied = ConfigurationImportPreparer.apply(requireNotNull(prepared.draft), current)
         assertTrue(applied.issues.toString(), applied.issues.none { it.error })
         assertNull(applied.receipt)
         assertEquals(listOf(existing, archived), applied.library!!.sessions)
+        assertEquals(pack.id, applied.library!!.packages.single().id)
         assertEquals(existing.id, applied.library!!.selectedSessionId)
     }
 
