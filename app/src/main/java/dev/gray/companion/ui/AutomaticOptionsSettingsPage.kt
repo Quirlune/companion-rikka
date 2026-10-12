@@ -1,6 +1,9 @@
 package dev.gray.companion.ui
 
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -36,11 +39,72 @@ internal fun AutomaticOptionsSettingsPage(
         PromptReferenceChoice("选项数量", AutomaticOptions.COUNT_MACRO, "自动选项", "当前设置的选项数，仅在本次选项请求中可读"),
         PromptReferenceChoice("旧版语气文字", AutomaticOptions.LEGACY_STYLE_MACRO, "自动选项", "下方旧版文字原样插入，内部花括号不展开"),
     )
+    var editingMacroSource by remember { mutableStateOf<String?>(null) }
+    val previewContext = remember(library, selectedSession, draft) {
+        runCatching { AutomaticOptions.previewContext(library, selectedSession, draft) }
+    }
+    val previewMacro: (String) -> PromptMacroPreview = { token ->
+        val address = token.trim().removeSurrounding("{{", "}}").trim()
+        val local = address in setOf("state.automatic_options_protocol", "state.automatic_options_count", "state.automatic_options_legacy_style")
+        val label = when (address) {
+            "state.automatic_options_protocol" -> "编辑 XML 格式"
+            "state.automatic_options_count" -> "编辑选项数量"
+            "state.automatic_options_legacy_style" -> "编辑旧版语气"
+            else -> null
+        }
+        val context = previewContext.getOrNull()
+        val preview = when {
+            context == null -> PromptMacroPreview("", unavailableReason = previewContext.exceptionOrNull()?.message ?: "选项预览上下文不可用")
+            selectedSession == null && !local -> PromptMacroPreview("", unavailableReason = "尚未选择聊天，无法预览此宏")
+            !context.hasCompletedHistory && (address.startsWith("history") || address.contains(".in:history")) ->
+                PromptMacroPreview("", unavailableReason = "当前聊天还没有已完成的正文对话")
+            else -> resolvePromptMacroPreview(token, context.library, context.session)
+        }
+        if (local) preview.copy(sourceLabel = label, editSource = { editingMacroSource = address }) else preview
+    }
+    editingMacroSource?.let { address ->
+        AlertDialog(onDismissRequest = { editingMacroSource = null },
+            title = { Text(when (address) {
+                "state.automatic_options_count" -> "选项数量"
+                "state.automatic_options_legacy_style" -> "旧版语气"
+                else -> "XML 输出格式"
+            }) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("修改保留在当前草稿中，完成后继续编辑提示词。")
+                    when (address) {
+                        "state.automatic_options_legacy_style" -> OutlinedTextField(draft.prompt,
+                            { draft = draft.copy(prompt = it) }, modifier = Modifier.fillMaxWidth(), minLines = 3,
+                            label = { Text("旧版语气文字") })
+                        else -> {
+                            Select((1..AutomaticOptions.MAX_COUNT).toList(), draft.count, { draft = draft.copy(count = it) },
+                                modifier = Modifier.fillMaxWidth(), optionToString = { "$it 个" })
+                            if (address == "state.automatic_options_protocol") {
+                                Row { Text("生成选项标题", Modifier.weight(1f)); Switch(draft.titlesEnabled, { draft = draft.copy(titlesEnabled = it) }) }
+                                AutomaticOptions.effectiveItems(draft).forEachIndexed { index, spec ->
+                                    fun update(value: AutomaticOptionSpec) {
+                                        val items = draft.items.toMutableList()
+                                        while (items.size <= index) items += AutomaticOptionSpec()
+                                        items[index] = value
+                                        draft = draft.copy(items = items)
+                                    }
+                                    OutlinedTextField(spec.contentTag, { update(spec.copy(contentTag = it)) },
+                                        modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("选项 ${index + 1} 内容标签") })
+                                    if (draft.titlesEnabled) OutlinedTextField(spec.titleTag, { update(spec.copy(titleTag = it)) },
+                                        modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("选项 ${index + 1} 标题标签") })
+                                }
+                            }
+                        }
+                    }
+                }
+            }, confirmButton = { TextButton(onClick = { editingMacroSource = null }) { Text("完成") } })
+    }
+    CompositionLocalProvider(LocalPromptMacroPreview provides previewMacro) {
     if (editingPrompts) {
         PromptBlocksEditor(initial = draft.blocks.orEmpty(), references = references,
             onSave = { draft = draft.copy(blocks = it); editingPrompts = false },
             onBack = { editingPrompts = false }, title = "自动选项提示词", saving = saving, tags = sourceLibrary.promptTags)
-        return
+        return@CompositionLocalProvider
     }
     val node = AutomaticOptions.editingNode(draft)
     fun changeNode(value: WorkflowNode) { draft = AutomaticOptions.withEditingNode(draft, value) }
@@ -76,8 +140,7 @@ internal fun AutomaticOptionsSettingsPage(
                 Text("选项数量", style = MaterialTheme.typography.titleMedium)
                 Select((1..AutomaticOptions.MAX_COUNT).toList(), draft.count, { draft = draft.copy(count = it) },
                     modifier = Modifier.fillMaxWidth(), optionToString = { "$it 个" })
-                Select(AutomaticOptionsLayout.entries.toList(), draft.layout, { draft = draft.copy(layout = it) },
-                    modifier = Modifier.fillMaxWidth(), optionToString = { if (it == AutomaticOptionsLayout.ABOVE_HORIZONTAL) "输入框上方 · 横向滚动" else "输入框左侧 · 竖向排列" })
+                Text("选项在正文右下方竖排悬浮，仅条目本身带背景；点击标题可展开内容。", style = MaterialTheme.typography.bodySmall)
                 CardGroup {
                     item(headlineContent = { Text("生成选项标题") }, supportingContent = { Text("点击标题展开内容，再填入输入框") },
                         trailingContent = { Switch(draft.titlesEnabled, { draft = draft.copy(titlesEnabled = it) }, enabled = !saving) })
@@ -110,4 +173,5 @@ internal fun AutomaticOptionsSettingsPage(
             }
         }
     }
+}
 }

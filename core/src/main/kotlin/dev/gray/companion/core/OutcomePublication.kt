@@ -21,7 +21,8 @@ internal class OutcomePublisher(
         processingHistory: Boolean,
         automaticSegment: HistoryMemorySegment? = null,
         rawModelText: String? = null,
-        fullResponseText: String? = null, reasoningSnapshot: ReasoningSnapshot? = null
+        fullResponseText: String? = null, reasoningSnapshot: ReasoningSnapshot? = null,
+        modelFinishReason: String? = null
     ): RecoveryReceipt {
         val library = ExecutionResources.forWorkflow(library, ref.workflow.id, executionVersion)
         val origin = ResultOrigin(resourceByWorkflow.getValue(ref.workflow.id), ref.workflow.id,
@@ -66,7 +67,8 @@ internal class OutcomePublisher(
             outcome.stateWrites.forEach { (key, value) -> values["state.$key"] = value }
         val activations = outcome.activationWrites.mapKeys { (address, _) -> canonicalWriteAddress(address)!! }
         // Activating the action's own output preserves its existing text.
-        if (ownAddress !in activations) values.putIfAbsent(ownAddress, outcome.text)
+        if (ref.node.actionId != "user.macro.create" && ownAddress !in activations)
+            values.putIfAbsent(ownAddress, outcome.text)
         for (address in (values.keys + activations.keys).distinct()) {
             val copy = ref.node.regexOutputCopy
             val modelOwnResult = semantics.retainModelResults && address == ownAddress && ref.action?.descriptor?.usesModel == true
@@ -147,17 +149,19 @@ internal class OutcomePublisher(
                     queueOrder = if (executionVersion == 10) ref.priority else 0,
                     contextOrder = if (semantics.independentContextOrder) patch.contextOrder ?: 1 else null)
             } },
-            historyWrites = historyPatch, headWrites = headWrites, headRemovals = headRemovals
+            historyWrites = historyPatch, headWrites = headWrites, headRemovals = headRemovals,
+            userMacroWrites = outcome.userMacroWrites
         )
         val displayKey = ref.node.regexOutputCopy.takeIf { it.enabled && it.display && ref.node.outputSlot == OutputSlot.BODY }
             ?.outputKey ?: ref.node.outputKey
         val text = results[displayKey].orEmpty()
-        val reply = if (ref.node.visible && !processingHistory && text.isNotBlank())
+        val reply = if (ref.node.actionId != "user.macro.create" && ref.node.visible && !processingHistory && text.isNotBlank())
             ChatMessage(role = Role.ASSISTANT, text = text, outputSlot = ref.node.outputSlot,
                 turnId = userMessageId, workflowId = ref.workflow.id, nodeId = ref.node.id,
                 speakerName = library.characters.firstOrNull { it.id == current.characterId }?.name,
                 rawText = rawModelText.takeIf { ref.node.outputSlot == OutputSlot.BODY },
-                reasoningSnapshot = BodyOnlyArchives.displayReasoning(reasoningSnapshot, executionVersion))
+                reasoningSnapshot = BodyOnlyArchives.displayReasoning(reasoningSnapshot, executionVersion),
+                modelFinishReason = boundedModelFinishReason(modelFinishReason).takeIf(::modelResponseWasTruncated))
         else null
         return RecoveryReceipt(ref.key, outcome, reply, publication)
     }

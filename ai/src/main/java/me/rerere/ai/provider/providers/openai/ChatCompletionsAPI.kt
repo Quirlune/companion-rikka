@@ -49,6 +49,7 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
 import me.rerere.ai.util.KeyRoulette
+import me.rerere.ai.util.HttpException
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.configureSessionHeaders
 import me.rerere.ai.util.encodeBase64
@@ -100,11 +101,17 @@ class ChatCompletionsAPI(
             .configureSessionHeaders(providerSetting.baseUrl, params.sessionId)
             .build()
 
-        Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
-
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
-            throw Exception("Failed to get response: ${response.code} ${response.body?.string()}")
+            val detail = response.body?.stringSafe()?.let { raw ->
+                runCatching {
+                    val body = Json.parseToJsonElement(raw)
+                    if (providerSetting.baseUrl.toHttpUrl().host == "openrouter.ai")
+                        body.openRouterErrorDetail() else body.parseErrorDetail()
+                }.getOrNull()
+            }
+            throw HttpException(detail?.message ?: "模型服务请求失败", response.code, detail,
+                detail?.providerCode, detail?.providerName)
         }
 
         val bodyStr = response.body?.string() ?: ""
@@ -153,17 +160,12 @@ class ChatCompletionsAPI(
             .configureSessionHeaders(providerSetting.baseUrl, params.sessionId)
             .build()
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
-
-        // just for debugging response body
-        // println(client.newCall(request).await().body?.string())
-
         val decoder = ChatCompletionsStreamDecoder()
 
         fun sendChunks(chunks: Iterable<StreamChunk>) {
             chunks.forEach { chunk ->
                 trySend(chunk).onFailure { e ->
-                    Log.w(TAG, "onEvent: chunk dropped (${e?.message})")
+                    Log.w(TAG, "onEvent: chunk dropped")
                 }
             }
         }
@@ -175,7 +177,6 @@ class ChatCompletionsAPI(
                 type: String?,
                 data: String
             ) {
-                Log.d(TAG, "onEvent: $data")
                 try {
                     val result = decoder.accept(SseEvent(id = id, event = type, data = data))
                     sendChunks(result.chunks)
@@ -188,21 +189,18 @@ class ChatCompletionsAPI(
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 var exception = t
 
-                t?.printStackTrace()
-                println("[onFailure] 发生错误: ${t?.javaClass?.name} ${t?.message} / $response")
+                Log.w(TAG, "stream failed: HTTP ${response?.code ?: "unknown"}")
 
                 val bodyRaw = response?.body?.stringSafe()
                 try {
                     if (!bodyRaw.isNullOrBlank()) {
                         val bodyElement = Json.parseToJsonElement(bodyRaw)
-                        println(bodyElement)
-                        exception = bodyElement.parseErrorDetail()
-                        Log.i(TAG, "onFailure: $exception")
+                        exception = if (providerSetting.baseUrl.toHttpUrl().host == "openrouter.ai")
+                            bodyElement.openRouterErrorDetail() else bodyElement.parseErrorDetail()
                     }
                 } catch (e: Throwable) {
-                    Log.w(TAG, "onFailure: failed to parse from $bodyRaw")
-                    e.printStackTrace()
-                    exception = e
+                    Log.w(TAG, "onFailure: unable to parse provider error")
+                    exception = HttpException("无法读取模型服务错误详情")
                 } finally {
                     close(exception.withHttpStatus(response?.code))
                 }
@@ -223,6 +221,25 @@ class ChatCompletionsAPI(
         // trySend 在缓冲满时会静默丢弃 delta，导致回复中间缺字 (#1295)，因此缓冲必须无界
     }.buffer(Channel.UNLIMITED).flowOn(Dispatchers.IO)
 
+    /** OpenRouter's actionable upstream error can be JSON inside metadata.raw. Read only
+     * the named diagnostic fields; never put that raw body or request into the exception. */
+    internal fun JsonElement.openRouterErrorDetail(): HttpException {
+        val outer = this as? JsonObject
+        val error = outer?.get("error") as? JsonObject
+        val metadata = error?.get("metadata") as? JsonObject
+        val raw = metadata?.get("raw")?.jsonPrimitiveOrNull?.contentOrNull
+        val upstream = raw?.takeIf { it.length <= 16_384 }?.let {
+            runCatching { Json.parseToJsonElement(it) as? JsonObject }.getOrNull()
+        }
+        val upstreamError = upstream?.get("error") as? JsonObject
+        fun JsonObject?.field(name: String): String? = this?.get(name)?.jsonPrimitiveOrNull?.contentOrNull
+        val message = upstreamError.field("message") ?: error.field("message")
+            ?: outer.field("message") ?: "模型服务请求失败"
+        return HttpException(message,
+            providerCode = upstreamError.field("code") ?: error.field("code"),
+            providerName = metadata.field("provider_name") ?: metadata.field("provider"))
+    }
+
     private fun buildChatCompletionRequest(
         messages: List<UIMessage>,
         params: TextGenerationParams,
@@ -231,6 +248,23 @@ class ChatCompletionsAPI(
     ): JsonObject {
         val host = providerSetting.baseUrl.toHttpUrl().host
         val isOpenRouter = host == "openrouter.ai"
+        val level = params.reasoningLevel
+        if (!params.legacyGeneration) {
+            require(level == null || params.model.abilities.contains(ModelAbility.REASONING)) {
+                "模型未标记为支持推理，请移除推理参数或修正模型能力"
+            }
+            require(isModelAllowTemperature(params.model) ||
+                params.temperature == null && params.topP == null) {
+                "此模型不支持温度或 Top P，请从调用行为移除这些参数"
+            }
+            if (host == "api.openai.com" && level != null) {
+                require(level != ReasoningLevel.MAX) { "OpenAI 此接口不支持 MAX 推理档位" }
+                require(level != ReasoningLevel.OFF ||
+                    params.model.modelId.matches(Regex("gpt-(?:5\\.[1-9]|[6-9])(?:[-.].*)?"))) {
+                    "此 OpenAI 模型不支持关闭推理"
+                }
+            }
+        }
         return buildJsonObject {
             put("model", params.model.modelId)
             put(
@@ -247,7 +281,10 @@ class ChatCompletionsAPI(
                 if (params.temperature != null) put("temperature", params.temperature)
                 if (params.topP != null) put("top_p", params.topP)
             }
-            if (params.maxTokens != null) put("max_tokens", params.maxTokens)
+            if (params.maxTokens != null) put(
+                if (!params.legacyGeneration && host == "api.openai.com" &&
+                    params.model.abilities.contains(ModelAbility.REASONING)) "max_completion_tokens" else "max_tokens",
+                params.maxTokens)
 
             put("stream", stream)
             if (stream) {
@@ -269,8 +306,9 @@ class ChatCompletionsAPI(
                 }
             }
 
-            if (params.model.abilities.contains(ModelAbility.REASONING)) {
-                val level = params.reasoningLevel
+            if (params.model.abilities.contains(ModelAbility.REASONING) &&
+                (params.legacyGeneration || level != null)) {
+                val level = level ?: ReasoningLevel.OFF
                 when (host) {
                     "openrouter.ai" -> {
                         // https://openrouter.ai/docs/use-cases/reasoning-tokens
@@ -698,7 +736,7 @@ class ChatCompletionsAPI(
                                         put("url", encodedImage.base64)
                                     })
                                 }.onFailure {
-                                    Log.w(TAG, "encode tool result image failed: ${part.url}", it)
+                                    Log.w(TAG, "encode tool result image failed")
                                     put("type", "text")
                                     put("text", "Error: Failed to encode image to base64")
                                 }

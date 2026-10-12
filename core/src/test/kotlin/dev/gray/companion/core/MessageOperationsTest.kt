@@ -127,5 +127,80 @@ class MessageOperationsTest {
         assertEquals(recorded.turnRecords, decoded.turnRecords)
     }
 
+    @Test fun deletingPausedTurnUserRestoresExactBeforeSessionAndKeepsEarlierHistory() {
+        val first = MessageOperations.recordSuccessfulTurn(Session(messages = listOf(user)), run("A", "1", "alpha")).session!!
+        val nextUser = ChatMessage(id = "user-2", role = Role.USER, text = "try again")
+        val staged = first.copy(messages = first.messages + nextUser)
+        val recovery = RunRecovery(
+            id = "pending-2", sessionId = first.id, turnId = nextUser.id, input = nextUser.text,
+            checkpoint = MessageOperations.captureCheckpoint(staged), initialSession = staged,
+            frozenResources = Library(), beforeUserSession = first
+        )
+        val partial = RunResult(
+            state = mapOf("count" to "2"), results = mapOf("reply" to "B"),
+            replies = listOf(ChatMessage(id = "reply-B", role = Role.ASSISTANT, text = "B", turnId = nextUser.id)),
+            traces = emptyList(), status = RunStatus.PAUSED, recovery = recovery,
+            resultOrigins = mapOf("reply" to origin),
+            macroHistory = first.macroHistory + ("story" to (first.macroHistory["story"].orEmpty() +
+                MacroVersion(2, "beta", origin, turn = 2, turnId = nextUser.id)))
+        )
+        val paused = MessageOperations.recordPartialTurn(staged, partial).session!!
+        assertFalse(MessageOperations.capabilities(paused, user.id).canDeleteText)
+        assertTrue(MessageOperations.capabilities(paused, nextUser.id).canDeleteText)
+        assertNull(MessageOperations.deleteMessage(paused, user.id).session)
+        val restored = MessageOperations.deleteMessage(paused, nextUser.id).session!!
+        assertEquals(first.copy(updatedAt = restored.updatedAt), restored)
+        assertEquals(first.id, restored.id)
+        assertNull(restored.pendingRun)
+        assertEquals(listOf(user.id, "reply-A"), restored.messages.map { it.id })
+        val decoded = Json.decodeFromString(Session.serializer(), Json.encodeToString(Session.serializer(), paused))
+        assertEquals(first.copy(updatedAt = restored.updatedAt),
+            MessageOperations.rollbackPendingUserTurn(decoded, nextUser.id).session!!.copy(updatedAt = restored.updatedAt))
+        val legacy23 = decoded.copy(pendingRun = decoded.pendingRun!!.copy(
+            beforeUserSession = null, executionVersion = 23))
+        assertEquals(first.copy(updatedAt = restored.updatedAt),
+            MessageOperations.rollbackPendingUserTurn(legacy23, nextUser.id).session!!.copy(updatedAt = restored.updatedAt))
+    }
+
+    @Test fun oldPausedJournalWithoutSafeBeforeWorldCannotDeleteUser() {
+        val world = CompletedWorld(Library(), CapturedSessionChoices("character", "main"), "before", ExecutionSemantics.CURRENT)
+        val staged = Session(messages = listOf(user), executableWorld = world)
+        val recovery = RunRecovery("pending", staged.id, user.id, user.text,
+            MessageOperations.captureCheckpoint(staged), staged, Library())
+        val paused = MessageOperations.recordPartialTurn(staged, RunResult(
+            state = emptyMap(), results = emptyMap(), replies = emptyList(), traces = emptyList(),
+            status = RunStatus.PAUSED, recovery = recovery
+        )).session!!
+        assertNull(MessageOperations.rollbackPendingUserTurn(paused, user.id).session)
+        assertTrue(MessageOperations.rollbackPendingUserTurn(paused, user.id).issues.single().message.contains("完整的发送前快照"))
+        assertNull(MessageOperations.rollbackPendingUserTurn(paused.copy(
+            pendingRun = paused.pendingRun!!.copy(regenerating = true)), user.id).session)
+    }
+
+    @Test fun oldPausedJournalRestoresPriorSelectedWorldWhenNewTurnPolicyChangedIt() {
+        val originalWorld = CompletedWorld(Library(), CapturedSessionChoices("character", "main"), "first", 23)
+        val accepted = MessageOperations.recordSuccessfulTurn(Session(messages = listOf(user)),
+            run("A", "1", "alpha").copy(completedWorld = originalWorld)).session!!
+        val before = accepted.copy(executableWorld = originalWorld)
+        val nextUser = ChatMessage(id = "user-2", role = Role.USER, text = "next")
+        val admittedWorld = originalWorld.copy(input = "next")
+        val staged = before.copy(messages = before.messages + nextUser, executableWorld = admittedWorld)
+        val checkpoint = MessageOperations.captureCheckpoint(staged)
+        val recovery = RunRecovery("pending", before.id, nextUser.id, nextUser.text,
+            checkpoint, staged, Library(), executionVersion = 23)
+        val paused = MessageOperations.recordPartialTurn(staged, RunResult(
+            state = staged.state, results = staged.results, replies = emptyList(), traces = emptyList(),
+            status = RunStatus.PAUSED, macroHistory = staged.macroHistory, recovery = recovery,
+            completedWorld = admittedWorld
+        )).session!!
+        val restored = MessageOperations.rollbackPendingUserTurn(paused, nextUser.id).session!!
+        assertEquals(before.copy(updatedAt = restored.updatedAt), restored)
+        assertEquals(originalWorld, restored.executableWorld)
+        assertEquals(accepted.messages, restored.messages)
+        val captured = paused.copy(pendingRun = paused.pendingRun!!.copy(beforeUserSession = before))
+        val exact = MessageOperations.rollbackPendingUserTurn(captured, nextUser.id).session!!
+        assertEquals(before.copy(updatedAt = exact.updatedAt), exact)
+    }
+
 
 }

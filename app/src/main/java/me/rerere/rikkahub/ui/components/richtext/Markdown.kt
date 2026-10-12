@@ -1,5 +1,7 @@
 package me.rerere.rikkahub.ui.components.richtext
 
+import dev.gray.companion.ui.bodyColoredText
+
 import android.content.ClipData
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -466,7 +468,7 @@ private fun MarkdownNode(
                 node.findChildOfTypeRecursive(MarkdownElementTypes.LINK_DESTINATION)?.getTextInNode(content) ?: ""
             val context = LocalContext.current
             Text(
-                text = linkText,
+                text = bodyColoredText(AnnotatedString(linkText)),
                 color = MaterialTheme.colorScheme.primary,
                 textDecoration = TextDecoration.Underline,
                 modifier = modifier.clickable {
@@ -499,7 +501,9 @@ private fun MarkdownNode(
         // GFM 特殊元素
         GFMElementTypes.STRIKETHROUGH -> {
             Text(
-                text = node.getTextInNode(content), textDecoration = TextDecoration.LineThrough, modifier = modifier
+                text = bodyColoredText(AnnotatedString(node.getTextInNode(content))),
+                textDecoration = TextDecoration.LineThrough,
+                modifier = modifier
             )
         }
 
@@ -545,7 +549,7 @@ private fun MarkdownNode(
                 )
             } else {
                 Text(
-                    text = formula,
+                    text = bodyColoredText(AnnotatedString(formula)),
                     fontFamily = FontFamily.Monospace,
                     modifier = modifier.padding(horizontal = 1.dp)
                 )
@@ -564,7 +568,7 @@ private fun MarkdownNode(
                 )
             } else {
                 Text(
-                    text = formula,
+                    text = bodyColoredText(AnnotatedString(formula)),
                     fontFamily = FontFamily.Monospace,
                     modifier = modifier
                         .fillMaxWidth()
@@ -576,7 +580,7 @@ private fun MarkdownNode(
         MarkdownElementTypes.CODE_SPAN -> {
             val code = node.getTextInNode(content).trim('`')
             Text(
-                text = code,
+                text = bodyColoredText(AnnotatedString(code)),
                 fontFamily = JetbrainsMono,
                 style = LocalTextStyle.current.copy(fontFeatureSettings = "'calt' 0, 'liga' 0, 'clig' 0"),
                 modifier = modifier
@@ -586,7 +590,7 @@ private fun MarkdownNode(
         MarkdownElementTypes.CODE_BLOCK -> {
             val code = node.getTextInNode(content)
             Text(
-                text = code,
+                text = bodyColoredText(AnnotatedString(code)),
                 modifier = modifier,
             )
         }
@@ -623,7 +627,7 @@ private fun MarkdownNode(
         MarkdownTokenTypes.TEXT -> {
             val text = node.getTextInNode(content)
             Text(
-                text = text,
+                text = bodyColoredText(AnnotatedString(text)),
                 modifier = modifier,
             )
         }
@@ -819,7 +823,7 @@ private fun Paragraph(
             }
         }
         Text(
-            text = annotatedString,
+            text = bodyColoredText(annotatedString),
             modifier = Modifier,
             inlineContent = inlineContents,
             softWrap = true,

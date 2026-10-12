@@ -10,7 +10,7 @@ internal fun isStructuredHistoryBlock(template: String, executionVersion: Int = 
     val scan = MacroTemplateTokens.scan(text, executionVersion)
     val token = scan.tokens.singleOrNull() ?: return false
     return scan.diagnostics.isEmpty() && token.closed && token.start == 0 && token.endExclusive == text.length &&
-        token.expression.trim() !in setOf("history.raw", "history.text") &&
+        !HistoryReferences.isText(token.expression, executionVersion) &&
         HistoryViews.selection(token.expression, executionVersion) != null
 }
 internal fun containsStructuredHistoryToken(template: String, executionVersion: Int = ExecutionSemantics.CURRENT): Boolean =
@@ -212,6 +212,10 @@ internal class TemplateRenderer(
                 issues += Issue(path, "此恢复版本不支持 History 原说话人筛选")
                 return ""
             }
+            if (executionVersion < 26 && compiled.fields.any { it.name == "as" }) {
+                issues += Issue(path, "此恢复版本不支持 History 文本读取方式")
+                return ""
+            }
             if (selection == null) {
                 if (plan == null || !semantics.staticResourceQueries) {
                     issues += Issue(path, compiled.diagnostics.firstOrNull()?.message ?: "此来源的新式引用尚未绑定运行时")
@@ -265,7 +269,9 @@ internal class TemplateRenderer(
                     val projection = memoryScope.project()
                     issues += projection.issues.map { it.copy(path = path) }
                     recordHistory(projection.sourceIds)
-                    return projection.messages.joinToString("\n") { it.text }
+                    return if (executionVersion >= 26 && key in setOf("raw", "text"))
+                        HistoryReferences.plainText(projection.messages)
+                    else projection.messages.joinToString("\n") { it.text }
                 }
             }
             if (base in setOf("history.display.summary", "history.model.summary")) {
@@ -289,6 +295,9 @@ internal class TemplateRenderer(
             if ('@' in tagged || '#' in expression) {
                 issues.add(Issue(path, "历史视图不支持版本或 XML 选择器：$expression"))
                 return ""
+            }
+            if (executionVersion >= 26 && base in setOf("history.text", "history.raw")) {
+                return renderHistory(HistoryViews.selection(base, executionVersion)!!, path)
             }
             val value = if (renderingHistory) history?.read(key) else {
                 renderingHistory = true
@@ -365,7 +374,8 @@ internal class TemplateRenderer(
             val projection = scope.project(selection)
             issues += projection.issues.map { it.copy(path = path) }
             recordHistory(projection.sourceIds)
-            return projection.messages.joinToString("\n") { it.text }
+            return if (executionVersion >= 26 && selection.readMode == HistoryReadMode.TEXT)
+            HistoryReferences.plainText(projection.messages) else projection.messages.joinToString("\n") { it.text }
         }
         val main = macroView.library.mainCalls.firstOrNull { it.id == currentSession.mainCallId } ?: return ""
         val projection = if (renderingHistory) HistoryViews.project(macroView.library, currentSession, main, selection,
@@ -376,7 +386,8 @@ internal class TemplateRenderer(
             finally { renderingHistory = false }
         }
         issues += projection.issues.map { it.copy(path = path) }
-        return projection.messages.joinToString("\n") { it.text }
+        return if (executionVersion >= 26 && selection.readMode == HistoryReadMode.TEXT)
+            HistoryReferences.plainText(projection.messages) else projection.messages.joinToString("\n") { it.text }
     }
 
     private fun unversioned(address: String): String? = when {
@@ -481,7 +492,8 @@ class PromptCompiler {
         historyContext: HistoryContext? = null,
         preprocessedInput: String? = null,
         executionVersion: Int = ExecutionSemantics.CURRENT,
-        memoryScope: MemoryPromptScope? = null
+        memoryScope: MemoryPromptScope? = null,
+        preprocessedInputSourceIds: List<String>? = null
     ): PromptPreview {
         val semantics = ExecutionSemantics(executionVersion)
         val issues = mutableListOf<Issue>()
@@ -495,15 +507,25 @@ class PromptCompiler {
         checkedCondition(node.condition, "node.${node.id}", state, results, input, issues) {
             renderer.read(it, "node.${node.id}.condition.expression")
         }
-        if (preprocessedInput != null && memoryScope != null) renderer.captureHistoryReads {
-            renderer.render(node.inputTemplate, "node.${node.id}.input")
-        }
-        val renderedInput = preprocessedInput ?: try { renderer.captureHistoryReads {
+        fun renderInput() = renderer.captureHistoryReads {
             TextProcessing.apply(node.inputProcessing,
                 renderer.render(node.inputTemplate, "node.${node.id}.input"), state, results, executionVersion) {
                 renderer.read(it, "node.${node.id}.inputProcessing")
             }
-        } } catch (_: Exception) {
+        }
+        if (preprocessedInput != null && memoryScope != null) {
+            if (preprocessedInputSourceIds != null) inputSourceIds += preprocessedInputSourceIds
+            else {
+                // Legacy journals have no input provenance. Purely replay the complete frozen
+                // transformation and accept its reads only if it reproduces the exact saved input.
+                val replayed = try { renderInput() } catch (_: Exception) { null }
+                if (replayed != preprocessedInput) {
+                    inputSourceIds.clear()
+                    issues += Issue("node.${node.id}.inputProcessing", "冻结输入无法重建，不能确认摘要历史来源")
+                }
+            }
+        }
+        val renderedInput = preprocessedInput ?: try { renderInput() } catch (_: Exception) {
             issues += Issue("node.${node.id}.inputProcessing", "输入处理失败")
             ""
         }
@@ -576,7 +598,10 @@ class PromptCompiler {
                     }
                 issues += projection.issues.map { it.copy(path = "node.${node.id}.block.${block.id}") }
                 if (semantics.omitEmptyReferencesBeforeProcessing && block.hideWhenReferencesEmpty &&
-                    projection.messages.none { it.text.isNotBlank() }) null else block.id to projection
+                    projection.messages.none { it.text.isNotBlank() }) null else block.id to
+                    if (semantics.perBlockMessageMerging && !block.mergeAdjacentMessages)
+                        projection.copy(messages = projection.messages.map { it.copy(mergeAdjacentMessages = false) })
+                    else projection
             }.toMap()
         val hasStructuredBlock = structured.isNotEmpty()
         val usesStructuredHistory = hasStructuredBlock && formedContext != null
@@ -618,7 +643,8 @@ class PromptCompiler {
                     ""
                 }
                 if (value.isBlank()) { contentSourceIds.retainAll(beforeRead); emptyList() }
-                else listOf(ChatMessage(role = block.role, text = value))
+                else listOf(ChatMessage(role = block.role, text = value,
+                    mergeAdjacentMessages = !semantics.perBlockMessageMerging || block.mergeAdjacentMessages))
             }
             if (messages.isEmpty()) return@forEach
             when (block.position) {

@@ -4,7 +4,6 @@ import dev.gray.companion.core.ApiConnection
 import dev.gray.companion.core.Issue
 import dev.gray.companion.core.Library
 import dev.gray.companion.core.ModelProfile
-import dev.gray.companion.core.ModelReasoning
 import dev.gray.companion.core.Protocol
 import dev.gray.companion.core.RequestHeader
 import dev.gray.companion.core.RequestBodyField
@@ -21,21 +20,6 @@ internal data class CompanionConnectionExtras(
     val customHeaders: List<RequestHeader> = emptyList(),
     val maxConcurrentRequests: Int = 2,
 )
-
-/** Request defaults missing from native Model; committed with that model's original edit. */
-internal data class CompanionModelCallDefaults(
-    val temperature: Float? = null,
-    val topP: Float? = null,
-    val maxTokens: Int? = null,
-    val reasoning: ModelReasoning = ModelReasoning.OFF,
-) {
-    fun applyTo(profile: ModelProfile): ModelProfile {
-        require(temperature == null || temperature.isFinite()) { "温度须为有限数字" }
-        require(topP == null || topP.isFinite() && topP in 0f..1f) { "Top P须在0–1之间" }
-        require(maxTokens == null || maxTokens > 0) { "最大输出token须为正整数" }
-        return profile.copy(temperature = temperature, topP = topP, maxTokens = maxTokens, reasoning = reasoning)
-    }
-}
 
 /** Ephemeral projection only. Credentials are deliberately absent, including from [providers]. */
 internal data class CompanionProviderSnapshot(
@@ -106,12 +90,10 @@ internal object CompanionProviderAdapter {
         connectionExtras: Map<Uuid, CompanionConnectionExtras> = snapshot.extras,
         editedApiKeys: Map<Uuid, Pair<String, String>> = emptyMap(),
         editedCredentials: Map<CredentialSlot, Pair<String, String>> = emptyMap(),
-        editedModelDefaults: Map<Uuid, CompanionModelCallDefaults> = emptyMap(),
     ): CompanionProviderPlanResult = try {
         require(desiredProviders.map { it.id }.distinct().size == desiredProviders.size) { "提供商标识重复" }
         val allModels = desiredProviders.flatMap { it.models }
         require(allModels.map { it.id }.distinct().size == allModels.size) { "模型标识重复或被放到多个提供商" }
-        require(editedModelDefaults.keys.all { id -> allModels.any { it.id == id } }) { "调用参数所属模型已不存在" }
         require(editedApiKeys.keys.all { id -> desiredProviders.any { it.id == id } }) { "密钥修改的提供商已不存在" }
         val oldConnections = snapshot.connections.associateBy { it.id }
         val oldProfiles = snapshot.profiles.associateBy { it.id }
@@ -144,10 +126,9 @@ internal object CompanionProviderAdapter {
                 val options = NativeProviderCodec.modelOptions(model)
                 val previousOptions = snapshot.providers.flatMap { it.models }.firstOrNull { it.id == model.id }
                     ?.let(NativeProviderCodec::modelOptions)
-                val configured = profile.copy(name = model.displayName, model = model.modelId,
+                profile.copy(name = model.displayName, model = model.modelId,
                     customBody = model.customBodies.map { RequestBodyField(it.key, it.value) },
                     nativeModel = if (profile.nativeModel == null && previousOptions == options) null else options)
-                editedModelDefaults[model.id]?.applyTo(configured) ?: configured
             }.toMutableList()
         }
         // Reordering providers must not regroup/interleave the persisted global profile list.

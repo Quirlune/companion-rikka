@@ -10,7 +10,8 @@ fun Session.runtimeSnapshot(): RuntimeSnapshot = RuntimeSnapshot(
     unavailableResultKeys = unavailableResultKeys,
     historyMemory = historyMemory,
     currentOnlyMacros = currentOnlyMacros,
-    completedWorld = executableWorld
+    completedWorld = executableWorld,
+    userMacros = userMacros
 )
 
 fun RunResult.runtimeSnapshot(): RuntimeSnapshot = RuntimeSnapshot(
@@ -22,7 +23,8 @@ fun RunResult.runtimeSnapshot(): RuntimeSnapshot = RuntimeSnapshot(
     unavailableResultKeys = unavailableResultKeys,
     historyMemory = historyMemory,
     currentOnlyMacros = currentOnlyMacros,
-    completedWorld = completedWorld
+    completedWorld = completedWorld,
+    userMacros = userMacros
 )
 
 fun RunRecovery.runtimeSnapshot(): RuntimeSnapshot = RuntimeSnapshot(
@@ -35,7 +37,8 @@ fun RunRecovery.runtimeSnapshot(): RuntimeSnapshot = RuntimeSnapshot(
     historyMemory = historyMemory,
     currentOnlyMacros = currentOnlyMacros,
     completedWorld = if (ExecutionSemantics(executionVersion).completedPureReplay)
-        CompletedWorlds.capture(frozenResources, initialSession, input, executionVersion) else null
+        CompletedWorlds.capture(frozenResources, initialSession, input, executionVersion) else null,
+    userMacros = userMacros
 )
 
 /** Preserve chat identity, messages, branch records, macro history and pending recovery. */
@@ -47,5 +50,6 @@ fun Session.withRuntime(runtime: RuntimeSnapshot): Session = copy(
     historyDigests = runtime.historyDigests,
     unavailableResultKeys = runtime.unavailableResultKeys,
     historyMemory = runtime.historyMemory,
-    currentOnlyMacros = runtime.currentOnlyMacros
+    currentOnlyMacros = runtime.currentOnlyMacros,
+    userMacros = runtime.userMacros
 )

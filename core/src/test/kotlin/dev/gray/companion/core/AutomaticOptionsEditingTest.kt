@@ -21,6 +21,25 @@ class AutomaticOptionsEditingTest {
         promptInjections = listOf(PromptInjection("main-only", PromptBlock(template = "MAIN INJECTION"),
             ResultOrigin(main.id, flow.id, node.id), scope = InjectionScope.SESSION)))
 
+    @Test fun haiku55RequiresVisibleUserRequestAfterStructuredHistory() {
+        val haiku = profile.copy(model = "anthropic/claude-haiku-5.5")
+        val config = AutomaticOptionsConfig(enabled = true,
+            blocks = listOf(PromptBlock(id = "history", template = AutomaticOptions.HISTORY_MACRO)))
+        val configured = library.copy(profiles = listOf(haiku), automaticOptions = config)
+        val failure = runCatching { AutomaticOptions.request(configured, session()) }.exceptionOrNull()
+        assertTrue(failure is AutomaticOptionsAssistantPrefill)
+        assertTrue(failure!!.message.orEmpty().contains("历史之后"))
+        assertEquals(config, configured.automaticOptions)
+        val withRequest = AutomaticOptions.withGenerationRequest(config)
+        assertEquals(config.blocks, withRequest.blocks!!.dropLast(1))
+        assertEquals(withRequest.blocks!!.size, withRequest.blocks!!.map { it.id }.distinct().size)
+        assertEquals(Role.USER, AutomaticOptions.request(configured.copy(automaticOptions = withRequest), session())!!
+            .messages.last().role)
+        val default = AutomaticOptions.editableConfig(AutomaticOptionsConfig(enabled = true, prompt = "温柔"))
+        assertEquals(Role.USER, AutomaticOptions.request(configured.copy(automaticOptions = default), session())!!
+            .messages.last().role)
+    }
+
     @Test fun outputOnlyReadsInvalidateRequestWithoutChangingPromptAndKeepFrozenProcessing() {
         val config = AutomaticOptionsConfig(enabled = true, count = 1,
             blocks = listOf(PromptBlock(id = "fixed", template = "Return an option")),
@@ -125,9 +144,10 @@ class AutomaticOptionsEditingTest {
         val session = session()
         assertTrue(AutomaticOptions.validate(configured).toString(), AutomaticOptions.validate(configured).isEmpty())
         val request = AutomaticOptions.request(configured, session)!!
-        assertEquals(15, request.messages.size)
-        assertEquals(7, request.messages.count { it.role == Role.USER })
-        assertEquals("display 7", request.messages.last().text)
+        assertEquals(16, request.messages.size)
+        assertEquals(8, request.messages.count { it.role == Role.USER })
+        assertEquals("display 7", request.messages.dropLast(1).last().text)
+        assertEquals(Role.USER, request.messages.last().role)
         assertTrue(request.messages.first().text.contains("温柔 {{state.secret}} {content}"))
         assertTrue(request.messages.first().text.contains("恰好 2 个"))
         assertFalse(request.messages.any { "MUST NOT EXPAND" in it.text || "MAIN INJECTION" in it.text ||
@@ -145,7 +165,7 @@ class AutomaticOptionsEditingTest {
         val customInput = AutomaticOptions.request(configured.copy(automaticOptions = config.copy(
             inputTemplate = "seed", inputProcessing = listOf(TextProcessStep(TextProcessKind.APPEND,
                 text = " {{state.automatic_options_count}}")))), session)!!
-        assertEquals("seed 2", customInput.messages.last().text)
+        assertEquals("seed 2\n请根据上面的对话和输出格式，给出下一句回复选项。", customInput.messages.last().text)
         assertTrue(AutomaticOptions.validate(configured.copy(automaticOptions = config.copy(
             generation = config.generation.copy(profileId = "missing")))).any { it.path.endsWith("generation.profileId") })
     }

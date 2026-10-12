@@ -1,6 +1,6 @@
 velune 扩展与资源作者指南
-适用：0.57-preview / versionCode 225，revision67，2026-10-10
-资源 wire=30；执行语义 execution=23；配置 companion.config.v1；ZIP companion.bundle.v1。
+适用：当前验收版本0.66-preview / versionCode234，revision78，2026-10-12，wire34/execution26，SQLite1；APK 构建、同签名安装及隔离 API36 模拟器中的应用到本地合成 HTTPS 请求与关键界面验收通过，真实云模型和实体手机体验未验证。九域审查修复与此前三项故障修复已纳入；原生输出平滑采用用户授权的展示端逐帧合并与追加文字淡入，未找到适用的原版 Android 实现。
+当前源码资源 wire=34；执行语义 execution=26；配置 companion.config.v1；ZIP companion.bundle.v1。
 
 这是给首次接触项目的 AI 与作者的当前指南，不是导入文件。产品名称是 velune；companion.* 格式标记、dev.gray.companion.core 命名空间和应用身份保留以兼容更新，不要擅自改名。
 本指南替换旧 revision56 的叠加补丁式说明。旧备份、已接受回复与冻结执行环境依然按原版本解释；“当前写法”不表示可以删除旧字段、迁移历史或重新执行副作用。
@@ -33,7 +33,7 @@ config 文件内放配置根；kind=group 等文件内直接放该资源对象�
 字符串附件写为 {"$text":"prompts/rules.txt"}，头像字段可用 {"$avatar":"images/avatar.png"}。标记对象只能有一个键；manifest 为附件分别声明 text/avatar，且必须由资源真实引用。只在 ZIP 装配阶段解析；单独导入 config JSON 时对应字段须为实际字符串/头像对象。文本采用 UTF-8。README 标 documentation，只供阅读、不创建资源；“说明文档未导入”是非错误提示。
 原生备份不能和其他配置主文档混装。不要将无关脚本、库、图片或操作系统文件打进 ZIP。
 
-C. 完整 Library 原生备份含 schemaVersion 和会话等字段，属于备份/恢复用途；其 schemaVersion 当前30。不要用它伪造运行记录或承载一个普通扩展。外国角色卡 JSON/PNG/CHARX 只有真实导入器识别的格式可转换；外国供应商设置、脚本和自定义前端字段不因此变成本项目字段。
+C. 完整 Library 原生备份含 schemaVersion 和会话等字段，属于备份/恢复用途；其 schemaVersion 当前34。不要用它伪造运行记录或承载一个普通扩展。外国角色卡 JSON/PNG/CHARX 只有真实导入器识别的格式可转换；外国供应商设置、脚本和自定义前端字段不因此变成本项目字段。
 
 3. ID、引用与配置命令
 
@@ -103,8 +103,8 @@ turn.prepare 用于主模型编译前所需注入；prompt.inject 必须定位�
 
 8. 提示块与宏
 
-WorkflowNode 常用：id、actionId、dependsOn、blocks、inputTemplate、outputKey、visible、includeHistory、enabled、arguments、generation。generation 的 profileId 为空可继承 workflow/全局模型；参数留空继承。不要在普通扩展中硬编码用户凭据或替换全局选中模型。
-PromptBlock 常用：id、title、template、role=SYSTEM/USER/ASSISTANT、enabled、position=BEFORE_HISTORY/IN_HISTORY/AFTER_HISTORY、depth、processing、condition/recognition。所有注入与历史投影完成后，当前 execution 自动合并相邻相同最终 API role，中间一个换行，省略纯空白消息；原始历史角色与楼层不变。不要开启旧 history.mergeMessages 来模拟此行为。
+WorkflowNode 常用：id、actionId、dependsOn、blocks、inputTemplate、outputKey、visible、includeHistory、enabled、arguments、generation。generation 的 profileId 为空可继承 workflow/全局模型；execution24 起 temperature/topP/maxTokens/reasoning 只使用行为显式配置，省略或 null 表示不发送，不继承提供商模型的旧默认值。reasoning 的 OFF/AUTO 都是明确选择；不要用 OFF 代替省略。供应商必填的协议字段仍由适配层提供。不要在普通扩展中硬编码用户凭据或替换全局选中模型。
+PromptBlock 常用：id、title、template、role=SYSTEM/USER/ASSISTANT、enabled、position=BEFORE_HISTORY/IN_HISTORY/AFTER_HISTORY、depth、processing、condition/recognition。mergeAdjacentMessages 默认true；关闭后该块消息不与前后合并。所有注入与历史投影完成后，当前 execution 合并两侧均允许合并的相邻相同最终 API role，中间一个换行，省略纯空白消息；原始历史角色与楼层不变。不要开启旧 history.mergeMessages 来模拟此行为。
 
 常用文本引用：{{input}}、{{user.name}}、{{user.prompt}}、{{character.name}}、{{character.profile}}、{{pack.namespace.key}}、{{state.my_status}}、{{result.my_status_generated}}。静态词条分类 {{category.category}} 与运行结果分类 {{results.category}} 不同。
 完整 typed 宏语法及允许字段以 PromptReferenceLanguage/MacroReferences 为准；不要把点分路径当 JS 属性或任意 JSONPath。// 只是编辑器插入助手入口，不是运行时语法。
@@ -114,7 +114,7 @@ PromptBlock 常用：id、title、template、role=SYSTEM/USER/ASSISTANT、enable
 {{type:builtin.in:history.name:messages.speaker:assistant.from:end-3.through:end-1}}
 {{type:builtin.in:history.name:messages.speaker:user.from:start-2.through:start-4}}
 {{type:builtin.in:history.name:messages.speaker:user.format:"{\"apiRole\":\"ASSISTANT\"}"}}
-speaker 只用于 builtin history messages/context，取 user/assistant/system。先按原 speaker 过滤，再从匹配池选 from/through，最后投影最终 API role；source:display/model 独立选择文本版本，model 不等于 assistant。{{floor}} 保留原 BODY 楼层编号。未指定范围但指定 speaker 时读取全部匹配来源，不继承主历史范围。结构化 History 独占普通块，不混字面说明；需要普通字符串可用 {{history.text}} 等相应文本来源。
+speaker 只用于 builtin history messages/context，取 user/assistant/system。先按原 speaker 过滤，再从匹配池选 from/through，最后投影最终 API role；source:display/model 独立选择文本版本，model 不等于 assistant。{{floor}} 保留原 BODY 楼层编号。未指定范围但指定 speaker 时读取全部匹配来源，不继承主历史范围。结构化 History 独占普通块，不混字面说明；需要普通字符串可加 .as:text，范围/来源/包装不变；例如 {{type:builtin.in:history.name:messages.from:end-3.through:end-1.as:text}}。输出 Assistant: 内容、User: 内容等换行文本，整个结果使用所在提示块的外层role，不拆为API消息；文字标签保留原说话人，不受API角色覆盖/历史合并影响。{{history.text}} 与 {{history.raw}} 也是TEXT（前者使用压缩上下文，后者原始楼层）。省略as或.as:messages为消息历史。旧execution<=25不接受as，旧文本来源按原语义回放（text不加标签、raw使用小写标签）。
 
 普通 PromptEntry 默认 isTemplate=false；true 才把文本当模板递归处理。不要为了引用已有词条而批量把用户词条改为模板。历史已发布版本是字面快照。版本选择不能凭空制造未记录或 current-only 来源的旧版本。
 接收槽是 PromptBlock(injectionSlot=true,template="",processing=[],slotReferences=[完整单个宏引用...])；不是一个含 {{slot}} 的普通字符串。slotReferences 不混字面文字或结构化 History。prompt.inject 的 targetBlockId 用真实 block.id，contextOrder 为正整数，决定槽内上下文顺序，与 queued/priority 无关。注入内容已解析为字面值，不再递归展开。
@@ -136,7 +136,7 @@ context 有 pluginId、input、state、results、messages；messages 为最多32
 GlobalMemoryConfig.smallSummaryXmlTag / largeSummaryXmlTag 默认 summary；execution23 的实际摘要生产模型必须输出唯一完整且非空的该标签，如 <summary>摘要正文</summary>。标签内部只支持纯文本、XML 转义/CDATA，不允许属性、嵌套、DTD/外部实体；输入≤1,048,576字符。允许周围文本不意味着允许第二份同名摘要。缺失/重复/空/非法标签导致 OUTPUT_FORMAT，不保存该摘要。
 可见的摘要提示词协议引用 {{state.memory_summary_xml_tag}}。编辑标签时同步检查提示块，不能依赖隐藏系统提示修补输出。当前摘要先做 XML 校验提取，旧正则副本不应先剥掉根；execution≤22 冻结流程保留旧行为。xmlValidationVersion 是 live 协议迁移标记，不是关闭验证按钮。不要为新包设置凭据别名/旧工作流迁移字段。
 
-自动选项是全局辅助 UI，结果临时存在内存，不写会话/宏/ZIP，也不自动发送。count 1–12，historyTurns 1–50对已完成用户/主助手 DISPLAY BODY，默认5。blocks 非null时发送实际保存的提示块与输入，不暗补删掉的 History 或 SYSTEM。generation/reasoningParsing/inputTemplate/inputProcessing/outputProcessing 使用原生模型编辑字段；旧 prompt/modelProfileId 在 blocks=null 保留原兼容方式。
+自动选项是全局辅助 UI，结果临时存在内存，不写会话/宏/ZIP，也不自动发送。count 1–12，historyTurns 1–50对已完成用户/主助手 DISPLAY BODY，默认5。blocks 非null时发送实际保存的提示块与输入，不暗补删掉的 History 或 SYSTEM。新默认模板在历史之后含可编辑USER生成请求，以兼容不支持Assistant预填充的模型；既有自定义模板不会被暗补，需要自行添加末尾USER请求或改为纯文本历史。generation/reasoningParsing/inputTemplate/inputProcessing/outputProcessing 使用原生模型编辑字段；旧 prompt/modelProfileId 在 blocks=null 保留原兼容方式。
 当前字段：titlesEnabled、items=[{contentTag,titleTag},...]、layout=ABOVE_HORIZONTAL/LEFT_VERTICAL。count 是数量权威；不足 items 使用默认 option/title，缩减数量时可保留未使用的后续配置。不同标签按名称匹配，同名按出现顺序分配，各标签出现次数必须精确；有标题时按每项 title 再 content 消耗同名值。
 输出是并列元素，不套额外根：<title>询问近况</title><option>今天过得怎样？</option>。配置独立名字时使用实际 contentTag/titleTag。不能带属性、嵌套、说明、代码围栏、注释、DTD/外部实体或处理指令；文本中的 &、<、> 作 XML 转义。完整UTF-8回复≤64KiB，单项内容≤2000字符，标题≤120字符且都非空；不显示半成功选项。
 items=[] 且 titlesEnabled=false 保留旧重复 <option> 的兼容解析，不要把新的自定义 XML 能力投射到旧解析器。无标题显示内容，有标题显示完整标题，点击展开内容再填入草稿；横排在输入上方，竖排在左侧。已有草稿仍走替换/追加确认。
@@ -165,3 +165,24 @@ Windows 对应 gradlew.bat。打包后将 extensionFile 换为 ZIP 路径，可�
 - 代码扩展：PluginCodeExecutor.kt 与 app 内 QuickJsPluginExecutor；UI 从 app/src/main/java/dev/gray/companion/ui 的 ExtensionPages/CardResourcesEditor/CardDefinitionEditor/MemorySettingsPage/AutomaticOptionsSettingsPage 追踪。
 新功能先遵守 docs/ARCHITECTURE.md 和 docs/DEVELOPMENT.md 的边界：原生资源权威、接受回执、分支来源、冻结执行语义。修改字段时同步 serializer 目录与示例；修改语义时检查版本隔离。未经用户授权不迁移生产数据、调用付费模型、提交 Git 或扩大到新的插件协议。
 
+
+13. 角色默认用户身份（0.58 / wire31）
+
+CharacterCard.boundPersonaId 可为空，非空必须指向同库或同批导入的 personas。新聊天优先角色绑定身份，其次全局 selectedPersonaId，再回退当前聊天的身份。已有聊天继续使用保存的 Session.personaId，打开聊天不会重新应用角色绑定。UserPersona 的 name、prompt、avatar 分别为名称、字面身份设定和头像；当前身份通过 {{user.name}}、{{user.prompt}} 引用。身份 prompt 不递归展开宏。删除仍被角色、当前聊天、收藏或可恢复分支选择引用的身份会被拒绝。
+
+14. 提示词块命名（0.59）
+模型调用中的 PromptBlock 只设置 title，不为新块生成 slug；旧 slug 只保留兼容元数据，不是整段提示词的宏地址。提示词包条目和调用结果的既有宏保持可用。
+
+15. 用户输入宏（revision75）
+
+WorkflowNode.actionId="user.macro.create"，userMacro={"shortcut":"/抽天气","value":{"kind":"RANDOM_REFERENCE","references":["{{state.sunny}}","{{state.rainy}}"]}}。
+该行为运行且接受回执后，才在当前聊天登记；只保存调用配置不会立即登记。TEXT 使用非空字面 text；REFERENCE 使用恰好一个完整标量引用；RANDOM_REFERENCE 从不重复的完整引用列表取一项，候选均须存在。可引用已有角色/身份、提示词条目、结果、宏、状态等标量，不能引用当前尚未发送的 input 或整个历史。
+输入已登记快捷词并紧接 ASCII 空格，界面显示待执行标签；删除该空格还原快捷词。底层草稿始终为普通文本，没有隐藏执行标记。只有新USER消息准入时展开，同一条消息中同名快捷词只求值一次；预览/打字不抽取，历史编辑/重试/重新生成不再次展开。发送后历史与模型输入只保存展开文本。缺失引用则拒绝发送，保留输入草稿。定义随会话快照/分支/断点恢复，不是全局宏，也无一次性消费或权重。
+
+16. 运行内配置工作台（revision75）
+
+设置→配置工作台：新建隔离草稿，可直接编辑原生字段或暂存 companion.config.v1 JSON，再检查累计变更并应用。支持多个草稿；无效批次不会部分生效，暂存成功才推进 revision。草稿仅保留于当前进程，重启前可复制累计命令。应用保存资源与撤回回执，仍从已有配置修改记录撤回。
+工作台只编辑 character/mainCall/package/group/persona/tag/extension。连接、凭据、模型定义和全局选择继续使用原生设置；models 只读取安全名称/ID摘要。读取与起草不停止正在运行的主调用；应用遇忙返回 BUSY，保留草稿；并发改过同一资源则拒绝覆盖。提交对最新活库重新校验并在原事务中保存，保持聊天、断点和已冻结世界不变；完整依赖读集一致性尚未提供。
+ConfigurationToolGateway(controller).execute(JSON) 是同一进程的共享工具入口，工作台提供可折叠工具请求框。不是网络服务器，也未接入常驻Agent、@路由或侧栏。使用 {"op":"describe"} 发现全部工具及请求样例；{"op":"schema"} 返回根类型，{"op":"schema","type":"WorkflowNode"} 返回实际序列化字段、枚举、optional/nullable，不等于完整业务校验或通用JSON Schema。
+常用读取：resources（可加query/kind）、resource（kind/id）、fields（resource={kind:"PACKAGE",id:...}）、readField（target）、actions、models、sessions、context（sessionId，默认最多20条/16000字符BODY正文）、sessionResource（指定聊天实际冻结资源）、usages（location）。read资源时不带workspaceId即活库，带workspaceId即草稿；会话读取始终取当前聊天快照。不会默认导出全库、推理文本、原始模型回复或连接秘密。
+典型操作顺序：open→resources/fields→stage或field→preview→commit。open返回workspaceId及revision。stage接收commands对象或JSON字符串；field接收稳定target与expectedValue/value（字符串或null）。stage/field/preview/commit/discard均必须传workspaceId和expectedRevision。每次成功暂存后用返回的revision；修改后旧preview失效。preview返回累计前后值，commit只接受这个版本的预览；export可复制累计原配置命令。状态与issues结构化返回，STALE须重读，BUSY须等待当前操作结束；不得把失败描述成已保存。

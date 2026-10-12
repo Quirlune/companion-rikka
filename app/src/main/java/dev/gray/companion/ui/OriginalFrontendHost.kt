@@ -287,8 +287,12 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                         } }
                                     }, { navigator.popBackStack() })
                             }
+                            entry<Screen.CompanionConfigurationWorkspace> {
+                                ConfigurationWorkspacePage(controller) { navigator.popBackStack() }
+                            }
                             entry<Screen.CompanionSession> { SessionConfigScreen(library, { navigator.popBackStack() }, ::save, saving,
                                 onManagePersonas = { navigator.navigate(Screen.CompanionPersonas) }) }
+                            entry<Screen.CompanionBodyColors> { BodyColorsSettingsPage() }
                             entry<Screen.CompanionChatDisplay> { CompanionChatDisplaySettingsPage { cardLayoutOpen = true } }
                             entry<Screen.CompanionAutomaticOptions> {
                                 AutomaticOptionsSettingsPage(library, ::saveAutomaticOptions, { navigator.popBackStack() }, saving)
@@ -529,6 +533,12 @@ private fun CompanionSettingsPage(onExport: () -> Unit, onImport: () -> Unit, un
                 item(onClick = { navigator.navigate(Screen.CompanionResources(ResourceKind.PACKAGE.routeIndex)) }, headlineContent = { Text("提示词包") }, leadingContent = { Icon(HugeIcons.Book03, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionResources(ResourceKind.GROUP.routeIndex)) }, headlineContent = { Text("调用组") }, leadingContent = { Icon(HugeIcons.Package, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionExtensions()) }, headlineContent = { Text("扩展") }, leadingContent = { Icon(HugeIcons.Package, null) })
+            } }
+            item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("配置工具") }) {
+                item(onClick = { navigator.navigate(Screen.CompanionConfigurationWorkspace) },
+                    headlineContent = { Text("配置工作台") },
+                    supportingContent = { Text("隔离暂存、检查累计差异后再应用") },
+                    leadingContent = { Icon(HugeIcons.Settings03, null) })
             } }
             item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("连接与界面") }) {
                 item(onClick = { navigator.navigate(Screen.SettingProvider) }, headlineContent = { Text("模型与 API") }, leadingContent = { Icon(HugeIcons.ServerStack01, null) })

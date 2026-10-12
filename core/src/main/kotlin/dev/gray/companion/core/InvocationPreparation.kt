@@ -14,7 +14,8 @@ internal data class InvocationEnvironment(
 internal data class RenderedInvocationInput(
     val text: String,
     val arguments: Map<String, String>,
-    val issues: List<Issue>
+    val issues: List<Issue>,
+    val inputSourceIds: List<String>? = null
 )
 
 internal data class InvocationPreparation(
@@ -22,7 +23,8 @@ internal data class InvocationPreparation(
     val arguments: Map<String, String>,
     val messages: List<ChatMessage>,
     val profile: ModelProfile?,
-    val historyRead: HistoryPromptRead? = null
+    val historyRead: HistoryPromptRead? = null,
+    val inputSourceIds: List<String>? = null
 )
 
 /** Rendering and model selection are shared by initial calls and frozen prompt repair. */
@@ -34,20 +36,22 @@ internal class InvocationPreparer(private val library: Library) {
         val session = if (tag == null) environment.session else environment.session.copy(
             state = environment.session.state + ("memory_summary_xml_tag" to tag))
         val issues = mutableListOf<Issue>()
+        val inputSourceIds = linkedSetOf<String>()
         val memoryScope = MemoryPromptScope.forInvocation(library, ref, environment)
         val renderer = TemplateRenderer(
             loadedResources(library, session, session.state, session.results, environment.input,
                 issues, session.resultOrigins, environment.history, environment.executionVersion),
             environment.input, session.results, session.state, issues, session.resultOrigins,
-            session, environment.history, environment.executionVersion, memoryScope
+            session, environment.history, environment.executionVersion, memoryScope,
+            onHistoryRead = { inputSourceIds += it }
         )
-        val input = try {
+        val input = try { renderer.captureHistoryReads {
             TextProcessing.apply(ref.node.inputProcessing,
                 renderer.render(ref.node.inputTemplate, "node.${ref.node.id}.input"),
                 session.state, session.results, environment.executionVersion) {
                 renderer.read(it, "node.${ref.node.id}.inputProcessing")
             }
-        } catch (_: Exception) {
+        } } catch (_: Exception) {
             throw NodeExecutionFailure(ref, "输入处理失败", RecoveryFailureKind.CONFIGURATION, retryable = false)
         }
         val descriptor = requireNotNull(ref.action).descriptor
@@ -57,7 +61,7 @@ internal class InvocationPreparer(private val library: Library) {
             if (key in macroFields || (ref.node.actionId.startsWith("history.") && key == "source")) value
             else renderer.render(value, "node.${ref.node.id}.argument.$key")
         }
-        return RenderedInvocationInput(input, arguments, issues.toList())
+        return RenderedInvocationInput(input, arguments, issues.toList(), inputSourceIds.toList())
     }
 
     fun prepare(
@@ -70,7 +74,7 @@ internal class InvocationPreparer(private val library: Library) {
         val environment = environment.copy(history = environment.history.withResources(library))
         val descriptor = requireNotNull(ref.action).descriptor
         val inputs = if (captured != null) RenderedInvocationInput(captured.renderedInput,
-            captured.arguments, emptyList()) else rendered ?: renderInput(ref, environment)
+            captured.arguments, emptyList(), captured.inputSourceIds) else rendered ?: renderInput(ref, environment)
         val tag = GlobalMemory.summaryXmlTag(library, ref.workflow.id, ref.node.id, environment.executionVersion)
         val session = if (tag == null) environment.session else environment.session.copy(
             state = environment.session.state + ("memory_summary_xml_tag" to tag))
@@ -80,7 +84,8 @@ internal class InvocationPreparer(private val library: Library) {
             }
         val preview = PromptCompiler().preview(
             library, session, ref.node, environment.input, session.results, session.state,
-            environment.currentUserMessageId, session.resultOrigins, environment.history, inputs.text, environment.executionVersion, memoryScope
+            environment.currentUserMessageId, session.resultOrigins, environment.history, inputs.text, environment.executionVersion,
+            memoryScope, preprocessedInputSourceIds = inputs.inputSourceIds
         )
         val configIssues = if (tag != null) emptyList() else RegexOutputCopies.validate(ref.node.regexOutputCopy, "node.${ref.node.id}.regexOutputCopy") +
             if (ref.node.regexOutputCopy.enabled && ref.node.regexOutputCopy.outputKey == ref.node.outputKey)
@@ -129,13 +134,16 @@ internal class InvocationPreparer(private val library: Library) {
                 // values; the saved profile retains the wave's already-resolved generation overrides.
                 val resolved = ModelCatalog.resolveProfile(library, saved.id)
                 saved.copy(resolvedHeaders = resolved?.resolvedHeaders.orEmpty(),
-                    resolvedProvider = resolved?.resolvedProvider)
-            } ?: ref.node.generation.resolve(library, ref.workflow)
+                    resolvedProvider = resolved?.resolvedProvider,
+                    reasoning = saved.reasoning ?: ModelReasoning.OFF.takeUnless {
+                        ExecutionSemantics(environment.executionVersion).behaviorOnlyGeneration
+                    }, legacyGeneration = !ExecutionSemantics(environment.executionVersion).behaviorOnlyGeneration)
+            } ?: ref.node.generation.resolve(library, ref.workflow, environment.executionVersion)
         } else null
         if (descriptor.usesModel && (profile == null || profile.model.isBlank())) {
             throw NodeExecutionFailure(ref, "请先选择并填写模型", RecoveryFailureKind.CONFIGURATION, retryable = false)
         }
-        return InvocationPreparation(inputs.text, inputs.arguments, preview.messages, profile, historyRead)
+        return InvocationPreparation(inputs.text, inputs.arguments, preview.messages, profile, historyRead, inputs.inputSourceIds)
     }
 }
 

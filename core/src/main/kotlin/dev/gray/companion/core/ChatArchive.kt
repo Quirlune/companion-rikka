@@ -52,6 +52,7 @@ object ChatArchive {
         fun rebound(session: Session): Session = session.copy(id = mapped(session.id))
         return copy(sessionId = mapped(sessionId), initialSession = rebound(initialSession),
             environments = environments.map { it.copy(session = rebound(it.session)) },
-            regenerationBase = regenerationBase?.let(::rebound))
+            regenerationBase = regenerationBase?.let(::rebound),
+            beforeUserSession = beforeUserSession?.let(::rebound))
     }
 }

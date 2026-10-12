@@ -53,6 +53,11 @@ private data class HistoryReferenceEdit(
     val soleStructuredBlock: Boolean,
 )
 
+internal fun isTextHistoryReference(expression: String): Boolean = HistoryReferences.isText(expression)
+
+internal fun shouldOpenHistoryReferenceEditor(expression: String): Boolean =
+    runCatching { HistoryViews.selection(expression) }.getOrNull() != null
+
 private class MacroMenuPositionProvider(
     private val margin: Int,
     private val imeBottom: Int,
@@ -89,6 +94,7 @@ internal fun PromptTemplateField(
     owner: ExtensionFieldRef? = null,
 ) {
     val navigation = LocalSourceNavigation.current
+    val previewMacro = rememberPromptMacroPreview()
     var sourceChoices by remember { mutableStateOf<List<ResourceLocation>?>(null) }
     var separateTarget by remember { mutableStateOf<PromptReferenceOccurrence?>(null) }
     var draft by remember { mutableStateOf(TextFieldValue(value)) }
@@ -117,6 +123,22 @@ internal fun PromptTemplateField(
             occurrence.copy(locations = (occurrence.locations + resolved).distinctBy { it.copy(section = null) })
         }
     }
+    val currentOccurrence = occurrences.singleOrNull { occurrence ->
+        if (draft.selection.collapsed) draft.selection.start >= occurrence.start && draft.selection.start < occurrence.endExclusive
+        else draft.selection.min >= occurrence.start && draft.selection.max <= occurrence.endExclusive
+    }
+    val macroPreviews = remember(occurrences, previewMacro) {
+        occurrences.associate { occurrence -> occurrence.start to previewMacro(occurrence.text) }
+    }
+    val previewLabels = remember(macroPreviews) {
+        macroPreviews.mapValues { (_, preview) ->
+            preview.unavailableReason ?: preview.issues.firstOrNull { it.error }?.message
+                ?: compactMacroPreview(preview.text).ifBlank { "暂无内容" }
+        }
+    }
+    val macroTransformation = PromptMacroVisualTransformation(previewLabels,
+        if (focused) currentOccurrence?.start else null,
+        androidx.compose.ui.graphics.Color(0xFFDCEAFF), androidx.compose.ui.graphics.Color(0xFF173C70))
     val problems = remember(draft.text, scan) { promptReferenceProblems(draft.text, scan) }
     val popupOpen = !browserOpen && historyEdit == null && referenceEdit == null &&
         (explicitlyOpen || (focused && token?.shortcut == true && dismissedAt != (draft.text to draft.selection)))
@@ -198,7 +220,7 @@ internal fun PromptTemplateField(
         keyboard?.hide()
     }
     fun choose(macro: String, target: PromptReferenceOccurrence? = null) {
-        if (runCatching { HistoryViews.selection(macro) }.getOrNull() != null) openHistory(macro, target) else insert(macro, target)
+        if (shouldOpenHistoryReferenceEditor(macro)) openHistory(macro, target) else insert(macro, target)
     }
     BackHandler(enabled = popupOpen) { dismissCompletion() }
     Box(Modifier.fillMaxWidth()) {
@@ -207,13 +229,10 @@ internal fun PromptTemplateField(
             onValueChange = { changed ->
                 draft = changed
                 referenceNotice = null
-                if (changed.text == value && !changed.selection.collapsed) {
-                    val selected = occurrences.filter { it.start == changed.selection.min && it.endExclusive == changed.selection.max }.singleOrNull()
-                    if (selected != null) { referenceEdit = selected; explicitlyOpen = false }
-                }
                 if (changed.text != value) onChange(changed.text)
             },
             label = { Text(label) },
+            visualTransformation = macroTransformation,
             modifier = Modifier.fillMaxWidth()
                 .focusRequester(focusRequester)
                 .onFocusChanged { state ->
@@ -229,8 +248,17 @@ internal fun PromptTemplateField(
                 },
             trailingIcon = {
                 IconButton(
-                    onClick = { if (popupOpen) dismissCompletion() else explicitlyOpen = true },
-                    modifier = Modifier.focusProperties { canFocus = false }.semantics { contentDescription = "选取宏" },
+                    onClick = {
+                        val current = currentOccurrence
+                        if (current != null && targetIsCurrent(current)) {
+                            dismissCompletion()
+                            referenceEdit = current
+                            keyboard?.hide()
+                        } else if (popupOpen) dismissCompletion() else explicitlyOpen = true
+                    },
+                    modifier = Modifier.focusProperties { canFocus = false }.semantics {
+                        contentDescription = if (currentOccurrence == null) "插入宏" else "查看与编辑当前宏"
+                    },
                 ) {
                     Text("//", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelLarge)
                 }
@@ -258,14 +286,6 @@ internal fun PromptTemplateField(
             }
         }
     }
-    PromptReferenceChips(occurrences) { occurrence ->
-        if (targetIsCurrent(occurrence)) {
-            selectSpan(occurrence.start, occurrence.endExclusive, editText = false)
-            referenceNotice = null
-            referenceEdit = occurrence
-            keyboard?.hide()
-        }
-    }
     problems.forEach { problem ->
         TextButton(onClick = { selectSpan(problem.start, problem.endExclusive, editText = true) },
             contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
@@ -274,20 +294,30 @@ internal fun PromptTemplateField(
     }
     referenceNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
     referenceEdit?.let { target ->
-        PromptReferenceActions(target,
-            onSource = if (navigation != null && target.locations.isNotEmpty()) ({
+        val preview = macroPreviews[target.start] ?: previewMacro(target.text)
+        PromptReferenceActions(target, preview = preview,
+            onLiteral = if (preview.unavailableReason == null && preview.issues.none { it.error } && target.history == null) ({
+                if (targetIsCurrent(target)) {
+                    // Braces in expanded source would become a new template: keep this action unavailable for them.
+                    val changed = target.source.replaceRange(target.start, target.endExclusive, preview.text)
+                    draft = TextFieldValue(changed, TextRange(target.start + preview.text.length))
+                    referenceEdit = null
+                    onChange(changed)
+                }
+            }).takeIf { "{{" !in preview.text && "}}" !in preview.text } else null,
+            onSource = preview.editSource ?: if (navigation != null && target.locations.isNotEmpty()) ({
                 if (targetIsCurrent(target)) {
                     referenceEdit = null
                     if (target.locations.size == 1) navigation.edit(target.locations.single()) else sourceChoices = target.locations
                 }
             }) else null,
-            onSeparate = if (navigation != null && owner != null && target.history == null) ({
+            onSeparate = if (navigation != null && owner != null && target.locations.singleOrNull()?.field?.field == ExtensionField.ENTRY_TEXT) ({
                 if (targetIsCurrent(target)) { referenceEdit = null; separateTarget = target }
             }) else null,
             onReplace = {
                 if (targetIsCurrent(target)) { referenceEdit = null; browserTarget = target; browserOpen = true }
             },
-            onHistory = if (target.history == null) null else ({ openHistory(target = target) }),
+            onHistory = if (shouldOpenHistoryReferenceEditor(target.text)) ({ openHistory(target = target) }) else null,
             onEditText = {
                 if (targetIsCurrent(target)) {
                     referenceEdit = null
@@ -310,12 +340,29 @@ internal fun PromptTemplateField(
         PromptReferenceSheet(
             references,
             onInsert = { macro ->
-                choose(macro, browserTarget)
+                val target = browserTarget
+                browserOpen = false
+                browserTarget = null
+                choose(macro, target)
                 if (historyEdit == null) { focusRequester.requestFocus(); keyboard?.show() }
             },
-            onDismiss = { browserOpen = false; focusRequester.requestFocus() },
+            onDismiss = {
+                // The picker also calls onDismiss after onInsert. A committed choice must not
+                // reopen the old actions sheet over the newly opened history editor.
+                if (browserOpen) {
+                    val target = browserTarget
+                    browserOpen = false
+                    browserTarget = null
+                    if (target != null) referenceEdit = target else focusRequester.requestFocus()
+                }
+            },
             includeMacroHelp = true,
-            onConfigureHistory = { openHistory(target = browserTarget) },
+            onConfigureHistory = {
+                val target = browserTarget
+                browserOpen = false
+                browserTarget = null
+                openHistory(target = target)
+            },
         )
     }
     historyEdit?.let { edit ->

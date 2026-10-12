@@ -143,7 +143,8 @@ object ResourceEditCommands {
             .copy(usages = usages, deletionTarget = target, cleanupAssociations = removeConfiguredAssociations)
     }
 
-    private fun deletionUses(library: Library, target: ResourceLocation) = ResourceUsageIndex.usages(library, target).filterNot {
+    internal fun deletionUses(library: Library, target: ResourceLocation, referenceLibrary: Library = library) =
+        ResourceUsageIndex.usages(library, target, referenceLibrary).filterNot {
         // References located wholly inside the removed object disappear with that object.
         it.kind == ResourceUseKind.TEMPLATE && it.location?.resource == target.resource &&
             (target.entryId == null || it.location.entryId == target.entryId)

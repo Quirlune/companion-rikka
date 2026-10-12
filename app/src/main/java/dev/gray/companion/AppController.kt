@@ -77,10 +77,12 @@ class AppController internal constructor(
         val secrets: Map<CredentialSlot, String>,
         val input: String,
         val regenerationBase: Session?,
+        val beforeUserSession: Session?,
         val sourceSessionId: String,
         val recovery: RunRecovery? = null,
         val decision: RecoveryDecision? = null,
         val completion: CompletableDeferred<Unit>,
+        val regenerationAdmission: RegenerationAdmission? = null,
     )
     private val mutex = Mutex()
     @Volatile private var runJob: Job? = null
@@ -95,6 +97,9 @@ class AppController internal constructor(
     private data class ImportPreparation(val id: String?, val issues: List<Issue>)
     private val _configurationImport = MutableStateFlow<ConfigurationImportPreview?>(null)
     val configurationImport: StateFlow<ConfigurationImportPreview?> = _configurationImport.asStateFlow()
+    private val workspaceMutex = Mutex()
+    private val _configurationWorkspaces = MutableStateFlow<List<ConfigurationWorkspace>>(emptyList())
+    val configurationWorkspaces: StateFlow<List<ConfigurationWorkspace>> = _configurationWorkspaces.asStateFlow()
 
     private val _library = MutableStateFlow(Library())
     val library: StateFlow<Library> = _library.asStateFlow()
@@ -117,7 +122,46 @@ class AppController internal constructor(
     }
     val automaticOptions: StateFlow<AutomaticOptionsUiState> = optionsController.state
 
-    fun generateAutomaticOptions() = optionsController.generate()
+    fun generateAutomaticOptions() {
+        val requested = automaticOptions.value
+        if (!requested.repairAvailable) {
+            optionsController.generate()
+            return
+        }
+        viewModelScope.launch {
+            val ready = mutex.withLock {
+                if (!storageReady) { setError("资源库尚未就绪"); return@withLock false }
+                val current = _library.value
+                val session = current.sessions.firstOrNull { it.id == current.selectedSessionId }
+                    ?: return@withLock false
+                if (session.id != requested.sessionId ||
+                    AutomaticOptions.source(current, session)?.key != requested.sourceKey) return@withLock false
+                try {
+                    // Recheck current settings: a stale error must not modify a newer configuration.
+                    AutomaticOptions.request(current, session)
+                } catch (_: AutomaticOptionsAssistantPrefill) {
+                    val next = current.copy(automaticOptions = AutomaticOptions.withGenerationRequest(current.automaticOptions))
+                    val issues = AutomaticOptions.validate(next)
+                    if (issues.any { it.error }) {
+                        setError(issues.first { it.error }.message)
+                        return@withLock false
+                    }
+                    try {
+                        require(AutomaticOptions.request(next, session)?.messages?.lastOrNull()?.role == Role.USER)
+                        repository.save(next)
+                        _library.value = next
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { setError("自动选项修复未能保存；原配置仍保留"); return@withLock false }
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (failure: Exception) {
+                    setError(failure.message ?: "自动选项提示词无法编译")
+                    return@withLock false
+                }
+                true
+            }
+            if (ready) optionsController.generate()
+        }
+    }
 
     /** Auxiliary preferences can change independently of a running main call. */
     suspend fun saveAutomaticOptions(config: AutomaticOptionsConfig): List<Issue> = mutex.withLock {
@@ -152,7 +196,7 @@ class AppController internal constructor(
                     val current = initial.sessions.firstOrNull { it.id == initial.selectedSessionId }
                     if (current != null && current.pendingRun == null && (current.messages.isNotEmpty() || current.state.isNotEmpty() ||
                         current.results.isNotEmpty() || current.macroHistory.isNotEmpty() || current.promptInjections.isNotEmpty() ||
-                        current.historyMemory != HistoryMemoryState() || current.currentOnlyMacros.isNotEmpty())) {
+                        current.historyMemory != HistoryMemoryState() || current.currentOnlyMacros.isNotEmpty() || current.userMacros.isNotEmpty())) {
                         initial = initial.startNewConversation()
                     }
                 }
@@ -297,6 +341,87 @@ class AppController internal constructor(
     /** Resource plans and source-field edits use the same admission and publication path. */
     suspend fun updateResources(command: (Library) -> ExtensionEditResult): List<Issue> = updateConfiguration(command)
 
+    /** Draft operations have a separate lock and never stop or modify the active conversation. */
+    suspend fun openConfigurationWorkspace(label: String = "配置工作台"): WorkspaceOperationResult = workspaceMutex.withLock {
+        if (!storageReady) return@withLock WorkspaceOperationResult(status = "NOT_READY",
+            issues = listOf(Issue("workspace", "资源库尚未就绪")), retryable = true)
+        val open = _configurationWorkspaces.value.filter { it.status == ConfigurationWorkspaceStatus.OPEN }
+        if (open.size >= 8) return@withLock WorkspaceOperationResult(status = "LIMIT",
+            issues = listOf(Issue("workspace", "最多保留8个草稿，请先应用或放弃其中一个")))
+        val workspace = ConfigurationWorkspaces.open(_library.value, label.ifBlank { "配置工作台" })
+        _configurationWorkspaces.value = open + workspace
+        WorkspaceOperationResult(workspace)
+    }
+
+    suspend fun stageConfigurationWorkspace(id: String, expectedRevision: Long, text: String): WorkspaceOperationResult =
+        editConfigurationWorkspace(id) { workspace ->
+            ConfigurationWorkspaces.stageCommands(workspace, expectedRevision, text, ConfigurationAdmission::validateNative)
+        }
+
+    suspend fun stageConfigurationField(id: String, expectedRevision: Long, target: ExtensionFieldRef,
+        expectedValue: String?, value: String?): WorkspaceOperationResult = editConfigurationWorkspace(id) { workspace ->
+        ConfigurationWorkspaces.stageField(workspace, expectedRevision, target, expectedValue, value,
+            ConfigurationAdmission::validateNative)
+    }
+
+    suspend fun previewConfigurationWorkspace(id: String, expectedRevision: Long): WorkspaceOperationResult =
+        editConfigurationWorkspace(id) { workspace ->
+            ConfigurationWorkspaces.preview(workspace, expectedRevision, ConfigurationAdmission::validateNative)
+        }
+
+    private suspend fun editConfigurationWorkspace(id: String,
+        edit: (ConfigurationWorkspace) -> ConfigurationWorkspaceResult): WorkspaceOperationResult = workspaceMutex.withLock {
+        val workspace = _configurationWorkspaces.value.firstOrNull { it.id == id }
+            ?: return@withLock WorkspaceOperationResult(status = "NOT_FOUND", issues = listOf(Issue("workspace", "草稿已不存在")))
+        val result = withContext(Dispatchers.Default) { edit(workspace) }
+        replaceConfigurationWorkspace(result.workspace)
+        WorkspaceOperationResult(result.workspace, result.status.name, result.issues, result.retryable)
+    }
+
+    suspend fun discardConfigurationWorkspace(id: String, expectedRevision: Long): WorkspaceOperationResult = workspaceMutex.withLock {
+        val workspace = _configurationWorkspaces.value.firstOrNull { it.id == id }
+            ?: return@withLock WorkspaceOperationResult(status = "NOT_FOUND", issues = listOf(Issue("workspace", "草稿已不存在")))
+        if (workspace.revision != expectedRevision) return@withLock WorkspaceOperationResult(workspace, "STALE",
+            listOf(Issue("workspace.revision", "草稿已改变，请重新查看后操作")), true)
+        val discarded = ConfigurationWorkspaces.discard(workspace)
+        replaceConfigurationWorkspace(discarded)
+        WorkspaceOperationResult(discarded)
+    }
+
+    /** Reuses resource CAS and the existing SQLite transaction, including its undo receipt. */
+    suspend fun commitConfigurationWorkspace(id: String, expectedRevision: Long): WorkspaceOperationResult = workspaceMutex.withLock workspaceLock@{
+        val workspace = _configurationWorkspaces.value.firstOrNull { it.id == id }
+            ?: return@workspaceLock WorkspaceOperationResult(status = "NOT_FOUND", issues = listOf(Issue("workspace", "草稿已不存在")))
+        val prepared = ConfigurationWorkspaces.commitPlan(workspace, expectedRevision)
+        val plan = prepared.plan ?: return@workspaceLock WorkspaceOperationResult(workspace,
+            prepared.status.name, prepared.issues, prepared.status == ConfigurationWorkspaceResultStatus.STALE)
+        mutex.withLock liveLock@{
+            if (!storageReady) return@liveLock WorkspaceOperationResult(workspace, "NOT_READY",
+                listOf(Issue("workspace", "资源库尚未就绪")), true)
+            if (_busy.value || runCompletion?.isCompleted == false || editingCount > 0)
+                return@liveLock WorkspaceOperationResult(workspace, "BUSY",
+                    listOf(Issue("workspace", "当前操作仍在进行；草稿已保留，结束后可再次应用")), true)
+            val current = _library.value
+            val applied = withContext(Dispatchers.Default) {
+                ConfigurationCommands.apply(plan, current, ConfigurationAdmission::validateNative)
+            }
+            val changed = applied.library ?: return@liveLock WorkspaceOperationResult(workspace, "CONFLICT_OR_INVALID", applied.issues)
+            val boundaryIssues = memoryPolicyChangeIssues(current, changed)
+            if (boundaryIssues.isNotEmpty()) return@liveLock WorkspaceOperationResult(workspace, "INVALID", boundaryIssues)
+            val next = applied.receipt?.let { receipt -> changed.copy(
+                configurationEdits = ConfigurationReceiptHistory.append(current.configurationEdits, receipt)) } ?: changed
+            val issues = saveConfiguration(next, applied.issues)
+            if (issues.any { it.error }) return@liveLock WorkspaceOperationResult(workspace, "SAVE_FAILED", issues, true)
+            val committed = ConfigurationWorkspaces.committed(workspace, applied.receipt?.id)
+            replaceConfigurationWorkspace(committed)
+            WorkspaceOperationResult(committed, issues = issues)
+        }
+    }
+
+    private fun replaceConfigurationWorkspace(workspace: ConfigurationWorkspace) {
+        _configurationWorkspaces.value = _configurationWorkspaces.value.map { if (it.id == workspace.id) workspace else it }
+    }
+
     /** Layout is a session preference: reject active work atomically instead of stopping a run. */
     suspend fun updateCardLayout(sessionId: String, expected: List<CardPlacement>, next: List<CardPlacement>): List<Issue> = mutex.withLock {
         if (!storageReady) return@withLock listOf(Issue("session", "资源库尚未就绪"))
@@ -437,13 +562,25 @@ class AppController internal constructor(
         updateMessage(sessionId) { MessageOperations.selectOpeningRevision(it, messageId, revisionId) }
 
     suspend fun deleteMessage(sessionId: String, messageId: String): List<Issue> =
-        updateMessage(sessionId) { MessageOperations.deleteMessage(it, messageId) }
+        updateMessage(sessionId, pendingDeleteId = messageId) {
+            if (it.pendingRun != null) MessageOperations.rollbackPendingUserTurn(it, messageId)
+            else MessageOperations.deleteMessage(it, messageId)
+        }
+
+    suspend fun rollbackPendingUserTurn(sessionId: String, runId: String, messageId: String): List<Issue> =
+        updateMessage(sessionId, pendingDeleteId = messageId, expectedPendingRunId = runId) {
+            MessageOperations.rollbackPendingUserTurn(it, messageId)
+        }
 
     suspend fun appendUserOnly(sessionId: String, text: String): List<Issue> =
         updateMessage(sessionId) { session ->
-            if (text.isBlank()) MessageOperationResult(issues = listOf(Issue("message", "用户消息不能为空")))
+            val expanded = UserInputMacros.expand(text, CompletedWorlds.executionLibrary(_library.value, session), session,
+                ExecutionSemantics.CURRENT)
+            val plain = expanded.text?.trim()
+            if (expanded.issues.any { it.error }) MessageOperationResult(issues = expanded.issues)
+            else if (plain.isNullOrBlank()) MessageOperationResult(issues = listOf(Issue("message", "用户消息不能为空")))
             else MessageOperationResult(session.copy(
-                messages = session.messages + ChatMessage(role = Role.USER, text = text, speakerName = _library.value.userName(session)),
+                messages = session.messages + ChatMessage(role = Role.USER, text = plain, speakerName = _library.value.userName(session)),
                 updatedAt = System.currentTimeMillis(),
             ))
         }
@@ -458,12 +595,14 @@ class AppController internal constructor(
         }
 
     suspend fun deleteGenerationVariant(sessionId: String, turnId: String, variantId: String): List<Issue> =
-        updateMessage(sessionId) { MessageOperations.deleteGenerationVariant(it, turnId, variantId) }
+        updateMessage(sessionId) { ConversationPaths.deleteGenerationVariant(it, turnId, variantId) }
 
     suspend fun forkMessage(sessionId: String, messageId: String): List<Issue> =
         updateMessage(sessionId, fork = true) { MessageOperations.forkAt(it, messageId) }
 
-    private suspend fun updateMessage(sessionId: String, fork: Boolean = false, operation: (Session) -> MessageOperationResult): List<Issue> = mutex.withLock {
+    private suspend fun updateMessage(sessionId: String, fork: Boolean = false, pendingDeleteId: String? = null,
+        expectedPendingRunId: String? = null,
+        operation: (Session) -> MessageOperationResult): List<Issue> = mutex.withLock {
         if (!storageReady) return@withLock listOf(Issue("session", "资源库尚未就绪"))
         if (_busy.value || runCompletion?.isCompleted == false || editingCount > 0)
             return@withLock listOf(Issue("session", "请先等待当前操作完成再修改消息"))
@@ -471,11 +610,14 @@ class AppController internal constructor(
         if (current.selectedSessionId != sessionId) return@withLock listOf(Issue("session", "当前会话已改变"))
         val session = current.sessions.firstOrNull { it.id == sessionId }
             ?: return@withLock listOf(Issue("session", "会话不存在"))
-        if (session.pendingRun != null) return@withLock listOf(Issue("recovery", "这一轮仍有断点；请先恢复或跳过，再修改消息"))
+        if (expectedPendingRunId != null && session.pendingRun?.id != expectedPendingRunId)
+            return@withLock listOf(Issue("recovery", "断点已改变，请重新打开恢复选项"))
+        if (session.pendingRun != null && pendingDeleteId != session.pendingRun?.turnId)
+            return@withLock listOf(Issue("recovery", "这一轮仍有断点；只能删除触发本轮的用户消息"))
         val result = operation(session)
         val candidate = result.session ?: return@withLock result.issues
         val world = candidate.executableWorld
-        val mustReplay = world != null && (world != session.executableWorld ||
+        val mustReplay = session.pendingRun == null && world != null && (world != session.executableWorld ||
             world.recipes.any { recipe -> recipe.targets.any { it.key in candidate.unavailableResultKeys } })
         val rebuilt = if (mustReplay) withContext(Dispatchers.Default) { BranchReplay.rebuild(candidate, QuickJsPluginExecutor()) } else result
         var changed = rebuilt.session ?: return@withLock rebuilt.issues
@@ -709,11 +851,16 @@ class AppController internal constructor(
                 setError(replayed.issues.firstOrNull()?.message ?: "旧环境重算失败；原分支仍保留")
                 return@withLock null
             }
+            var regenerationAdmission: RegenerationAdmission? = null
             val candidate = try {
-                if (recovery == null && regenerationBase == null)
+                val resolved = if (recovery == null && regenerationBase == null)
                     CompletedWorlds.withGlobalMemoryForNewTurn(old, replayedCandidate)
                 else if (recovery == null) CompletedWorlds.withExtensionPolicyForNewTurn(old, replayedCandidate)
                 else replayedCandidate
+                regenerationAdmission = if (regenerationBase == null) null
+                    else if (recovery != null) MessageOperations.restoreRegenerationAdmission(recovery)
+                    else MessageOperations.admitRegeneration(regenerationBase, resolved, old)
+                resolved
             } catch (failure: IllegalArgumentException) {
                 setError(failure.message ?: "全局记忆无法用于此分支")
                 return@withLock null
@@ -721,8 +868,17 @@ class AppController internal constructor(
                 setError(failure.message ?: "全局记忆无法用于此分支")
                 return@withLock null
             }
-            val runInput = if (regenerationMessageId != null) candidate.messages.lastOrNull { it.role == Role.USER && !it.deleted }?.text.orEmpty() else input
-            if (runInput.isBlank()) { setError("用户消息不能为空"); return@withLock null }
+            val runInput = if (regenerationMessageId != null) candidate.messages.lastOrNull { it.role == Role.USER && !it.deleted }?.text.orEmpty()
+            else if (appendUser) {
+                val expanded = UserInputMacros.expand(input, CompletedWorlds.executionLibrary(old, candidate), candidate,
+                    ExecutionSemantics.CURRENT)
+                if (expanded.issues.any { it.error } || expanded.text == null) {
+                    setError(expanded.issues.firstOrNull { it.error }?.message ?: "用户宏无法展开")
+                    return@withLock null
+                }
+                expanded.text.orEmpty().trim()
+            } else input
+            if (appendUser && runInput.isBlank()) { setError("用户消息不能为空"); return@withLock null }
             val secrets = try {
                 withContext(Dispatchers.IO) {
                     val requestedLibrary = recovery?.frozenResources ?: CompletedWorlds.executionLibrary(old, candidate)
@@ -751,11 +907,13 @@ class AppController internal constructor(
             val completion = CompletableDeferred<Unit>()
             runCompletion = completion
             runningExtensionIds = PluginParticipation.executionOwners(executionLibrary, staged)
-            PreparedTurn(next, staged, revision, secrets, runInput, regenerationBase, session.id, recovery, recoveryDecision, completion)
+            PreparedTurn(next, staged, revision, secrets, runInput, regenerationBase,
+                if (appendUser && recovery == null && regenerationBase == null && editedUserMessageId == null) session else null,
+                session.id, recovery, recoveryDecision, completion, regenerationAdmission = regenerationAdmission)
         }
         if (prepared == null) { accepted?.complete(false); return@supervisorScope false }
         accepted?.complete(true)
-        val (snapshot, session, runRevision, secrets, runInput, regenerationBase, sourceSessionId, recovery, decision) = prepared
+        val (snapshot, session, runRevision, secrets, runInput, regenerationBase, beforeUserSession, sourceSessionId, recovery, decision) = prepared
         val completion = prepared.completion
         var launchedJob: Job? = null
         var recoveryAccepted = false
@@ -768,7 +926,7 @@ class AppController internal constructor(
                 executionLibrary.loadedCallGroups(session).flatMap { it.workflows })
                 .flatMap { flow -> flow.nodes.map { flow.id to it.id } }.withIndex().associate { it.value to it.index }
             val publisher = AcceptedTurnPublisher(repository, mutex, _library, _state, _streaming,
-                session, sourceSessionId, regenerationBase, recovery?.id)
+                session, sourceSessionId, regenerationBase, beforeUserSession, recovery?.id, prepared.regenerationAdmission)
             val job = async(start = CoroutineStart.LAZY) {
                 val onUpdate: suspend (RunUpdate) -> Unit = onUpdate@{ update ->
                     update.progress?.let {

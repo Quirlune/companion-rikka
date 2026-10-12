@@ -13,7 +13,7 @@ internal class NodeExecutionFailure(
 /** Provenance is captured by the engine, never supplied as a handler effect. */
 internal data class ValidatedCandidate(val outcome: ActionOutcome, val rawModelText: String? = null,
     val fullResponseText: String? = null, val reasoningSnapshot: ReasoningSnapshot? = null,
-    val provenanceNote: String? = null)
+    val provenanceNote: String? = null, val modelFinishReason: String? = null)
 
 /** Pure candidate checks. No state, versions, replies or events are published here. */
 internal class OutcomeValidator(private val library: Library, session: Session) {
@@ -59,6 +59,19 @@ internal class OutcomeValidator(private val library: Library, session: Session) 
         if (ref.action?.descriptor?.execution == ActionExecution.PURE_MODEL && outcome.hasEffects())
             throw NodeExecutionFailure(ref, "纯模型动作返回了状态、宏、注入或事件副作用",
                 RecoveryFailureKind.CONFIGURATION, retryable = false)
+        if (ref.node.actionId == "user.macro.create" && (outcome.text.isNotEmpty() ||
+                outcome.stateWrites.isNotEmpty() || outcome.macroWrites.isNotEmpty() ||
+                outcome.activationWrites.isNotEmpty() || outcome.injectionWrites.isNotEmpty() ||
+                outcome.emittedEvents.isNotEmpty() || !outcome.historyWrites.isEmpty() ||
+                ref.node.regexOutputCopy.enabled))
+            throw NodeExecutionFailure(ref, "创建用户宏行为只能登记定义", RecoveryFailureKind.CONFIGURATION, retryable = false)
+        if (ref.node.actionId == "user.macro.create" || outcome.userMacroWrites.isNotEmpty()) {
+            val definition = ref.node.userMacro
+            if (ref.node.actionId != "user.macro.create" || definition == null ||
+                outcome.userMacroWrites != mapOf(definition.shortcut to definition) ||
+                UserInputMacros.validate(definition).any { it.error })
+                throw NodeExecutionFailure(ref, "用户宏定义写入无效", RecoveryFailureKind.CONFIGURATION, retryable = false)
+        }
         val summaryTag = GlobalMemory.summaryXmlTag(library, ref.workflow.id, ref.node.id, context.executionVersion)
         val processedText = if (summaryTag != null) {
             if (!SummaryXml.validTag(summaryTag)) throw NodeExecutionFailure(ref, "摘要 XML 标签名无效",
@@ -69,7 +82,7 @@ internal class OutcomeValidator(private val library: Library, session: Session) 
             }
         } else if (ref.node.outputProcessing.isEmpty()) outcome else try {
             require(outcome.stateWrites.isEmpty() && outcome.macroWrites.isEmpty() &&
-                outcome.activationWrites.isEmpty())
+                outcome.activationWrites.isEmpty() && outcome.userMacroWrites.isEmpty())
             val resolver = MacroResolver(library, requireNotNull(context.session), context.input, context.executionVersion)
             outcome.copy(text = TextProcessing.apply(ref.node.outputProcessing,
                 outcome.text, context.state, context.results, context.executionVersion) { resolver.read(it) })
@@ -84,7 +97,8 @@ internal class OutcomeValidator(private val library: Library, session: Session) 
         } catch (failure: IllegalArgumentException) {
             throw NodeExecutionFailure(ref, failure.message.orEmpty(), RecoveryFailureKind.CONFIGURATION, retryable = false)
         }
-        val values = linkedMapOf("result.${ref.node.outputKey}" to processed.text)
+        val values = linkedMapOf<String, String>()
+        if (ref.node.actionId != "user.macro.create") values["result.${ref.node.outputKey}"] = processed.text
         processed.macroWrites.forEach { (address, value) ->
             val canonical = canonicalWriteAddress(address)
                 ?: throw NodeExecutionFailure(ref, "宏写入地址无效", RecoveryFailureKind.CONFIGURATION, retryable = false)

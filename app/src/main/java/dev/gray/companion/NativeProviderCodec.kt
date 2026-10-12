@@ -120,6 +120,9 @@ internal object NativeProviderCodec {
         val (parent, originalModel) = projection(profile)
         val overwrite = originalModel.providerOverwrite
         val selected = overwrite ?: parent
+        require(NativeProviderConfiguration.validHttpsAddress(effectiveBaseUrl(selected))) {
+            "模型实际连接地址必须是有效的 HTTPS 地址"
+        }
         val slot = requiredSlot(selected,
             if (overwrite == null) ModelCatalog.credentialId(profile) else profile.id, overwrite != null)
         val secret = read(slot)
@@ -174,6 +177,12 @@ internal object NativeProviderCodec {
 
     private fun usesServiceAccount(provider: ProviderSetting): Boolean =
         provider is ProviderSetting.Google && provider.vertexAI && provider.useServiceAccount
+
+    private fun effectiveBaseUrl(provider: ProviderSetting): String = when (provider) {
+        is ProviderSetting.OpenAI -> provider.baseUrl
+        is ProviderSetting.Google -> provider.baseUrl
+        is ProviderSetting.Claude -> provider.baseUrl
+    }
 
     private fun providerCredentials(provider: ProviderSetting, owner: String, model: Boolean): Map<CredentialSlot, String> =
         buildMap {

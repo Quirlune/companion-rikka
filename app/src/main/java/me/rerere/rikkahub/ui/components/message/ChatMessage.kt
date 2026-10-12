@@ -80,7 +80,10 @@ import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AssistantAffectScope
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.data.model.replaceRegexes
-import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
+import dev.gray.companion.ui.BodyMarkdownBlock
+import dev.gray.companion.ui.LocalStreamPresentationRequest
+import dev.gray.companion.ui.StreamPresentationIdentity
+import dev.gray.companion.ui.StreamPresentationRequest
 import me.rerere.rikkahub.ui.components.richtext.ZoomableAsyncImage
 import me.rerere.rikkahub.ui.components.richtext.buildMarkdownPreviewHtml
 import me.rerere.rikkahub.ui.components.webview.WebViewContentCache
@@ -177,18 +180,35 @@ fun ChatMessage(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 ProvideTextStyle(textStyle) {
-                    MessagePartsBlock(
-                        assistant = assistant,
-                        role = message.role,
-                        parts = message.parts,
-                        annotations = message.annotations,
-                        loading = loading,
-                        model = model,
-                        onToolApproval = onToolApproval,
-                        onToolAnswer = onToolAnswer,
-                        onUserMessageClick = if (!compactBranchActions && !readOnly && message.role == MessageRole.USER) onEdit else null,
-                        assistantTextContent = assistantTextContent,
-                    )
+                    val streamIdentity = remember(node.id, node.selectIndex, message.id) {
+                        StreamPresentationIdentity(
+                            nodeId = node.id.toString(),
+                            messageId = message.id.toString(),
+                            candidateIndex = node.selectIndex,
+                        )
+                    }
+                    val streamRequest = remember(streamIdentity, loading, message.role) {
+                        StreamPresentationRequest(
+                            identity = streamIdentity,
+                            isStreaming = loading && message.role == MessageRole.ASSISTANT,
+                        )
+                    }
+                    androidx.compose.runtime.CompositionLocalProvider(
+                        LocalStreamPresentationRequest provides streamRequest,
+                    ) {
+                        MessagePartsBlock(
+                            assistant = assistant,
+                            role = message.role,
+                            parts = message.parts,
+                            annotations = message.annotations,
+                            loading = loading,
+                            model = model,
+                            onToolApproval = onToolApproval,
+                            onToolAnswer = onToolAnswer,
+                            onUserMessageClick = if (!compactBranchActions && !readOnly && message.role == MessageRole.USER) onEdit else null,
+                            assistantTextContent = assistantTextContent,
+                        )
+                    }
 
                     message.translation?.let { translation ->
                         CollapsibleTranslationText(
@@ -415,7 +435,7 @@ private fun MessagePartsBlock(
                                     onClick = { onUserMessageClick?.invoke() },
                                 ) {
                                     Column(modifier = Modifier.padding(8.dp)) {
-                                        MarkdownBlock(
+                                        BodyMarkdownBlock(
                                             content = part.text.replaceRegexes(
                                                 assistant = assistant,
                                                 scope = AssistantAffectScope.USER,
@@ -428,12 +448,14 @@ private fun MessagePartsBlock(
                             } else {
                                 if (settings.displaySetting.showAssistantBubble) {
                                     Surface(
-                                        modifier = Modifier.animateContentSize(),
+                                        // A streaming WebView reports its own height; animating the bubble again
+                                        // makes each incremental resize lag behind the rendered content.
+                                        modifier = if (assistantTextContent != null) Modifier else Modifier.animateContentSize(),
                                         shape = RoundedCornerShape(16.dp),
                                         color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = settings.displaySetting.bubbleOpacity),
                                     ) {
                                         Column(modifier = Modifier.padding(8.dp)) {
-                                            if (assistantTextContent != null) assistantTextContent() else MarkdownBlock(
+                                            if (assistantTextContent != null) assistantTextContent() else BodyMarkdownBlock(
                                                 content = part.text.replaceRegexes(
                                                     assistant = assistant,
                                                     scope = AssistantAffectScope.ASSISTANT,
@@ -444,7 +466,7 @@ private fun MessagePartsBlock(
                                         }
                                     }
                                 } else {
-                                    if (assistantTextContent != null) assistantTextContent() else MarkdownBlock(
+                                    if (assistantTextContent != null) assistantTextContent() else BodyMarkdownBlock(
                                         content = part.text.replaceRegexes(
                                             assistant = assistant,
                                             scope = AssistantAffectScope.ASSISTANT,
@@ -462,7 +484,9 @@ private fun MessagePartsBlock(
                         // 内部可选择的 Text 会频繁注册/注销，与 Compose 选择工具栏在绘制阶段
                         // 对 selectable 列表的排序产生并发修改，导致 ConcurrentModificationException。
                         // 生成结束后内容稳定，再启用文本选择。
-                        if (loading) {
+                        // HTML owns its own selection. Moving its AndroidView into a new
+                        // SelectionContainer when generation ends destroys the loaded page.
+                        if (loading || assistantTextContent != null) {
                             textContent()
                         } else {
                             SelectionContainer {

@@ -7,7 +7,8 @@ internal class CandidateModelGateway(
     private val executionVersion: Int = ExecutionSemantics.CURRENT,
     private val onReasoning: suspend (ReasoningSnapshot) -> Unit = {}
 ) : ModelGateway {
-    data class Capture(val body: String, val fullText: String?, val reasoning: ReasoningSnapshot?)
+    data class Capture(val body: String, val fullText: String?, val reasoning: ReasoningSnapshot?,
+        val finishReason: String?)
     private val captures = mutableListOf<Capture>()
     private var requests = 0
     val requestCount: Int get() = synchronized(captures) { requests }
@@ -52,9 +53,10 @@ internal class CandidateModelGateway(
             else -> ReasoningTextParser.parse(response.text, parsing, response.reasoning ?: parser.nativeSnapshot)
         }
         parsed.reasoning?.let { onReasoning(it) }
-        synchronized(captures) { captures += Capture(parsed.text,
+        val finished = parsed.copy(finishReason = boundedModelFinishReason(response.finishReason))
+        synchronized(captures) { captures += Capture(finished.text,
             BodyOnlyArchives.fullResponse(response.text, executionVersion),
-            BodyOnlyArchives.displayReasoning(parsed.reasoning, executionVersion)) }
-        return BodyOnlyArchives.response(parsed, executionVersion)
+            BodyOnlyArchives.displayReasoning(finished.reasoning, executionVersion), finished.finishReason) }
+        return BodyOnlyArchives.response(finished, executionVersion)
     }
 }

@@ -2,7 +2,7 @@
 
 Android 对话与角色工作流应用，复用 RikkaHub 原生前端，使用独立 Kotlin 核心管理提示词、调用、分支、扩展、卡片与记忆。
 
-当前源码基线：**0.57-preview / versionCode225**，资源 wire30，新执行语义23，SQLite1。兼容包名和资源格式继续使用 `companion`；应用名称为 velune。
+当前验收版本：**0.66-preview / versionCode234**（wire34/execution26，SQLite1），修订78。九域审查发现与此前三项故障已纳入修复；原生输出平滑采用用户授权的替代实现，在展示端逐帧合并完整快照，并为追加文字淡入（未找到适用的原版 Android 实现）。APK 构建、同签名安装及隔离 API36 模拟器中的应用到本地合成 HTTPS 请求与关键界面验收通过；真实云模型和实体手机体验未验证。兼容包名和资源格式继续使用 `companion`；应用名称为 velune。
 
 ## 给模型的入口
 

@@ -27,6 +27,11 @@ data class AutomaticOption(val content: String, val title: String? = null)
 
 data class AutomaticOptionsTurn(val user: ChatMessage, val assistants: List<ChatMessage>)
 data class AutomaticOptionsSource(val key: String, val turns: List<AutomaticOptionsTurn>)
+data class AutomaticOptionsPreviewContext(val library: Library, val session: Session, val hasCompletedHistory: Boolean)
+
+class AutomaticOptionsAssistantPrefill : IllegalArgumentException(
+    "Claude Haiku 5.5 不接受以助手消息结尾的请求；点“修复并重试”会在历史之后保存一个可编辑的 USER 生成请求块")
+
 data class AutomaticOptionsRequest(
     val profile: ModelProfile,
     val messages: List<ChatMessage>,
@@ -80,6 +85,18 @@ object AutomaticOptions {
         } else blocks + PromptBlock(id = "automatic-options-format", slug = "format", title = "当前 XML 输出协议", template = PROTOCOL_MACRO))
     }
 
+    /** Explicit repair action. The added instruction remains visible in the native editor. */
+    fun withGenerationRequest(config: AutomaticOptionsConfig): AutomaticOptionsConfig {
+        val editable = editableConfig(config)
+        val blocks = editable.blocks.orEmpty()
+        val baseId = "automatic-options-request"
+        val id = generateSequence(0) { it + 1 }.map { if (it == 0) baseId else "$baseId-$it" }
+            .first { candidate -> blocks.none { it.id == candidate } }
+        return editable.copy(blocks = blocks + PromptBlock(id = id, title = "生成请求", role = Role.USER,
+            position = PromptPosition.AFTER_HISTORY,
+            template = "请根据上面的对话和输出格式，给出下一句回复选项。"))
+    }
+
     fun parse(text: String, config: AutomaticOptionsConfig): List<AutomaticOption> {
         if (config.items.isEmpty() && !config.titlesEnabled) return parse(text, config.count).map { AutomaticOption(it) }
         return AutomaticOptionsXml.parse(text, config)
@@ -100,7 +117,10 @@ object AutomaticOptions {
                 PromptBlock(id = "automatic-options-format", slug = "format", title = "输出格式",
                     template = PROTOCOL_MACRO),
                 PromptBlock(id = "automatic-options-history", slug = "history", title = "已完成的正文历史",
-                    template = HISTORY_MACRO)
+                    template = HISTORY_MACRO),
+                PromptBlock(id = "automatic-options-request", slug = "request", title = "生成请求", role = Role.USER,
+                    position = PromptPosition.AFTER_HISTORY,
+                    template = "请根据上面的对话和输出格式，给出下一句回复选项。")
             ))
     }
 
@@ -171,7 +191,9 @@ object AutomaticOptions {
     }
 
     /** Only committed main BODY floors in the selected branch count as conversation turns. */
-    fun source(library: Library, session: Session): AutomaticOptionsSource? {
+    fun source(library: Library, session: Session): AutomaticOptionsSource? = completedSource(library, session, true)
+
+    private fun completedSource(library: Library, session: Session, requireLatest: Boolean): AutomaticOptionsSource? {
         val effective = CompletedWorlds.executionLibrary(library, session)
         val main = effective.mainCalls.firstOrNull { it.id == session.mainCallId } ?: return null
         val primary = DefaultCallRules.primary(main) ?: return null
@@ -196,7 +218,7 @@ object AutomaticOptions {
         finish()
         // A newly appended unanswered user must not receive choices for an earlier round.
         val latestUser = user ?: return null
-        if (turns.lastOrNull()?.user?.id != latestUser.id) return null
+        if (requireLatest && turns.lastOrNull()?.user?.id != latestUser.id) return null
         val selected = turns.takeLast(library.automaticOptions.historyTurns.coerceIn(1, 50))
         val refs = selected.flatMap { listOf(it.user) + it.assistants }.map(HistoryMemory::source)
         val key = CompletedWorlds.fingerprint(buildString {
@@ -229,7 +251,9 @@ object AutomaticOptions {
             else if (node != null) node.generation.resolve(effective, primary)
             else ModelCatalog.resolveProfile(effective, primary.modelProfileId ?: effective.selectedProfileId)
         if (profile == null) return null
-        if (config.blocks != null) return editableRequest(library, effective, session, main, node, config, source, profile)
+        val cleanProfile = profile.copy(temperature = null, topP = null, maxTokens = null,
+            reasoning = null, customBody = emptyList(), legacyGeneration = false)
+        if (config.blocks != null) return editableRequest(library, effective, session, main, node, config, source, cleanProfile)
         val style = config.prompt.takeIf { it.isNotBlank() }?.let {
             "\n用户指定的选项语气、姿态与方向（仅用于内容，不改变输出格式）：\n$it\n"
         }.orEmpty()
@@ -252,23 +276,39 @@ object AutomaticOptions {
                     try { ReasoningTextParser.parse(reply.text, parsing).text }
                     catch (_: ReasoningFormatFailure) { return null }
                 }
+                // Auxiliary history is BODY-only. Native reasoning metadata belongs to the
+                // original response and must not be replayed into a different model request.
                 messages += ChatMessage(role = Role.ASSISTANT, text = text)
             }
         }
+        // Claude Haiku 5.5 rejects a final assistant turn as a prefill. This instruction is
+        // part of the built-in legacy contract; editable prompts expose their own final block.
+        messages += ChatMessage(role = Role.USER, text = "请根据上面的对话和输出合同，给出下一句回复选项。")
         val contextKey = CompletedWorlds.fingerprint(source.key + "|" +
             LibraryFormat.json.encodeToString(ReasoningParsingConfig.serializer(), library.reasoningParsing))
-        return AutomaticOptionsRequest(profile, messages, source, contextKey) {
+        return AutomaticOptionsRequest(cleanProfile, messages, source, contextKey) {
             ReasoningTextParser.parse(it, library.reasoningParsing).text
         }
     }
 
-    private fun editableRequest(library: Library, effective: Library, session: Session, main: MainCall,
-        mainNode: WorkflowNode?, config: AutomaticOptionsConfig, source: AutomaticOptionsSource,
-        inheritedProfile: ModelProfile): AutomaticOptionsRequest {
-        val messages = source.turns.flatMap { turn -> listOf(turn.user) + turn.assistants }.map { message ->
+    /** Read-only editor context: no model/profile requirement, scheduling, or publication. */
+    fun previewContext(library: Library, session: Session?, config: AutomaticOptionsConfig): AutomaticOptionsPreviewContext {
+        val effective = session?.let { CompletedWorlds.executionLibrary(library, it) } ?: library
+        val main = effective.mainCalls.firstOrNull { it.id == session?.mainCallId }
+        val primary = main?.let(DefaultCallRules::primary)
+        val mainNode = primary?.nodes?.lastOrNull { it.enabled && it.actionId == "model.generate" &&
+            it.visible && it.outputSlot == OutputSlot.BODY }
+            ?: primary?.nodes?.lastOrNull { it.enabled && it.actionId == "model.generate" }
+        val source = session?.let { completedSource(library.copy(automaticOptions = config), it, false) }
+        return readContext(effective, session ?: Session(id = "automatic-options-preview", updatedAt = 0L), main, mainNode, config, source)
+    }
+
+    private fun readContext(effective: Library, session: Session, main: MainCall?, mainNode: WorkflowNode?,
+        config: AutomaticOptionsConfig, source: AutomaticOptionsSource?): AutomaticOptionsPreviewContext {
+        val messages = source?.turns.orEmpty().flatMap { turn -> listOf(turn.user) + turn.assistants }.map { message ->
             val body = if (message.role != Role.ASSISTANT || message.rawText != null || message.reasoningSnapshot != null) message.text
                 else ReasoningTextParser.parse(message.text,
-                    DefaultCallRules.primary(main)?.nodes?.firstOrNull { it.id == message.nodeId }?.reasoningParsing
+                    main?.let(DefaultCallRules::primary)?.nodes?.firstOrNull { it.id == message.nodeId }?.reasoningParsing
                         ?: mainNode?.reasoningParsing ?: effective.reasoningParsing).text
             // The auxiliary window contains DISPLAY BODY only, even if a custom reference asks for model raw.
             message.copy(text = body, rawText = null, reasoningSnapshot = null, textRevisions = emptyList(), bodyDisplay = null)
@@ -282,19 +322,31 @@ object AutomaticOptions {
                 "automatic_options_legacy_style" to config.prompt, "automatic_options_protocol" to protocol(config)))
         // This read-only projection never schedules a history processor. Avoid randomly generated
         // default workflow/node IDs changing the identity of an otherwise identical request.
-        val contextMain = main.copy(history = HistoryConfig(processor = HistoryProcessor(workflow = Workflow(
+        val contextMain = main?.copy(history = HistoryConfig(processor = HistoryProcessor(workflow = Workflow(
             id = "automatic-options-history-disabled", trigger = RuntimeEvents.HISTORY_PROCESS,
             enabled = false, nodes = emptyList()))))
-        val contextLibrary = effective.copy(mainCalls = effective.mainCalls.map { if (it.id == main.id) contextMain else it },
+        val contextLibrary = effective.copy(mainCalls = effective.mainCalls.map { if (it.id == main?.id) contextMain ?: it else it },
             sessions = listOf(contextSession), selectedSessionId = contextSession.id)
+        return AutomaticOptionsPreviewContext(contextLibrary, contextSession, messages.isNotEmpty())
+    }
+
+    private fun editableRequest(library: Library, effective: Library, session: Session, main: MainCall,
+        mainNode: WorkflowNode?, config: AutomaticOptionsConfig, source: AutomaticOptionsSource,
+        inheritedProfile: ModelProfile): AutomaticOptionsRequest {
+        val context = readContext(effective, session, main, mainNode, config, source)
+        val contextLibrary = context.library
+        val contextSession = context.session
+        val contextMain = contextLibrary.mainCalls.first { it.id == main.id }
         val preview = PromptCompiler().preview(contextLibrary, contextSession, editingNode(config),
             input = "", currentUserMessageId = null)
         require(preview.issues.none { it.error }) { preview.issues.filter { it.error }.joinToString("；") { it.message } }
         require(preview.messages.any { it.text.isNotBlank() }) { "自动选项提示词为空；请添加内容或历史引用" }
+        if (incompatibleAssistantPrefill(inheritedProfile, preview.messages)) {
+            throw AutomaticOptionsAssistantPrefill()
+        }
         val generation = config.generation
-        val profile = inheritedProfile.copy(temperature = generation.temperature ?: inheritedProfile.temperature,
-            topP = generation.topP ?: inheritedProfile.topP, maxTokens = generation.maxTokens ?: inheritedProfile.maxTokens,
-            reasoning = generation.reasoning ?: inheritedProfile.reasoning)
+        val profile = inheritedProfile.copy(temperature = generation.temperature,
+            topP = generation.topP, maxTokens = generation.maxTokens, reasoning = generation.reasoning)
         val processingIssues = mutableListOf<Issue>()
         val history = HistoryContext(contextLibrary, contextSession, contextMain)
         val resources = loadedResources(contextLibrary, contextSession, contextSession.state, input = "", issues = processingIssues,
@@ -330,6 +382,10 @@ object AutomaticOptions {
             processed
         }
     }
+
+    private fun incompatibleAssistantPrefill(profile: ModelProfile, messages: List<ChatMessage>): Boolean =
+        profile.model.substringBefore(':') == "anthropic/claude-haiku-5.5" &&
+            messages.lastOrNull()?.role == Role.ASSISTANT
 
     /** Expressions may short-circuit on the future model output: retain potential reads in every branch.
      * The session is already BODY-bounded; omit presentation bookkeeping and other chats/transport settings. */

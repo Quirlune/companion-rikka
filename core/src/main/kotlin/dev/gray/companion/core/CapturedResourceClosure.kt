@@ -138,17 +138,21 @@ internal object CapturedResourceClosure {
             }
         }
         val capturedMains = library.mainCalls.filter { ExtensionResourceRef(ExtensionResourceKind.MAIN, it.id) in refs }
+        val capturedCharacters = library.characters.filter { ExtensionResourceRef(ExtensionResourceKind.CHARACTER, it.id) in refs }
         val capturedGroups = library.groups.filter { ExtensionResourceRef(ExtensionResourceKind.GROUP, it.id) in refs }
         val profileIds = (capturedMains.flatMap { it.configuredWorkflows() } + capturedGroups.flatMap { it.workflows })
             .flatMap { flow -> listOfNotNull(flow.modelProfileId) + flow.nodes.mapNotNull { it.generation.profileId } }
             .toSet() + listOfNotNull(library.selectedProfileId)
         val profiles = library.profiles.filter { it.id in profileIds }.map { it.copy(resolvedHeaders = emptyList(), resolvedProvider = null) }
         return library.copy(
-            characters = library.characters.filter { ExtensionResourceRef(ExtensionResourceKind.CHARACTER, it.id) in refs },
+            characters = capturedCharacters,
             mainCalls = capturedMains, groups = capturedGroups,
             packages = library.packages.filter { ExtensionResourceRef(ExtensionResourceKind.PACKAGE, it.id) in refs },
             profiles = profiles, connections = library.connections.filter { it.id in profiles.mapNotNull { profile -> profile.apiConnectionId } },
-            personas = library.personas.filter { it.id == session.personaId || it.id == library.selectedPersonaId },
+            personas = library.personas.filter { persona ->
+                persona.id == session.personaId || persona.id == library.selectedPersonaId ||
+                    capturedCharacters.any { it.boundPersonaId == persona.id }
+            },
             extensions = extensions.toList(), sessions = emptyList(), selectedSessionId = null,
             chatFolders = emptyList(), savedChats = emptyList(), configurationEdits = emptyList(),
             automaticOptions = AutomaticOptionsConfig(),

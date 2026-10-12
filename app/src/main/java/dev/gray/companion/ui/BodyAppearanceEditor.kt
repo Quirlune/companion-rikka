@@ -19,9 +19,17 @@ internal fun BodyAppearanceEditor(
 ) {
     val issue = remember(template) { BodyAppearanceMarkup.issue(template) }
     var saveIssue by remember { mutableStateOf<String?>(null) }
+    var colorsExpanded by remember { mutableStateOf(false) }
     CallEditorPage("正文外观", template != original, onBack,
         onSave = { if (issue == null) onSave() else saveIssue = issue },
         onRegisterBack = onRegisterBack) {
+        EditorDestinationRow("正文颜色 · 全局显示偏好", if (colorsExpanded) "收起颜色设置" else "粗体、斜体与引号颜色 · 修改立即生效") {
+            colorsExpanded = !colorsExpanded
+        }
+        if (colorsExpanded) {
+            BodyColorsSettingsContent()
+            HorizontalDivider()
+        }
         Text("在同一个模板中编写 HTML 与 <style> CSS，将 {{正文}} 放在正文显示的位置，仅保留一处。",
             style = MaterialTheme.typography.bodyMedium)
         OutlinedTextField(
@@ -92,6 +100,8 @@ private val bodyAppearanceSampleMarkdown = """
 
     - 一段普通文字
     - *轻轻强调*，还有 `行内代码`
+
+    “慢慢来，我在这里。”
 
     > 留一点空白，让文字更好读。
 """.trimIndent()

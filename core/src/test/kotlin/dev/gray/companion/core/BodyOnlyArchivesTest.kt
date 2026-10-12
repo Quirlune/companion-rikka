@@ -8,6 +8,43 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class BodyOnlyArchivesTest {
+    @Test fun incompleteProviderFinishSurvivesParsingCandidateAndAcceptedBody() = runBlocking {
+        val node = WorkflowNode(id = "model", visible = true)
+        val workflow = Workflow(id = "flow", nodes = listOf(node))
+        val main = MainCall(id = "main", workflows = listOf(workflow))
+        val session = Session(id = "chat", mainCallId = main.id)
+        val library = Library(mainCalls = listOf(main))
+        val actions = ActionRegistry.defaults().snapshot()
+        val ref = PlannedNode(workflow, node, actions.getValue(node.actionId))
+        val source = object : ModelGateway {
+            override suspend fun generate(profile: ModelProfile, messages: List<ChatMessage>,
+                onDelta: suspend (String) -> Unit) = "partial body"
+            override suspend fun generateResponseAttempt(profile: ModelProfile, messages: List<ChatMessage>,
+                onDelta: suspend (ModelDelta) -> Unit): ModelResponse {
+                onDelta(ModelDelta.Text("partial body"))
+                return ModelResponse("partial body", finishReason = "incomplete:max_output_tokens")
+            }
+        }
+        val context = ActionContext(node, "question", emptyList(), emptyMap(), emptyMap(), emptyMap(),
+            ModelProfile(model = "offline"), source, {}, session = session, library = library,
+            workflowId = workflow.id, executionVersion = 26)
+        val candidate = NodeCandidateExecutor(library, source, OutcomeValidator(library, session),
+            Semaphore(1), ExecutionSemantics(26)).execute(ref, context, null, { _, _ -> }, {}, {})
+        assertEquals("partial body", candidate.outcome.text)
+        assertEquals("incomplete:max_output_tokens", candidate.modelFinishReason)
+        val receipt = OutcomePublisher(library, main, actions, mapOf(workflow.id to main.id),
+            setOf(main.id), 1, "user", 26).prepare(ref, candidate.outcome, session, emptySet(), false,
+            rawModelText = candidate.rawModelText, modelFinishReason = candidate.modelFinishReason)
+        val saved = LibraryFormat.json.decodeFromString(RecoveryReceipt.serializer(),
+            LibraryFormat.json.encodeToString(RecoveryReceipt.serializer(), receipt))
+        assertEquals("partial body", saved.reply!!.text)
+        assertEquals("incomplete:max_output_tokens", saved.reply!!.modelFinishReason)
+        assertTrue(modelResponseWasTruncated("length"))
+        assertTrue(modelResponseWasTruncated("MAX_TOKENS"))
+        assertFalse(modelResponseWasTruncated("stop"))
+        assertNull(boundedModelFinishReason("private prompt with spaces"))
+    }
+
     @Test fun completedReplyKeepsDisplayThoughtWithoutSendingOrPublishingItAsHistory() = runBlocking {
         val version = 21
         val node = WorkflowNode(id = "model", visible = true,

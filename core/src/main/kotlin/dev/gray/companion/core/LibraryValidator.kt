@@ -60,6 +60,8 @@ object LibraryValidator {
         }
         library.characters.forEach { card ->
             if (card.avatar != null && card.avatar.decodedBytes() == null) issues += Issue("character.${card.id}.avatar", "头像必须是 32 KB 以内的 JPEG 或 PNG 图片")
+            if (card.boundPersonaId != null && library.personas.none { it.id == card.boundPersonaId })
+                issues += Issue("character.${card.id}.boundPersonaId", "绑定的用户身份不存在")
             unique(card.entries.map { it.key }, "character.${card.id}.entries")
             if (card.entries.any { it.key == "name" }) issues += Issue("character.${card.id}.entries", "name 是角色名称保留键")
             checkTemplate(card.greeting, "character.${card.id}.greeting", issues, executionVersion)
@@ -81,6 +83,10 @@ object LibraryValidator {
             if (path.startsWith("session.") && session.folderId != null && library.chatFolders.none { it.id == session.folderId })
                 issues += Issue("$path.folderId", "聊天文件夹不存在")
             issues += CardLayoutCommands.validate(session.cardPlacements, "$path.cardPlacements")
+            session.userMacros.forEach { (shortcut, definition) ->
+                if (shortcut != definition.shortcut) issues += Issue("$path.userMacros.$shortcut", "用户宏键与快捷词不一致")
+                issues += UserInputMacros.validate(definition, "$path.userMacros.$shortcut")
+            }
             checkMemory(session.historyMemory, "$path.historyMemory", issues)
             session.currentOnlyMacros.forEach { (key, head) ->
                 val at = "$path.currentOnlyMacros.$key"
@@ -240,6 +246,14 @@ object LibraryValidator {
                     node.reasoningParsing?.validationError()?.let { issues += Issue("$nodePath.reasoningParsing", it) }
                 if (node.title.isBlank()) issues += Issue(nodePath, "节点名称不能为空")
                 if (node.actionId.isBlank()) issues += Issue(nodePath, "动作不能为空")
+                if (node.actionId == "user.macro.create") {
+                    if (!semantics.userInputMacros) issues += Issue(nodePath, "此恢复版本不支持用户输入宏")
+                    val definition = node.userMacro
+                    if (definition == null) issues += Issue("$nodePath.userMacro", "请先配置用户宏")
+                    else issues += UserInputMacros.validate(definition, "$nodePath.userMacro")
+                    if (node.regexOutputCopy.enabled)
+                        issues += Issue("$nodePath.regexOutputCopy", "创建用户宏行为不生成结果副本")
+                }
                 if (node.actionId == "event.emit") {
                     val event = node.arguments["event"].orEmpty().trim()
                     val reserved = semantics.isReservedEvent(event)

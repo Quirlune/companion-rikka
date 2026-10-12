@@ -31,7 +31,7 @@ import org.koin.compose.koinInject
 private val companionConfigure = ProviderConfigureOptions()
 private val companionDetail = ProviderDetailOptions(
     configure = companionConfigure,
-    model = ProviderModelOptions(editModelId = true,
+    model = ProviderModelOptions(editModelId = true, customRequestBody = false,
         prepareNewOverride = { NativeProviderCodec.sanitizeProvider(it).copyProvider(models = emptyList()) }),
     saveToast = false, balanceLoadPolicy = ProviderModelLoadPolicy.MANUAL,
     modelLoadPolicy = ProviderModelLoadPolicy.MANUAL, retainConfigDraft = true)
@@ -92,7 +92,6 @@ internal fun CompanionProviderDetailPage(providerId: String, library: Library, b
     val client = koinInject<OkHttpClient>()
     val latestLibrary by rememberUpdatedState(library)
     var snapshot by remember(providerId) { mutableStateOf(CompanionProviderAdapter.capture(library)) }
-    val modelDrafts = remember(providerId) { mutableStateMapOf<Uuid, ModelCallDefaultsDraft>() }
     val nativeId = remember(providerId, snapshot.connectionIds) {
         runCatching { Uuid.parse(providerId) }.getOrNull()?.takeIf { it in snapshot.connectionIds }
             ?: snapshot.providerId(providerId)
@@ -120,8 +119,8 @@ internal fun CompanionProviderDetailPage(providerId: String, library: Library, b
     BackHandler { requestBack() }
 
     // Updating another resource must not replace the connection form's unsaved provider image.
-    LaunchedEffect(library.connections, library.profiles, dirty, committing, modelDrafts.isNotEmpty()) {
-        if (!dirty && !committing && modelDrafts.isEmpty()) {
+    LaunchedEffect(library.connections, library.profiles, dirty, committing) {
+        if (!dirty && !committing) {
             snapshot = CompanionProviderAdapter.capture(library)
             snapshot.extras[nativeId]?.let { extras = it }
             storedSecrets = readStored(snapshot)
@@ -149,16 +148,8 @@ internal fun CompanionProviderDetailPage(providerId: String, library: Library, b
     fun submit(desired: List<ProviderSetting>, keys: Map<CredentialSlot, Pair<String, String>> = emptyMap(), deleting: Boolean = false,
                complete: (Boolean) -> Unit = {}) {
         if (!editingEnabled) { complete(false); return }
-        val requestedModels = desired.flatMap { it.models }.map { it.id }.toSet()
-        val defaults = modelDrafts.filterKeys { it in requestedModels }.mapValues { it.value.parsed() }
-        if (defaults.values.any { it == null }) {
-            toaster.show("调用默认值格式无效，请修正后保存。", type = ToastType.Error)
-            complete(false)
-            return
-        }
         val result = CompanionProviderAdapter.plan(snapshot, desired,
-            connectionExtras = snapshot.extras + (nativeId to extras), editedCredentials = keys,
-            editedModelDefaults = defaults.mapValues { requireNotNull(it.value) })
+            connectionExtras = snapshot.extras + (nativeId to extras), editedCredentials = keys)
         val plan = result.plan
         if (plan == null) {
             toaster.show(result.issues.firstOrNull()?.message ?: "修改无效", type = ToastType.Error)
@@ -233,12 +224,6 @@ internal fun CompanionProviderDetailPage(providerId: String, library: Library, b
                 }
             }
         },
-        modelEditExtraContent = { model, editable ->
-            val profileId = snapshot.profileIds[model.id]
-            ModelCallDefaultsEditor(model.id, snapshot.profiles.firstOrNull { it.id == profileId },
-                editingEnabled && editable, modelDrafts)
-        },
-        onModelEditClosed = { model -> modelDrafts.remove(model.id) },
         loadModels = { requested ->
             val savedExtras = snapshot.extras.getValue(nativeId)
             withContext(Dispatchers.IO) {
@@ -255,12 +240,12 @@ internal fun CompanionProviderDetailPage(providerId: String, library: Library, b
         requestProviderManager = requestManager,
         onRequestError = { failure ->
             if (failure is CancellationException) throw failure
-            IllegalStateException("连接请求失败，请检查连接配置。")
+            IllegalStateException(connectionFailureMessage(failure))
         },
         prepareProviderForShare = NativeProviderCodec::sanitizeProvider,
         onModelLoadError = { failure ->
             if (failure is CancellationException) throw failure
-            toaster.show("模型列表获取失败，请检查连接配置；也可以手动添加模型。", type = ToastType.Error)
+            toaster.show("模型列表获取失败：${connectionFailureMessage(failure)} 也可以手动添加模型。", type = ToastType.Error)
         })
 
     if (discard) AlertDialog(onDismissRequest = { discard = false }, title = { Text("连接有未保存的修改") },

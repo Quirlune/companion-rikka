@@ -9,7 +9,7 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 class CompanionProviderAdapterTest {
-    @Test fun nativeModelEditCommitsCallDefaultsInOneConflictCheckedPlan() {
+    @Test fun nativeModelEditPreservesCapabilitiesAndLegacyDataInOneConflictCheckedPlan() {
         val base = library()
         val snapshot = CompanionProviderAdapter.capture(base)
         val provider = snapshot.providers.first() as ProviderSetting.OpenAI
@@ -17,8 +17,7 @@ class CompanionProviderAdapterTest {
         val desired = snapshot.providers.map { if (it.id == provider.id) provider.copy(models = provider.models.map { old ->
             if (old.id == model.id) old.copy(displayName = "Unified", abilities = listOf(me.rerere.ai.provider.ModelAbility.REASONING)) else old
         }) else it }
-        val defaults = CompanionModelCallDefaults(.75f, .95f, 2048, ModelReasoning.AUTO)
-        val prepared = CompanionProviderAdapter.plan(snapshot, desired, editedModelDefaults = mapOf(model.id to defaults))
+        val prepared = CompanionProviderAdapter.plan(snapshot, desired)
         assertTrue(prepared.issues.toString(), prepared.issues.none { it.error })
         val plan = requireNotNull(prepared.plan)
         val profileId = snapshot.profileIds.getValue(model.id)
@@ -26,10 +25,11 @@ class CompanionProviderAdapterTest {
         assertTrue(next.issues.toString(), next.issues.none { it.error })
         val changed = requireNotNull(next.library).profiles.single { it.id == profileId }
         assertEquals("Unified", changed.name)
-        assertEquals(defaults.temperature, changed.temperature)
-        assertEquals(defaults.topP, changed.topP)
-        assertEquals(defaults.maxTokens, changed.maxTokens)
-        assertEquals(defaults.reasoning, changed.reasoning)
+        val original = base.profiles.single { it.id == profileId }
+        assertEquals(original.temperature, changed.temperature)
+        assertEquals(original.topP, changed.topP)
+        assertEquals(original.maxTokens, changed.maxTokens)
+        assertEquals(original.reasoning, changed.reasoning)
         val recaptured = CompanionProviderAdapter.capture(next.library!!).providers.flatMap { it.models }.single { it.id == model.id }
         assertEquals(listOf(me.rerere.ai.provider.ModelAbility.REASONING), recaptured.abilities)
         assertEquals(base.profiles.filterNot { it.id == profileId }, next.library!!.profiles.filterNot { it.id == profileId })

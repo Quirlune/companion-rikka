@@ -9,7 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.composables.icons.lucide.ChevronDown
@@ -120,9 +120,6 @@ internal fun MacroCompletionMenu(
                         text = {
                             Column {
                                 Text(branch.source.menuTitle, style = MaterialTheme.typography.labelLarge)
-                                if (branch.source.detail.isNotBlank()) Text(branch.source.detail,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         },
                         trailingIcon = {
@@ -140,13 +137,9 @@ internal fun MacroCompletionMenu(
                         text = {
                             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                 Text(reference.title, style = MaterialTheme.typography.bodyMedium)
-                                Text(reference.origin, style = MaterialTheme.typography.labelSmall,
+                                Text(reference.detail.ifBlank { reference.origin }, style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                if (reference.detail.isNotBlank()) Text(reference.detail,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(reference.macro, style = MaterialTheme.typography.bodySmall,
-                                    fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
                             }
                         },
                         onClick = { onInsert(reference.macro) },
@@ -171,7 +164,7 @@ internal fun MacroCompletionMenu(
             }
             item(key = "browser") {
                 DropdownMenuItem(
-                    text = { Text("全部宏、历史版本与 XML 格式…") },
+                    text = { Text("搜索全部宏…") },
                     onClick = onOpenBrowser,
                     modifier = Modifier.focusProperties { canFocus = false },
                 )

@@ -8,6 +8,23 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 class NativeProviderCodecTest {
+    @Test fun httpModelOverrideIsRejectedBeforeCredentialRead() {
+        val override = ProviderSetting.Claude(baseUrl = "http://override.invalid/v1")
+        val model = Model(modelId = "claude", providerOverwrite = override)
+        val profile = ModelProfile(id = "profile", model = "claude", apiConnectionId = "parent",
+            baseUrl = "https://parent.invalid/v1", nativeModel = NativeProviderCodec.modelOptions(model))
+        val library = Library(profiles = listOf(profile))
+        assertTrue(NativeProviderCodec.validate(library).any { it.path.endsWith("nativeModel") })
+        var credentialRead = false
+        val failure = runCatching { NativeProviderCodec.request(profile) {
+            credentialRead = true
+            "synthetic-key"
+        } }.exceptionOrNull()
+        assertTrue(failure is IllegalArgumentException)
+        assertFalse(credentialRead)
+        assertFalse(failure!!.message.orEmpty().contains("synthetic-key"))
+    }
+
     @Test fun vertexServiceAccountSurvivesStorageAndUsesPrivateSlotWithoutApiKey() {
         val original = ProviderSetting.Google(vertexAI = true, useServiceAccount = true,
             serviceAccountEmail = "fixture@example.invalid", projectId = "fixture-project", location = "global",

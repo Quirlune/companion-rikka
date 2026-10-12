@@ -44,7 +44,7 @@ internal class NodeCandidateExecutor(
                 if (capture != null) {
                     requireCanonicalBody(capture.body)
                     return BodyOnlyArchives.candidate(outcomeValidator.validate(ref, invocation, outcome), semantics.version,
-                        capture.body, capture.fullText, capture.reasoning)
+                        capture.body, capture.fullText, capture.reasoning, modelFinishReason = capture.finishReason)
                 }
                 if (captured.requestCount == 0) {
                     val parsed = ReasoningTextParser.parse(outcome.text, parsing)

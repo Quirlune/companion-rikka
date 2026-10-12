@@ -109,7 +109,7 @@ internal fun CharacterEditor(initial: CharacterCard, packages: List<PromptPackag
         val context = Session(id = "greeting-editor:${card.id}", characterId = card.id,
             mainCallId = selected?.mainCallId ?: base.mainCalls.firstOrNull()?.id.orEmpty(),
             packageIds = selected?.packageIds.orEmpty(), groupIds = selected?.groupIds.orEmpty(),
-            personaId = base.selectedPersonaId ?: selected?.personaId, updatedAt = 0L)
+            personaId = card.boundPersonaId ?: base.selectedPersonaId ?: selected?.personaId, updatedAt = 0L)
         val sources = base.copy(characters = base.characters.filterNot { it.id == card.id } + card,
             sessions = listOf(context), selectedSessionId = context.id)
         val main = sources.mainCalls.firstOrNull { it.id == context.mainCallId }
@@ -197,6 +197,13 @@ internal fun CharacterEditor(initial: CharacterCard, packages: List<PromptPackag
         }
         HorizontalDivider()
         Text("关联资源", style = MaterialTheme.typography.titleMedium)
+        val personaChoices = listOf<String?>(null).map { it to "不绑定 · 使用新聊天默认身份" } +
+            library?.personas.orEmpty().map { it.id to it.name.ifBlank { "未命名身份" } } +
+            if (card.boundPersonaId != null && library?.personas.orEmpty().none { it.id == card.boundPersonaId })
+                listOf(card.boundPersonaId to "身份已不可用：${card.boundPersonaId}") else emptyList()
+        ChoiceLine("新对话默认用户身份", card.boundPersonaId, personaChoices) { card = card.copy(boundPersonaId = it) }
+        Text("只影响之后用此角色创建的聊天；已有聊天保留自己的身份。",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         EditorSection("关联提示词包", boundNames.joinToString("、").ifBlank { "暂无绑定" },
             initiallyExpanded = sourceFocus?.resource == sourceResource && sourceFocus.section == "boundPackageIds") {
             Text("一起加载；引用后才进入提示词。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

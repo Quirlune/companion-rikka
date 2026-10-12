@@ -69,7 +69,8 @@ class WorkflowEngine(
                 node.declaredOutputAddresses(actions.snapshot()[node.actionId]?.descriptor)
             }.orEmpty()
             if (recovery.accepted.any { receipt -> (receipt.publication.macroAppends.keys +
-                    receipt.publication.headWrites.keys + receipt.publication.headRemovals).any { it in addresses } })
+                    receipt.publication.headWrites.keys + receipt.publication.headRemovals +
+                    receipt.publication.userMacroWrites.keys.map { "user-macro:$it" }).any { it in addresses } })
                 return conflict(recovery, "失败调用与已接受结果写入同一宏地址，不能安全原位续跑")
         }
         return execute(revised, recovery.initialSession, recovery.input, gateway, recovery.copy(frozenResources = revised), decision, onUpdate)
@@ -86,7 +87,8 @@ class WorkflowEngine(
         return RunResult(recovery.state, recovery.results, recovery.replies, recovery.traces + trace,
             RunStatus.PAUSED, recovery.resultOrigins, recovery.macroHistory, recovery.promptInjections,
             recovery.historyDigests, recovery.copy(traces = recovery.traces + trace, failures = conflicts),
-            recovery.unavailableKeys, recovery.historyMemory, recovery.currentOnlyMacros)
+            recovery.unavailableKeys, recovery.historyMemory, recovery.currentOnlyMacros,
+            userMacros = recovery.userMacros)
     }
 
     private fun freezeResources(library: Library, session: Session, executionVersion: Int): Library {
@@ -106,7 +108,10 @@ class WorkflowEngine(
             connections = library.connections.filter { it.id in connectionIds },
             sessions = emptyList(), selectedSessionId = null,
             chatFolders = emptyList(), savedChats = emptyList(), configurationEdits = emptyList(),
-            personas = library.personas.filter { it.id == session.personaId || it.id == library.selectedPersonaId }
+            personas = library.personas.filter { persona ->
+                persona.id == session.personaId || persona.id == library.selectedPersonaId ||
+                    library.characters.any { card -> card.id == session.characterId && card.boundPersonaId == persona.id }
+            }
         )
     }
 
@@ -194,7 +199,7 @@ class WorkflowEngine(
         fun failed() = RunResult(session.state, session.results, emptyList(), traces.toList(), RunStatus.FAILED,
             session.resultOrigins, session.macroHistory, session.promptInjections, session.historyDigests,
             unavailableResultKeys = session.unavailableResultKeys, historyMemory = session.historyMemory,
-            currentOnlyMacros = session.currentOnlyMacros)
+            currentOnlyMacros = session.currentOnlyMacros, userMacros = session.userMacros)
 
         val validation = ExecutionResources.views(library).flatMap { LibraryValidator.validate(it, executionVersion) }.firstOrNull { it.error }
         if (validation != null) {
@@ -249,6 +254,7 @@ class WorkflowEngine(
             return failed()
         }
         fun resultKeys(node: WorkflowNode): Set<String> = buildSet {
+            if (node.actionId == "user.macro.create") return@buildSet
             add(node.outputKey)
             if (node.regexOutputCopy.enabled) add(node.regexOutputCopy.outputKey)
             node.declaredWriteAddress(availableActions[node.actionId]?.descriptor)
@@ -261,6 +267,7 @@ class WorkflowEngine(
         val stagedOrigins = session.resultOrigins.toMutableMap()
         val stagedHistory = session.macroHistory.toMutableMap()
         val stagedHeads = session.currentOnlyMacros.toMutableMap()
+        val stagedUserMacros = session.userMacros.toMutableMap()
         val stagedDigests = session.historyDigests.toMutableMap()
         var stagedMemory = session.historyMemory
         val currentUserMessageId = session.messages.lastOrNull { it.role == Role.USER && it.outputSlot == OutputSlot.BODY }?.id
@@ -319,7 +326,7 @@ class WorkflowEngine(
             state = state, results = results, resultOrigins = stagedOrigins.filterKeys { it in results },
             macroHistory = stagedHistory.toMap(), promptInjections = stagedInjections.toList(),
             historyDigests = stagedDigests.toMap(), unavailableResultKeys = maskedKeys.toSet(), historyMemory = stagedMemory,
-            currentOnlyMacros = stagedHeads.toMap(), inactivePaths = emptyList()
+            currentOnlyMacros = stagedHeads.toMap(), userMacros = stagedUserMacros.toMap(), inactivePaths = emptyList()
         )
         val replies = mutableListOf<ChatMessage>()
         var bodyDisplayReceipt = previous?.bodyDisplayReceipt
@@ -356,6 +363,7 @@ class WorkflowEngine(
             historyMemory = if (replayIncomplete()) previous!!.historyMemory else stagedMemory,
             completedWorkflowIds = completedWorkflowIds.toSet(),
             currentOnlyMacros = if (replayIncomplete()) previous!!.currentOnlyMacros else stagedHeads.toMap(),
+            userMacros = if (replayIncomplete()) previous!!.userMacros else stagedUserMacros.toMap(),
             bodyDisplayReceipt = bodyDisplayReceipt
         )
         fun partialResult(): RunResult {
@@ -364,7 +372,7 @@ class WorkflowEngine(
                 checkpoint.traces, RunStatus.PAUSED, checkpoint.resultOrigins, checkpoint.macroHistory,
                 checkpoint.promptInjections, checkpoint.historyDigests, checkpoint, checkpoint.unavailableKeys,
                 checkpoint.historyMemory, checkpoint.currentOnlyMacros,
-                completedWorld = CompletedWorlds.checkpointWorld(capturedWorld))
+                completedWorld = CompletedWorlds.checkpointWorld(capturedWorld), userMacros = checkpoint.userMacros)
         }
         suspend fun progress() { updateMutex.withLock { onUpdate(RunUpdate(progress = partialResult())) } }
         val executedOutput = mutableMapOf<String, String>()
@@ -717,7 +725,8 @@ class WorkflowEngine(
                     )
                     prepared += Prepared(ref, context)
                     if (ref.key !in acceptedReceipts && ref.key !in preparedRecords) preparedRecords[ref.key] =
-                        RecoveryPrepared(ref.key, environmentId, preparation.input, preparation.arguments, preparation.profile, macroTarget)
+                        RecoveryPrepared(ref.key, environmentId, preparation.input, preparation.arguments, preparation.profile, macroTarget,
+                            inputSourceIds = preparation.inputSourceIds)
                 }
                 compiledModelTargets += activeModelTargets
                 // Persist the pre-request world and exact inputs before a cancellable model call.
@@ -755,18 +764,21 @@ class WorkflowEngine(
                     currentCoroutineContext().ensureActive()
                     val validCompleted = mutableListOf<Completed>()
                     for (item in completed) {
-                        val addresses = (listOf("result.${item.ref.node.outputKey}") + item.outcome.macroWrites.keys +
+                        val ownAddress = if (item.ref.node.actionId == "user.macro.create") emptyList()
+                            else listOf("result.${item.ref.node.outputKey}")
+                        val addresses = (ownAddress + item.outcome.macroWrites.keys +
                             item.outcome.activationWrites.keys + item.outcome.stateWrites.keys.map { "state.$it" })
                             .mapNotNull(::canonicalWriteAddress).distinct() + item.outcome.historyWrites.views.map { "history-view:${it.viewId}" }
+                        val userMacroAddresses = item.outcome.userMacroWrites.keys.map { "user-macro:$it" }
                         val patchIds = item.outcome.injectionWrites.map { patch ->
                             InjectionIdentity(resourceByWorkflow.getValue(item.ref.workflow.id), patch.id)
                         }
                         val stamp = WriterStamp(event, item.ref.workflow.id, item.ref.key, item.ref.workflow.queued, item.ref.priority)
-                        val actualKeys = addresses + patchIds.map { "injection:${it.resourceId}/${it.id}" }
+                        val actualKeys = addresses + userMacroAddresses + patchIds.map { "injection:${it.resourceId}/${it.id}" }
                         val concurrentConflict = semantics.independentEventLanes && !item.replay && actualKeys.any { address ->
                             addressWriters[address].orEmpty().any { simultaneous(it, stamp) }
                         }
-                        val invalid = concurrentConflict || addresses.any { it in usedAddresses } ||
+                        val invalid = concurrentConflict || (addresses + userMacroAddresses).any { it in usedAddresses } ||
                             patchIds.size != patchIds.distinct().size || patchIds.any { it in usedPatches } ||
                             item.outcome.emittedEvents.any { it.isBlank() || (if (legacy) it in RuntimeEvents.reserved else RuntimeEvents.isReserved(it)) } ||
                             (item.outcome.macroWrites.keys + item.outcome.activationWrites.keys).any {
@@ -782,7 +794,7 @@ class WorkflowEngine(
                             preparationTerminal(item.ref.key, PreparationStatus.FAILED)
                             trace(item.ref, "error", "并行节点写入冲突或结果地址无效")
                         } else {
-                            usedAddresses += addresses
+                            usedAddresses += addresses + userMacroAddresses
                             usedPatches += patchIds
                             validCompleted += item
                         }
@@ -807,12 +819,14 @@ class WorkflowEngine(
                             outcomePublisher.prepare(item.ref, item.outcome,
                                 snapshot(stagedState.toMap(), stagedResults.toMap()).copy(messages = session.messages + replies),
                                 compiledModelTargets, processingEvent, automaticSegment, item.candidate.rawModelText,
-                                item.candidate.fullResponseText, item.candidate.reasoningSnapshot)
+                                item.candidate.fullResponseText, item.candidate.reasoningSnapshot, item.candidate.modelFinishReason)
                         } catch (failure: NodeExecutionFailure) {
                             recordFailureOwned(failure)
                             continue
                         }
                         if (!item.replay) item.candidate.provenanceNote?.let { trace(item.ref, "warning", it) }
+                        if (!item.replay && modelResponseWasTruncated(item.candidate.modelFinishReason))
+                            trace(item.ref, "warning", "模型输出已截断（${item.candidate.modelFinishReason}）；已保留正文，请检查后续结果")
                         val publication = receipt.publication
                         val nextMemory = try { HistoryMemory.apply(stagedMemory, publication.historyWrites) }
                         catch (failure: IllegalArgumentException) {
@@ -845,6 +859,7 @@ class WorkflowEngine(
                             publication.headRemovals.forEach(stagedHeads::remove)
                             stagedHeads.putAll(publication.headWrites)
                             stagedState.putAll(publication.stateWrites)
+                            stagedUserMacros.putAll(publication.userMacroWrites)
                             stagedResults.putAll(publication.resultWrites)
                             stagedOrigins.putAll(publication.resultOrigins)
                             publication.resultWrites.keys.forEach { maskedKeys -= it }
@@ -868,6 +883,7 @@ class WorkflowEngine(
                                 val keys = publication.macroAppends.keys + publication.headWrites.keys +
                                     publication.headRemovals + publication.resultWrites.keys.map { "result.$it" } +
                                     publication.stateWrites.keys.map { "state.$it" } +
+                                    publication.userMacroWrites.keys.map { "user-macro:$it" } +
                                     publication.historyWrites.views.map { "history-view:${it.viewId}" } +
                                     (publication.injectionAdds.map { InjectionIdentity(it.origin.resourceId, it.id) } +
                                         publication.injectionRemovals).map { "injection:${it.resourceId}/${it.id}" }
@@ -1198,7 +1214,8 @@ class WorkflowEngine(
         return RunResult(stagedState.toMap(), stagedResults.toMap(), publishedReplies(), traces.toList(),
             RunStatus.SUCCESS, stagedOrigins.toMap(), stagedHistory.toMap(), stagedInjections.toList(), stagedDigests.toMap(),
             unavailableResultKeys = maskedKeys.toSet(), historyMemory = stagedMemory, currentOnlyMacros = stagedHeads.toMap(),
-            completedWorld = completedCapture?.completed(snapshot(stagedState.toMap(), stagedResults.toMap()).runtimeSnapshot()))
+            completedWorld = completedCapture?.completed(snapshot(stagedState.toMap(), stagedResults.toMap()).runtimeSnapshot()),
+            userMacros = stagedUserMacros.toMap())
         } finally {
             commands.close()
             withContext(NonCancellable) { writerJob?.join() }

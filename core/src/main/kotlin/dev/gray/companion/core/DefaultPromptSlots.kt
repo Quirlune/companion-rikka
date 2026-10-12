@@ -1,6 +1,6 @@
 package dev.gray.companion.core
 
-/** Draft/default creation only. This helper never migrates existing libraries or saved worlds. */
+/** Seeds an unconfigured model node only; custom slot sets and saved worlds are never migrated. */
 object DefaultPromptSlots {
     data class Definition(val slug: String, val name: String)
     val definitions = listOf(
@@ -13,10 +13,11 @@ object DefaultPromptSlots {
 
     fun ensureMissing(node: WorkflowNode): WorkflowNode {
         if (node.actionId != "model.generate") return node
+        // A resource that already defines its own slots owns that set. Names/slugs are
+        // presentation details; treating them as identity creates a second set for imports.
+        if (node.blocks.any { it.injectionSlot }) return node
         val blocks = node.blocks.toMutableList()
         definitions.forEach { definition ->
-            if (blocks.any { it.injectionSlot && (it.slug == definition.slug || it.title == definition.name ||
-                    it.slug.startsWith("${definition.slug}_slot") && it.title.startsWith(definition.name)) }) return@forEach
             var slug = definition.slug
             var index = 1
             while (blocks.any { it.slug == slug }) { slug = "${definition.slug}_slot_$index"; index++ }
@@ -26,6 +27,42 @@ object DefaultPromptSlots {
             blocks += PromptBlock(title = name, slug = slug, injectionSlot = true)
         }
         return if (blocks == node.blocks) node else node.copy(blocks = blocks)
+    }
+
+    /**
+     * Exact, unused default slots can be offered for explicit cleanup when a model node also
+     * contains custom slots. No title approximation or partially configured slot is removable.
+     */
+    fun unusedDefaultDuplicates(node: WorkflowNode, library: Library): List<String> {
+        if (node.actionId != "model.generate") return emptyList()
+        val slots = node.blocks.filter { it.injectionSlot }
+        if (slots.none { defaultDefinition(it) == null }) return emptyList()
+        val candidates = slots.filter { defaultDefinition(it) != null }
+        if (candidates.isEmpty()) return emptyList()
+
+        val referencedIds = referencedSlotIds(library) ?: return emptyList()
+        return candidates.filterNot { it.id in referencedIds }.map { it.id }
+    }
+
+    private fun defaultDefinition(block: PromptBlock): Definition? = definitions.firstOrNull { definition ->
+        block.title == definition.name && block.slug == definition.slug &&
+            block.copy(id = "") == PromptBlock(id = "", title = definition.name, slug = definition.slug, injectionSlot = true)
+    }
+
+    /** Only live injectors and current session injections matter; pending runs keep their own frozen worlds. */
+    private fun referencedSlotIds(library: Library): Set<String>? {
+        val currentSessions = library.sessions + library.savedChats.map { it.snapshot }
+        if (currentSessions.any { it.pendingRun != null }) return null
+        val referenced = linkedSetOf<String>()
+        ResourceLocations.resources(library).forEach { owner ->
+            ResourceTemplateSlots.workflows(library, owner).flatMap { it.nodes }
+                .filter { it.actionId == "prompt.inject" }
+                .mapNotNullTo(referenced) { it.arguments["targetBlockId"]?.trim()?.takeIf(String::isNotBlank) }
+        }
+        currentSessions.forEach { session ->
+            session.promptInjections.mapNotNullTo(referenced) { it.targetBlockId?.trim()?.takeIf(String::isNotBlank) }
+        }
+        return referenced
     }
 
     fun referenceError(reference: String, executionVersion: Int = ExecutionSemantics.CURRENT): String? {

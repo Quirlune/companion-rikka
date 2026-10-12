@@ -36,6 +36,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.OutputTransformation
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
@@ -152,6 +153,7 @@ fun ChatInput(
     onStopVoiceMode: () -> Unit = {},
     textOnly: Boolean = false,
     editDescription: String = "修改文本不会重算世界状态",
+    outputTransformation: OutputTransformation? = null,
 ) {
     val toaster = LocalToaster.current
     val assistant = settings.getCurrentAssistant()
@@ -294,9 +296,25 @@ fun ChatInput(
                         onSendMessage = { sendMessage() },
                         textOnly = textOnly,
                         editDescription = editDescription,
+                        outputTransformation = outputTransformation,
+                        compactLeadingIcon = if (textOnly) {
+                            { ModelSelectorButton(state = modelListState, onlyIcon = true) }
+                        } else null,
+                        compactTrailingIcon = if (textOnly) {
+                            {
+                                SendButton(
+                                    loading = loading,
+                                    empty = state.isEmpty(),
+                                    onClick = { sendMessage() },
+                                    onLongClick = if (onLongSendClick == null) null else ({ sendMessageWithoutAnswer() }),
+                                )
+                            }
+                        } else null,
                     )
 
-                    Row(
+                    if (loading) KeepScreenOn()
+
+                    if (!textOnly) Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 4.dp),
@@ -387,10 +405,6 @@ fun ChatInput(
                                     }
                                 }
                             )
-                        }
-
-                        if (loading) {
-                            KeepScreenOn()
                         }
 
                         AnimatedVisibility(
@@ -491,6 +505,9 @@ private fun TextInputRow(
     onSendMessage: () -> Unit,
     textOnly: Boolean = false,
     editDescription: String = "修改文本不会重算世界状态",
+    compactLeadingIcon: (@Composable () -> Unit)? = null,
+    compactTrailingIcon: (@Composable () -> Unit)? = null,
+    outputTransformation: OutputTransformation? = null,
 ) {
     val settings = LocalSettings.current
     val filesManager: FilesManager? = if (textOnly) null else koinInject()
@@ -634,7 +651,8 @@ private fun TextInputRow(
             placeholder = {
                 Text(stringResource(R.string.chat_input_placeholder))
             },
-            lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 5),
+            lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = if (textOnly) 3 else 5),
+            outputTransformation = if (state.isEditing()) null else outputTransformation,
             keyboardOptions = KeyboardOptions(
                 capitalization = KeyboardCapitalization.Sentences,
                 imeAction = if (settings.displaySetting.sendOnEnter) ImeAction.Send else ImeAction.Default
@@ -650,22 +668,33 @@ private fun TextInputRow(
                 focusedContainerColor = Color.Transparent,
                 unfocusedContainerColor = Color.Transparent,
             ),
-            trailingIcon = {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    if (isFocused) {
-                        IconButton(
-                            onClick = {
-                                isFullScreen = !isFullScreen
-                            }) {
-                            Icon(HugeIcons.Fullscreen, null)
+            trailingIcon = if (textOnly) compactTrailingIcon else {
+                {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        if (isFocused) {
+                            IconButton(
+                                onClick = {
+                                    isFullScreen = !isFullScreen
+                                }) {
+                                Icon(HugeIcons.Fullscreen, null)
+                            }
                         }
                     }
                 }
             },
-            leadingIcon = if (quickMessages.isNotEmpty()) {
+            leadingIcon = if (textOnly) {
+                {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        compactLeadingIcon?.invoke()
+                        if (quickMessages.isNotEmpty()) {
+                            QuickMessageButton(quickMessages = quickMessages, state = state)
+                        }
+                    }
+                }
+            } else if (quickMessages.isNotEmpty()) {
                 {
                     QuickMessageButton(quickMessages = quickMessages, state = state)
                 }

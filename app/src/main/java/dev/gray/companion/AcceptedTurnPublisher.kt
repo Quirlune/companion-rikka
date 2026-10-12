@@ -4,6 +4,7 @@ import dev.gray.companion.core.Library
 import dev.gray.companion.core.LibraryRepository
 import dev.gray.companion.core.MessageOperationResult
 import dev.gray.companion.core.MessageOperations
+import dev.gray.companion.core.RegenerationAdmission
 import dev.gray.companion.core.OutputSlot
 import dev.gray.companion.core.RunResult
 import dev.gray.companion.core.RunStatus
@@ -26,7 +27,9 @@ internal class AcceptedTurnPublisher(
     private val session: Session,
     private val sourceSessionId: String,
     private val regenerationBase: Session?,
+    private val beforeUserSession: Session?,
     recoveryId: String?,
+    private val regenerationAdmission: RegenerationAdmission? = null,
 ) {
     private var persistedRunId = recoveryId
     private var lastPersistedResult: RunResult? = null
@@ -36,8 +39,10 @@ internal class AcceptedTurnPublisher(
             if (result == lastPersistedResult) return@withLock
             val current = library.value.sessions.firstOrNull { it.id == sourceSessionId }
                 ?: error("运行中的会话已移除")
-            val journal = result.recovery?.copy(regenerating = regenerationBase != null,
-                regenerationBase = regenerationBase)
+            val journal = result.recovery?.let { recovery -> recovery.copy(
+                regenerating = regenerationBase != null, regenerationBase = regenerationBase,
+                beforeUserSession = recovery.beforeUserSession ?: beforeUserSession
+            ) }
             if (journal != null) {
                 if (persistedRunId == null) persistedRunId = journal.id
                 val currentPendingRun = current.pendingRun
@@ -51,7 +56,7 @@ internal class AcceptedTurnPublisher(
                 regenerationBase != null && result.status != RunStatus.SUCCESS ->
                     MessageOperationResult(current.copy(pendingRun = journal ?: current.pendingRun))
                 regenerationBase != null -> MessageOperations.commitRegeneration(
-                    regenerationBase, session, savedResult)
+                    regenerationBase, session, savedResult, regenerationAdmission)
                 current.pendingRun != null -> MessageOperations.continuePartialTurn(current, savedResult)
                 result.status == RunStatus.SUCCESS -> MessageOperations.recordSuccessfulTurn(session, savedResult)
                 journal != null -> MessageOperations.recordPartialTurn(session, savedResult)

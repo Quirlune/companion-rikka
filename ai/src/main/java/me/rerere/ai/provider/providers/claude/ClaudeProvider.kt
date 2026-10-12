@@ -308,7 +308,6 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             .configureSessionHeaders(providerSetting.baseUrl, params.sessionId)
             .build()
 
-        Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
 
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
@@ -359,18 +358,13 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             .configureSessionHeaders(providerSetting.baseUrl, params.sessionId)
             .build()
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
-
-        requestBody["messages"]!!.jsonArray.forEach {
-            Log.i(TAG, "streamText: $it")
-        }
 
         val decoder = ClaudeStreamDecoder()
 
         fun sendChunks(chunks: Iterable<StreamChunk>) {
             chunks.forEach { chunk ->
                 trySend(chunk).onFailure { e ->
-                    Log.w(TAG, "onEvent: chunk dropped (${e?.message})")
+                    Log.w(TAG, "onEvent: chunk dropped")
                 }
             }
         }
@@ -382,7 +376,6 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 type: String?,
                 data: String
             ) {
-                Log.d(TAG, "onEvent: type=$type, data=$data")
                 try {
                     val result = decoder.accept(SseEvent(id = id, event = type, data = data))
                     sendChunks(result.chunks)
@@ -395,19 +388,16 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 var exception = t
 
-                t?.printStackTrace()
-                Log.e(TAG, "onFailure: ${t?.javaClass?.name} ${t?.message} / $response")
+                Log.w(TAG, "stream failed: HTTP ${response?.code ?: "unknown"}")
 
                 val bodyRaw = response?.body?.stringSafe()
                 try {
                     if (!bodyRaw.isNullOrBlank()) {
                         val bodyElement = Json.parseToJsonElement(bodyRaw)
-                        Log.i(TAG, "Error response: $bodyElement")
                         exception = bodyElement.parseErrorDetail()
                     }
                 } catch (e: Throwable) {
-                    Log.w(TAG, "onFailure: failed to parse from $bodyRaw")
-                    e.printStackTrace()
+                    Log.w(TAG, "onFailure: unable to parse provider error")
                 } finally {
                     close(exception.withHttpStatus(response?.code))
                 }
@@ -435,20 +425,66 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         params: TextGenerationParams,
         stream: Boolean = false
     ): JsonObject {
+        val level = params.reasoningLevel
+        val legacy = params.legacyGeneration
+        val modelId = params.model.modelId.lowercase()
+        val version = (Regex("claude-(?:opus|sonnet|haiku|fable|mythos)-(\\d+)(?:-(\\d+))?").find(modelId)
+            ?: Regex("claude-(\\d+)-(\\d+)-(?:opus|sonnet|haiku)").find(modelId))
+            ?.let { it.groupValues[1].toInt() to (it.groupValues[2].toIntOrNull() ?: 0) }
+        val adaptive = version?.let { (major, minor) -> major > 4 || major == 4 && minor >= 6 }
+        val restrictedSampling = version?.let { (major, minor) -> major >= 5 || major == 4 && minor >= 7 } == true
+        if (!legacy && restrictedSampling) {
+            require(params.temperature == null || params.temperature == 1f) {
+                "此 Claude 模型仅接受默认温度 1，请移除温度参数"
+            }
+            require(params.topP == null || params.topP == 0.99f) {
+                "此 Claude 模型仅接受默认 Top P 0.99，请移除 Top P 参数"
+            }
+            require(params.temperature == null || params.topP == null) {
+                "此 Claude 模型不支持同时设置温度与 Top P"
+            }
+        }
+        if (!legacy && level != null) {
+            require(params.model.abilities.contains(ModelAbility.REASONING)) {
+                "模型未标记为支持推理，请移除推理参数或修正模型能力"
+            }
+            require(adaptive != null) { "此 Claude 模型的推理参数档位未知，请移除推理参数" }
+            require(level != ReasoningLevel.AUTO || adaptive) { "此 Claude 模型不支持自动推理，请选择具体档位" }
+            require(level != ReasoningLevel.OFF || !(version!!.first >= 5 && version.second >= 5 ||
+                modelId.contains("fable") || modelId.contains("mythos"))) {
+                "此 Claude 模型不支持关闭推理"
+            }
+            require(level !in setOf(ReasoningLevel.XHIGH, ReasoningLevel.MAX) ||
+                adaptive && (version!!.first >= 5 || version.first == 4 && version.second >= 7) ||
+                level == ReasoningLevel.MAX && adaptive && version!!.first == 4 && version.second == 6) {
+                "此 Claude 模型不支持该推理档位"
+            }
+            require(params.temperature == null || !level.isEnabled) {
+                "Claude 推理开启时不支持同时设置温度，请移除其中一项"
+            }
+            require(!level.isEnabled || params.topP == null || params.topP in 0.95f..1f) {
+                "Claude 推理开启时 Top P 必须在 0.95 到 1 之间"
+            }
+        }
+        val budget = if (!legacy && level != null && adaptive == false && level != ReasoningLevel.OFF)
+            maxOf(1024, level.budgetTokens) else null
+        val maxTokens = params.maxTokens ?: if (legacy) 64_000 else if (budget != null)
+            maxOf(4096, budget + 1024) else 4096
+        require(budget == null || budget < maxTokens) { "Claude 推理预算必须小于最大输出令牌数" }
         return buildJsonObject {
             put("model", params.model.modelId)
             put(
                 "messages",
                 buildMessages(messages, providerSetting.promptCaching, providerSetting.promptCacheTtl)
             )
-            put("max_tokens", params.maxTokens ?: 64_000)
+            put("max_tokens", maxTokens)
 
             // 顶层 cache_control: 让 Anthropic 自动管理缓存断点
             if (providerSetting.promptCaching) {
                 put("cache_control", cacheControlEphemeral(providerSetting.promptCacheTtl))
             }
 
-            if (params.temperature != null && !params.reasoningLevel.isEnabled) put(
+            if (params.temperature != null && level?.isEnabled != true) put(
                 "temperature",
                 params.temperature
             )
@@ -476,8 +512,8 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             // 处理 thinking
             // Anthropic 新 API: adaptive 模式 + output_config.effort 控制强度
             // 旧的 type=enabled + budget_tokens 在 Opus 4.7+ 上已不支持
-            if (params.model.abilities.contains(ModelAbility.REASONING)) {
-                when (params.reasoningLevel) {
+            if (params.model.abilities.contains(ModelAbility.REASONING) && (legacy || level != null)) {
+                when (level ?: ReasoningLevel.OFF) {
                     ReasoningLevel.OFF -> {
                         put("thinking", buildJsonObject { put("type", "disabled") })
                     }
@@ -490,13 +526,20 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     }
 
                     else -> {
-                        put("thinking", buildJsonObject {
-                            put("type", "adaptive")
-                            put("display", "summarized")
-                        })
-                        put("output_config", buildJsonObject {
-                            put("effort", params.reasoningLevel.effort)
-                        })
+                        if (!legacy && adaptive == false) {
+                            put("thinking", buildJsonObject {
+                                put("type", "enabled")
+                                put("budget_tokens", budget!!)
+                            })
+                        } else {
+                            put("thinking", buildJsonObject {
+                                put("type", "adaptive")
+                                put("display", "summarized")
+                            })
+                            put("output_config", buildJsonObject {
+                                put("effort", level!!.effort)
+                            })
+                        }
                     }
                 }
             }
@@ -742,7 +785,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     put("data", encoded.base64)
                 })
             }.onFailure {
-                Log.w(TAG, "encode image failed: $url", it)
+                Log.w(TAG, "encode image failed")
                 put("type", "text")
                 put("text", "")
             }
@@ -805,8 +848,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 }
 
                 "redacted_thinking" -> {
-                    val data = block["data"]?.jsonPrimitiveOrNull?.contentOrNull
-                    println(data)
+                    // Redacted thinking has no user-visible content to decode.
                 }
 
                 "tool_use" -> {

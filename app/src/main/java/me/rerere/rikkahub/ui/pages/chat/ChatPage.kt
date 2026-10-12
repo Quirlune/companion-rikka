@@ -2,6 +2,17 @@ package me.rerere.rikkahub.ui.pages.chat
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.ui.graphics.Brush
+import dev.chrisbanes.haze.HazeInput
+import dev.chrisbanes.haze.HazeProgressive
+import dev.chrisbanes.haze.blur.HazeBlurStyle
+import dev.chrisbanes.haze.blur.hazeBlur
+import dev.chrisbanes.haze.blur.material3.Material3
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -195,6 +206,7 @@ fun OriginalChatPageLayout(
     bottomBar: @Composable (HazeState) -> Unit,
     chatList: @Composable (PaddingValues, HazeState) -> Unit,
     snackbarHost: @Composable () -> Unit = {},
+    compactTopEdge: Boolean = false,
 ) {
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
@@ -219,7 +231,23 @@ fun OriginalChatPageLayout(
         Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
             AssistantBackground(setting = settings, modifier = Modifier.hazeSource(hazeState))
             Scaffold(
-                topBar = { topBar(bigScreen) },
+                topBar = {
+                    if (compactTopEdge) {
+                        val tint = MaterialTheme.colorScheme.background
+                        val blur = HazeBlurStyle.Material3 {
+                            blurRadius(16.dp)
+                            progressive(HazeProgressive.verticalGradient(startIntensity = 1f, endIntensity = 0f))
+                            mask(Brush.verticalGradient(listOf(Color.Black, Color.Transparent)))
+                        }
+                        Box {
+                            Box(Modifier.fillMaxWidth()
+                                .height(64.dp + WindowInsets.safeDrawing.asPaddingValues().calculateTopPadding())
+                                .hazeBlur(input = HazeInput.Sources(hazeState), style = blur)
+                                .background(Brush.verticalGradient(listOf(tint.copy(alpha = 0.86f), tint.copy(alpha = 0.25f), Color.Transparent))))
+                            topBar(bigScreen)
+                        }
+                    } else topBar(bigScreen)
+                },
                 bottomBar = { bottomBar(hazeState) },
                 snackbarHost = snackbarHost,
                 containerColor = Color.Transparent,
@@ -613,6 +641,7 @@ internal fun TopBar(
     }
 
     TopAppBar(
+        expandedHeight = if (companionMenu) 48.dp else TopAppBarDefaults.TopAppBarExpandedHeight,
         colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
         navigationIcon = {
             if (!bigScreen) {

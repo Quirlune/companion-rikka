@@ -6,6 +6,7 @@ import java.net.Authenticator
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import me.rerere.common.http.AcceptLanguageBuilder
+import me.rerere.ai.util.KeyRoulette
 import me.rerere.rikkahub.BuildConfig
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.network.SettingsProxyAuthenticator
@@ -15,6 +16,7 @@ import okhttp3.OkHttpClient
 
 /** Original transport preferences, without the original chat service's request hooks. */
 fun createCompanionNetworkClient(context: Context, settingsStore: SettingsStore): OkHttpClient {
+    KeyRoulette.removeLegacyPlaintextCache(context)
     val acceptLanguage = AcceptLanguageBuilder.fromAndroid(context).build()
     Authenticator.setDefault(SettingsSocks5Authenticator(settingsStore))
     val initial = settingsStore.settingsFlow.value.networkSetting

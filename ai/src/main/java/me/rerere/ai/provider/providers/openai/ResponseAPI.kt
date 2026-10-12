@@ -102,7 +102,6 @@ class ResponseAPI(
             .configureSessionHeaders(providerSetting.baseUrl, params.sessionId)
             .build()
 
-        Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
 
         // await() waits for the response headers; reading the body can still block.
         client.newCall(request).await().use { response ->
@@ -111,7 +110,6 @@ class ResponseAPI(
             }
 
             val bodyStr = response.body.string()
-            Log.i(TAG, "generateText: $bodyStr")
             val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
             parseResponseOutput(bodyJson)
         }
@@ -140,14 +138,13 @@ class ResponseAPI(
             .configureSessionHeaders(providerSetting.baseUrl, params.sessionId)
             .build()
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
 
         val decoder = ResponseApiStreamDecoder()
 
         fun sendChunks(chunks: Iterable<StreamChunk>) {
             chunks.forEach { chunk ->
                 trySend(chunk).onFailure { e ->
-                    Log.w(TAG, "onEvent: chunk dropped (${e?.message})")
+                    Log.w(TAG, "onEvent: chunk dropped")
                 }
             }
         }
@@ -159,7 +156,6 @@ class ResponseAPI(
                 type: String?,
                 data: String
             ) {
-                Log.d(TAG, "onEvent: $id/$type $data")
                 try {
                     val result = decoder.accept(SseEvent(id = id, event = type, data = data))
                     sendChunks(result.chunks)
@@ -172,20 +168,16 @@ class ResponseAPI(
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 var exception = t
 
-                t?.printStackTrace()
-                println("[onFailure] 发生错误: ${t?.javaClass?.name} ${t?.message} / $response")
+                Log.w(TAG, "stream failed: HTTP ${response?.code ?: "unknown"}")
 
                 val bodyRaw = response?.body?.stringSafe()
                 try {
                     if (!bodyRaw.isNullOrBlank()) {
                         val bodyElement = Json.parseToJsonElement(bodyRaw)
-                        println(bodyElement)
                         exception = bodyElement.parseErrorDetail()
-                        Log.i(TAG, "onFailure: $exception")
                     }
                 } catch (e: Throwable) {
-                    Log.w(TAG, "onFailure: failed to parse from $bodyRaw")
-                    e.printStackTrace()
+                    Log.w(TAG, "onFailure: unable to parse provider error")
                 } finally {
                     close(exception.withHttpStatus(response?.code))
                 }
@@ -215,6 +207,23 @@ class ResponseAPI(
     ): JsonObject {
         val host = providerSetting.baseUrl.toHttpUrl().host
         val capabilities = resolveResponseProviderCapabilities(host)
+        val level = params.reasoningLevel
+        if (!params.legacyGeneration) {
+            require(level == null || params.model.abilities.contains(ModelAbility.REASONING)) {
+                "模型未标记为支持推理，请移除推理参数或修正模型能力"
+            }
+            require(isModelAllowTemperature(params.model) ||
+                params.temperature == null && params.topP == null) {
+                "此模型不支持温度或 Top P，请从调用行为移除这些参数"
+            }
+            if (host == "api.openai.com" && level != null) {
+                require(level != ReasoningLevel.MAX) { "OpenAI 此接口不支持 MAX 推理档位" }
+                require(level != ReasoningLevel.OFF ||
+                    params.model.modelId.matches(Regex("gpt-(?:5\\.[1-9]|[6-9])(?:[-.].*)?"))) {
+                    "此 OpenAI 模型不支持关闭推理"
+                }
+            }
+        }
         return buildJsonObject {
             put("model", params.model.modelId)
             put("stream", stream)
@@ -238,17 +247,20 @@ class ResponseAPI(
             put("input", buildMessages(messages))
 
             // reasoning
-            if (params.model.abilities.contains(ModelAbility.REASONING)) {
-                val level = params.reasoningLevel
+            if (params.model.abilities.contains(ModelAbility.REASONING) &&
+                (params.legacyGeneration || level != null)) {
+                val level = level ?: ReasoningLevel.OFF
                 put("reasoning", buildJsonObject {
-                    if (capabilities.supportsReasoningSummary) {
+                    if (capabilities.supportsReasoningSummary &&
+                        (params.legacyGeneration || level != ReasoningLevel.OFF)) {
                         put("summary", "auto")
                     }
                     if (level != ReasoningLevel.AUTO) {
                         put("effort", level.effort)
                     }
                 })
-                if (capabilities.supportEncryptedContent) {
+                if (capabilities.supportEncryptedContent &&
+                    (params.legacyGeneration || level != ReasoningLevel.OFF)) {
                     put("include", buildJsonArray {
                         add("reasoning.encrypted_content")
                     })
@@ -543,7 +555,6 @@ class ResponseAPI(
     }
 
     internal fun parseResponseOutput(jsonObject: JsonObject): TextGenerationResult {
-        println(jsonObject)
         val outputs = jsonObject["output"]?.jsonArray ?: error("output not found")
         val parts = arrayListOf<UIMessagePart>()
 

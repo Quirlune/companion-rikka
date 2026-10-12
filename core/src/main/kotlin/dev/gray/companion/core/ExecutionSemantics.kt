@@ -49,8 +49,13 @@ data class ExecutionSemantics(val version: Int) {
     val validatedMemoryXml: Boolean get() = version >= 23
     val globalExtensionSwitches: Boolean get() = version >= 23
 
+    /** Call parameters belong to the selected behavior; legacy captures keep profile defaults. */
+    val behaviorOnlyGeneration: Boolean get() = version >= 24
+    val userInputMacros: Boolean get() = version >= 25
+    val perBlockMessageMerging: Boolean get() = version >= 26
+
     companion object {
-        const val CURRENT = 23
+        const val CURRENT = 26
         fun supports(version: Int): Boolean = version in 1..CURRENT
     }
 }

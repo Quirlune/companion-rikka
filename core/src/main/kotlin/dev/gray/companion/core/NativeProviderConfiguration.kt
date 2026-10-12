@@ -12,6 +12,13 @@ import kotlinx.serialization.json.intOrNull
 object NativeProviderConfiguration {
     const val FORMAT_VERSION = 1
 
+    /** Same admission rule as an ordinary API connection, applied to effective native URLs too. */
+    fun validHttpsAddress(value: String): Boolean = try {
+        val uri = java.net.URI(value)
+        uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank() &&
+            uri.userInfo == null && uri.query == null && uri.fragment == null
+    } catch (_: Exception) { false }
+
     fun validateProvider(payload: JsonObject?, path: String): List<Issue> =
         validatePayload(payload, path, provider = true)
 
@@ -72,6 +79,7 @@ object NativeProviderConfiguration {
                     pending.addLast("$path.frozenResources" to value.frozenResources)
                     pending.addLast("$path.checkpoint.runtime" to value.checkpoint.runtime)
                     pending.addLast("$path.initialSession" to value.initialSession)
+                    value.beforeUserSession?.let { pending.addLast("$path.beforeUserSession" to it) }
                     value.regenerationBase?.let { pending.addLast("$path.regenerationBase" to it) }
                     value.environments.forEachIndexed { index, environment ->
                         pending.addLast("$path.environments.$index.session" to environment.session)
@@ -85,7 +93,8 @@ object NativeProviderConfiguration {
         return issues
     }
 
-    private data class Node(val value: JsonObject, val path: String, val provider: Boolean)
+    private data class Node(val value: JsonObject, val path: String, val provider: Boolean,
+        val effectiveOverride: Boolean = false)
 
     private fun validatePayload(payload: JsonObject?, path: String, provider: Boolean): List<Issue> {
         if (payload == null) return emptyList()
@@ -100,6 +109,11 @@ object NativeProviderConfiguration {
                     issues += Issue("${node.path}._formatVersion", "不支持的原版提供商配置版本")
             }
             if (node.provider) {
+                if (node.effectiveOverride) {
+                    val address = node.value["baseUrl"] as? JsonPrimitive
+                    if (address != null && (!address.isString || !validHttpsAddress(address.content)))
+                        issues += Issue("${node.path}.baseUrl", "模型覆盖地址必须是有效的 HTTPS 地址")
+                }
                 for (key in listOf("apiKey", "privateKey")) {
                     val secret = node.value[key]
                     if (secret != null && secret != JsonNull &&
@@ -117,7 +131,7 @@ object NativeProviderConfiguration {
             } else {
                 when (val overwrite = node.value["providerOverwrite"]) {
                     null, JsonNull -> Unit
-                    is JsonObject -> pending.addLast(Node(overwrite, "${node.path}.providerOverwrite", true))
+                    is JsonObject -> pending.addLast(Node(overwrite, "${node.path}.providerOverwrite", true, true))
                     else -> issues += Issue("${node.path}.providerOverwrite", "模型覆盖提供商配置须为对象")
                 }
             }

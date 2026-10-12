@@ -29,6 +29,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.util.withHttpStatus
+import me.rerere.ai.util.HttpException
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.BuiltInTools
@@ -88,13 +89,17 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         ServiceAccountTokenProvider(client)
     }
 
-    private fun buildUrl(providerSetting: ProviderSetting.Google, path: String): HttpUrl {
+    internal fun buildUrl(providerSetting: ProviderSetting.Google, path: String, publisherCatalog: Boolean = false): HttpUrl {
         return if (!providerSetting.vertexAI) {
-            "${providerSetting.baseUrl}/$path".toHttpUrl()
+            "${providerSetting.baseUrl.trimEnd('/')}/$path".toHttpUrl()
         } else if (providerSetting.useServiceAccount) {
-            "https://aiplatform.googleapis.com/v1/projects/${providerSetting.projectId}/locations/${providerSetting.location}/$path".toHttpUrl()
+            val location = providerSetting.location.trim().lowercase()
+            require(location.matches(Regex("[a-z0-9-]+"))) { "Vertex 区域应为区域标识或 global" }
+            val host = if (location == "global") "aiplatform.googleapis.com" else "$location-aiplatform.googleapis.com"
+            if (publisherCatalog) "https://$host/v1beta1/$path".toHttpUrl()
+            else "https://$host/v1/projects/${providerSetting.projectId.trim()}/locations/$location/$path".toHttpUrl()
         } else {
-            "https://aiplatform.googleapis.com/v1/$path".toHttpUrl()
+            "https://aiplatform.googleapis.com/${if (publisherCatalog) "v1beta1" else "v1"}/$path".toHttpUrl()
         }
     }
 
@@ -108,7 +113,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 privateKeyPem = StringEscapeUtils.unescapeJson(providerSetting.privateKey.trim()),
             )
             request.newBuilder()
-                .addHeader("Authorization", "Bearer $accessToken")
+                .header("Authorization", "Bearer $accessToken")
                 .build()
         } else {
             val key = keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString())
@@ -126,41 +131,43 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
     override suspend fun listModels(providerSetting: ProviderSetting.Google): List<Model> =
         withContext(Dispatchers.IO) {
-            val url = buildUrl(providerSetting = providerSetting, path = "models?pageSize=100")
-            val request = transformRequest(
-                providerSetting = providerSetting,
-                request = Request.Builder()
-                    .url(url)
-                    .get()
-                    .build()
-            )
-            val response = client.newCall(request).await()
-            if (response.isSuccessful) {
-                val body = response.body?.string() ?: error("empty body")
-                Log.d(TAG, "listModels: $body")
-                val bodyObject = json.parseToJsonElement(body).jsonObject
-                val models = bodyObject["models"]?.jsonArray ?: return@withContext emptyList()
-
-                models.mapNotNull {
-                    val modelObject = it.jsonObject
-
-                    // 忽略非chat/embedding模型
-                    val supportedGenerationMethods =
-                        modelObject["supportedGenerationMethods"]!!.jsonArray
-                            .map { method -> method.jsonPrimitive.content }
-                    if ("generateContent" !in supportedGenerationMethods && "embedContent" !in supportedGenerationMethods) {
-                        return@mapNotNull null
-                    }
-
-                    Model(
-                        modelId = modelObject["name"]!!.jsonPrimitive.content.substringAfter("/"),
-                        displayName = modelObject["displayName"]!!.jsonPrimitive.content,
-                        type = if ("generateContent" in supportedGenerationMethods) ModelType.CHAT else ModelType.EMBEDDING,
-                    )
+            val vertex = providerSetting.vertexAI
+            val base = buildUrl(providerSetting,
+                if (vertex) "publishers/google/models" else "models", publisherCatalog = vertex)
+            val result = mutableListOf<Model>()
+            val seenTokens = mutableSetOf<String>()
+            var pageToken: String? = null
+            do {
+                val url = base.newBuilder().addQueryParameter("pageSize", "100").apply {
+                    pageToken?.let { addQueryParameter("pageToken", it) }
+                }.build()
+                val request = transformRequest(providerSetting, Request.Builder().url(url).get().build())
+                val bodyObject = client.newCall(request).await().use { response ->
+                    if (!response.isSuccessful) throw HttpException("Google 模型目录请求失败（HTTP ${response.code}）", response.code)
+                    json.parseToJsonElement(response.body?.string() ?: error("模型目录响应为空")).jsonObject
                 }
-            } else {
-                emptyList()
-            }
+                val models = bodyObject[if (vertex) "publisherModels" else "models"] as? JsonArray ?: JsonArray(emptyList())
+                models.forEach { element ->
+                    val modelObject = element as? JsonObject ?: return@forEach
+                    val id = modelObject["name"]?.jsonPrimitive?.contentOrNull?.substringAfterLast('/') ?: return@forEach
+                    val methods = (modelObject["supportedGenerationMethods"] as? JsonArray).orEmpty()
+                        .mapNotNull { it.jsonPrimitive.contentOrNull }
+                    // Model Garden also contains deployable/predict-only models that this Gemini transport cannot call.
+                    val type = if (vertex) {
+                        if (!id.startsWith("gemini-") || "embedding" in id) return@forEach
+                        ModelType.CHAT
+                    } else when {
+                        "generateContent" in methods -> ModelType.CHAT
+                        "embedContent" in methods -> ModelType.EMBEDDING
+                        else -> return@forEach
+                    }
+                    result += Model(modelId = id,
+                        displayName = modelObject["displayName"]?.jsonPrimitive?.contentOrNull ?: id, type = type)
+                }
+                pageToken = bodyObject["nextPageToken"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                check(pageToken == null || seenTokens.add(pageToken)) { "模型目录返回了重复分页标识，请重试" }
+            } while (pageToken != null)
+            result.distinctBy { it.modelId }
         }
 
     override suspend fun generateText(
@@ -194,7 +201,9 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
-            throw Exception("Failed to get response: ${response.code} ${response.body?.string()}")
+            val code = response.code
+            response.close()
+            throw HttpException("Google 模型调用失败（HTTP $code）", code)
         }
 
         val bodyStr = response.body?.string() ?: ""
@@ -240,7 +249,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 .build()
         )
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
 
         val responseId = Uuid.random().toString()
         val decoder = GoogleStreamDecoder(responseId, params.model.modelId)
@@ -248,7 +256,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         fun sendChunks(chunks: Iterable<StreamChunk>) {
             chunks.forEach { chunk ->
                 trySend(chunk).onFailure { e ->
-                    Log.w(TAG, "onEvent: chunk dropped (${e?.message})")
+                    Log.w(TAG, "onEvent: chunk dropped")
                 }
             }
         }
@@ -260,14 +268,13 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 type: String?,
                 data: String
             ) {
-                Log.i(TAG, "onEvent: $data")
 
                 try {
                     val result = decoder.accept(SseEvent(id = id, event = type, data = data))
                     sendChunks(result.chunks)
                     if (result.completed) close()
                 } catch (e: Throwable) {
-                    Log.e(TAG, "Failed to parse stream event: $data", e)
+                    Log.e(TAG, "Failed to parse stream event (${e.javaClass.simpleName})")
                     close(e)
                 }
             }
@@ -279,15 +286,13 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             ) {
                 var exception = t
 
-                t?.printStackTrace()
-                println("[onFailure] 发生错误: ${t?.message}")
+                Log.w(TAG, "stream failed: HTTP ${response?.code ?: "unknown"}")
 
                 try {
                     if (t == null && response != null) {
                         val bodyStr = response.body.stringSafe()
                         if (!bodyStr.isNullOrEmpty()) {
                             val bodyElement = json.parseToJsonElement(bodyStr)
-                            println(bodyElement)
                             if (bodyElement is JsonObject) {
                                 exception = Exception(
                                     bodyElement["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content
@@ -299,7 +304,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         }
                     }
                 } catch (e: Throwable) {
-                    e.printStackTrace()
+                    Log.w(TAG, "onFailure: unable to parse provider error")
                     exception = e
                 } finally {
                     val failure = exception ?: Exception("Stream failed")
@@ -308,7 +313,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             }
 
             override fun onClosed(eventSource: EventSource) {
-                println("[onClosed] 连接已关闭")
                 sendChunks(decoder.onClosed())
                 close()
             }
@@ -318,7 +322,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 .newEventSource(request, listener)
 
         awaitClose {
-            println("[awaitClose] 关闭eventSource")
             eventSource.cancel()
         }
         // trySend 在缓冲满时会静默丢弃 delta，导致回复中间缺字 (#1295)，因此缓冲必须无界
@@ -328,23 +331,23 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         messages: List<UIMessage>,
         params: TextGenerationParams
     ): JsonObject = buildJsonObject {
-        // System message if available
-        val systemMessage = messages.firstOrNull { it.role == MessageRole.SYSTEM }
-        if (systemMessage != null && !params.model.outputModalities.contains(Modality.IMAGE)) {
+        // Gemini has one systemInstruction object; retain each SYSTEM message as its own part.
+        val systemMessages = messages.filter { it.role == MessageRole.SYSTEM }
+        if (systemMessages.isNotEmpty() && !params.model.outputModalities.contains(Modality.IMAGE)) {
             put("systemInstruction", buildJsonObject {
                 putJsonArray("parts") {
-                    add(buildJsonObject {
-                        put(
-                            "text",
-                            systemMessage.parts.filterIsInstance<UIMessagePart.Text>()
+                    systemMessages.forEach { message ->
+                        add(buildJsonObject {
+                            put("text", message.parts.filterIsInstance<UIMessagePart.Text>()
                                 .joinToString { it.text })
-                    })
+                        })
+                    }
                 }
             })
         }
 
         // Generation config
-        put("generationConfig", buildJsonObject {
+        val generationConfig = buildJsonObject {
             if (params.temperature != null) put("temperature", params.temperature)
             if (params.topP != null) put("topP", params.topP)
             if (params.maxTokens != null) put("maxOutputTokens", params.maxTokens)
@@ -354,18 +357,40 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     add(JsonPrimitive("IMAGE"))
                 })
             }
-            if (params.model.abilities.contains(ModelAbility.REASONING)) {
+            if (!params.legacyGeneration && params.reasoningLevel != null &&
+                !params.model.abilities.contains(ModelAbility.REASONING)) {
+                throw IllegalArgumentException("模型未标记为支持推理，请移除推理参数或修正模型能力")
+            }
+            if (params.model.abilities.contains(ModelAbility.REASONING) &&
+                (params.legacyGeneration || params.reasoningLevel != null)) {
                 put("thinkingConfig", buildJsonObject {
-                    put("includeThoughts", true)
+                    val level = params.reasoningLevel ?: ReasoningLevel.OFF
+                    if (!params.legacyGeneration) {
+                        val modelId = params.model.modelId.lowercase()
+                        val gemini3 = modelId.matches(Regex("gemini-3(?:\\.|-).*"))
+                        val gemini25 = modelId.startsWith("gemini-2.5-")
+                        require(gemini3 || gemini25) { "此 Google 模型的推理参数档位未知，请移除推理参数" }
+                        require(level !in setOf(ReasoningLevel.XHIGH, ReasoningLevel.MAX) ||
+                            gemini25 && modelId.contains("pro") && level == ReasoningLevel.MAX ||
+                            gemini25 && level == ReasoningLevel.XHIGH) {
+                            "此 Google 模型不支持该推理档位"
+                        }
+                        require(level != ReasoningLevel.OFF || gemini25 && !modelId.contains("pro")) {
+                            "此 Google 模型不支持关闭推理"
+                        }
+                        require(!(gemini3 && modelId.contains("pro-preview") && !modelId.contains("3.1-") &&
+                            level == ReasoningLevel.MEDIUM)) { "此 Google 模型不支持中等推理档位" }
+                    }
+                    put("includeThoughts", params.legacyGeneration || level != ReasoningLevel.OFF)
 
                     val isGeminiPro =
                         params.model.modelId.contains(Regex("2\\.5.*pro", RegexOption.IGNORE_CASE))
 
-                    when (params.reasoningLevel) {
+                    when (level) {
                         ReasoningLevel.AUTO -> {} // 自动模式，不设置参数
 
                         ReasoningLevel.OFF -> {
-                            if (ModelRegistry.GEMINI_3_SERIES.match(modelId = params.model.modelId)) {
+                            if (params.legacyGeneration && ModelRegistry.GEMINI_3_SERIES.match(modelId = params.model.modelId)) {
                                 put("thinkingLevel", "minimal")
                             } else if (!isGeminiPro) {
                                 put("thinkingBudget", 0)
@@ -374,20 +399,22 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         }
 
                         else -> {
-                            if (ModelRegistry.GEMINI_3_SERIES.match(modelId = params.model.modelId)) {
-                                when (params.reasoningLevel) {
+                            if (if (params.legacyGeneration) ModelRegistry.GEMINI_3_SERIES.match(modelId = params.model.modelId)
+                                else params.model.modelId.lowercase().matches(Regex("gemini-3(?:\\.|-).*"))) {
+                                when (level) {
                                     ReasoningLevel.LOW -> put("thinkingLevel", "low")
                                     ReasoningLevel.MEDIUM -> put("thinkingLevel", "medium")
                                     else -> put("thinkingLevel", "high") // HIGH, XHIGH
                                 }
                             } else {
-                                put("thinkingBudget", params.reasoningLevel.budgetTokens)
+                                put("thinkingBudget", level.budgetTokens)
                             }
                         }
                     }
                 })
             }
-        })
+        }
+        if (params.legacyGeneration || generationConfig.isNotEmpty()) put("generationConfig", generationConfig)
 
         // Contents (user messages)
         put(
@@ -506,7 +533,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         val parts = parseMessageParts(content["parts"]?.jsonArray)
 
         val groundingMetadata = message["groundingMetadata"]?.jsonObject
-        Log.i(TAG, "parseMessage: $groundingMetadata")
         val annotations = parseSearchGroundingMetadata(groundingMetadata)
 
         return UIMessage(
@@ -528,7 +554,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 url = uri
             )
         }
-        Log.i(TAG, "parseSearchGroundingMetadata: $chunks")
         return chunks
     }
 

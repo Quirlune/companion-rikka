@@ -79,6 +79,26 @@ object CompletedWorlds {
         return session.copy(executableWorld = world.copy(library = policyView, environments = emptyList(), recipes = emptyList()))
     }
 
+    /** A persisted admission may change only the global switches of already captured owners. */
+    internal fun isExtensionPolicyOverlay(before: CompletedWorld?, admitted: CompletedWorld?): Boolean {
+        if (before == admitted) return true
+        if (before == null || admitted == null) return false
+        requireValidWorld(before)
+        requireValidWorld(admitted)
+        val old = before.library.extensions
+        val next = admitted.library.extensions
+        if (old.size != next.size) return false
+        val restored = next.mapIndexed { index, extension ->
+            val original = old[index]
+            if (original.memory != null) extension else {
+                // New admission resolves the legacy nullable switch to an explicit decision.
+                if (extension.enabled == null) return false
+                extension.copy(enabled = original.enabled)
+            }
+        }
+        return admitted.copy(library = admitted.library.copy(extensions = restored)) == checkpointWorld(before)
+    }
+
     /** Called only after old pure replay, before a NEW turn; recovery keeps its original world. */
     fun withGlobalMemoryForNewTurn(live: Library, session: Session): Session {
         val scoped = withExtensionPolicyForNewTurn(live, session)
@@ -176,7 +196,7 @@ internal class CompletedWorldCapture(private val world: CompletedWorld) {
         if (kind == PureReplayKind.REGEX_COPY && !copy.enabled) return
         if (outcome.stateWrites.isNotEmpty() || outcome.activationWrites.isNotEmpty() ||
             outcome.injectionWrites.isNotEmpty() || outcome.emittedEvents.isNotEmpty() ||
-            outcome.historyWrites != HistoryMemoryPatch()) return
+            outcome.historyWrites != HistoryMemoryPatch() || outcome.userMacroWrites.isNotEmpty()) return
         val allowedMacro = if (copy.enabled) setOf("result.${copy.outputKey}") else emptySet()
         if (outcome.macroWrites.keys.any { it !in allowedMacro }) return
         val keys = if (kind == PureReplayKind.REGEX_COPY) listOf(copy.outputKey)

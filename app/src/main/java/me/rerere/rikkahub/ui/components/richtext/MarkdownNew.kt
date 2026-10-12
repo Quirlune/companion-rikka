@@ -1,5 +1,7 @@
 package me.rerere.rikkahub.ui.components.richtext
 
+import dev.gray.companion.ui.bodyColoredText
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -188,7 +190,7 @@ private fun HtmlBodyNode(node: Node, onClickCitation: (String) -> Unit) {
         is Element -> HtmlBlockElement(element = node, onClickCitation = onClickCitation)
         is TextNode -> {
             val text = node.text().trim()
-            if (text.isNotEmpty()) Text(text = text)
+            if (text.isNotEmpty()) Text(text = bodyColoredText(AnnotatedString(text)))
         }
     }
 }
@@ -372,7 +374,7 @@ private fun HtmlParagraphContent(
     }
 
     Text(
-        text = annotatedString,
+        text = bodyColoredText(annotatedString),
         inlineContent = inlineContents,
         softWrap = true,
         overflow = TextOverflow.Visible,
@@ -728,7 +730,7 @@ private fun HtmlInlineGroup(nodes: List<Node>, onClickCitation: (String) -> Unit
     }
 
     if (annotatedString.isNotEmpty()) {
-        Text(text = annotatedString, inlineContent = inlineContents)
+        Text(text = bodyColoredText(annotatedString), inlineContent = inlineContents)
     }
 }
 
@@ -743,7 +745,7 @@ private fun HtmlInlineAsComposable(node: Node, onClickCitation: (String) -> Unit
     when (node) {
         is TextNode -> {
             val text = node.text()
-            if (text.isNotEmpty()) Text(text = text)
+            if (text.isNotEmpty()) Text(text = bodyColoredText(AnnotatedString(text)))
         }
 
         is Element -> {
@@ -800,7 +802,7 @@ private fun HtmlInlineAsComposable(node: Node, onClickCitation: (String) -> Unit
                         }
                         text to contents
                     }
-                    Text(text = annotated, inlineContent = inlineContents)
+                    Text(text = bodyColoredText(annotated), inlineContent = inlineContents)
                 }
             }
         }

@@ -75,13 +75,14 @@ object MacroNaming {
     ).retainOriginal(value)
 
     fun normalize(value: WorkflowNode, siblingSlugs: Collection<String> = emptyList()): WorkflowNode = value.copy(
-        slug = alias(value.slug, value.outputKey, "output", value.id, siblingSlugs),
-        blocks = siblings(value.blocks, { it.slug }) { block, used -> normalize(block, used) }
+        // Blocks are local prompt structure, not independently addressable macros.
+        // Keep legacy block metadata unchanged while naming the node's result.
+        slug = alias(value.slug, value.outputKey, "output", value.id, siblingSlugs)
     ).retainOriginal(value)
 
-    fun normalize(value: PromptBlock, siblingSlugs: Collection<String> = emptyList()): PromptBlock = value.copy(
-        slug = alias(value.slug, "", "prompt", value.id, siblingSlugs)
-    ).retainOriginal(value)
+    /** Legacy API: prompt blocks no longer receive macro aliases. */
+    @Suppress("UNUSED_PARAMETER")
+    fun normalize(value: PromptBlock, siblingSlugs: Collection<String> = emptyList()): PromptBlock = value
 
     fun normalize(value: PromptEntry, siblingSlugs: Collection<String> = emptyList()): PromptEntry = value.copy(
         title = value.title.ifEmpty { value.key.ifBlank { "词条" } },
@@ -99,7 +100,7 @@ object MacroNaming {
     // Recovery compares execution inputs while keeping the captured resource metadata unchanged.
     // Existing display names/titles can affect prompts and attribution, so only new metadata is removed.
     internal fun runtimeShape(value: CharacterCard): CharacterCard = value.copy(
-        slug = "", entries = value.entries.map { runtimeShape(it) }
+        slug = "", boundPersonaId = null, entries = value.entries.map { runtimeShape(it) }
     )
 
     internal fun runtimeShape(value: PromptPackage): PromptPackage = value.copy(

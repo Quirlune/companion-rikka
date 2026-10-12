@@ -8,6 +8,7 @@ import kotlinx.serialization.json.Json
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import me.rerere.ai.util.HttpException
 import java.security.KeyFactory
 import java.security.PrivateKey
 import java.security.MessageDigest
@@ -105,8 +106,7 @@ class ServiceAccountTokenProvider(
 
         http.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) {
-                val body = resp.body.string()
-                throw IllegalStateException("Token endpoint ${resp.code}: $body")
+                throw HttpException("Google 服务账号授权失败（HTTP ${resp.code}），请检查服务账号邮箱、私钥及设备时间", resp.code)
             }
             val body = resp.body.string()
             val tokenResp = json.decodeFromString(TokenResponse.serializer(), body)

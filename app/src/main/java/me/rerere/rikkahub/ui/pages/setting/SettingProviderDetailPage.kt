@@ -780,7 +780,7 @@ private fun ModelSettingsForm(
                             }
                         )
 
-                        CustomBodies(
+                        if (options.customRequestBody) CustomBodies(
                             customBodies = model.customBodies,
                             onUpdate = { bodies ->
                                 onModelChange(model.copy(customBodies = bodies))

@@ -46,6 +46,7 @@ object HistoryReferences {
             append(".from:").append(point(selection.range.from))
             append(".through:").append(point(selection.range.through))
         }
+        if (selection.readMode == HistoryReadMode.TEXT) append(".as:text")
         selection.format?.let { format ->
             validate(format)
             val encoded = json.encodeToString(HistoryReferenceFormat.serializer(), format)
@@ -57,5 +58,18 @@ object HistoryReferences {
         require((compiled.reference as? PromptReferenceLanguage.QueryPlan)?.historySelection != null) {
             compiled.diagnostics.firstOrNull()?.message ?: "History 引用无效"
         }
+    }
+
+    fun isText(expression: String, executionVersion: Int = ExecutionSemantics.CURRENT): Boolean =
+        HistoryViews.selection(expression, executionVersion)?.readMode == HistoryReadMode.TEXT
+
+    /** The returned value is inserted as text under the containing prompt block's role. */
+    fun plainText(messages: List<ChatMessage>): String = messages.joinToString("\n") { message ->
+        val speaker = when (message.role) {
+            Role.SYSTEM -> "System"
+            Role.USER -> "User"
+            Role.ASSISTANT -> "Assistant"
+        }
+        "$speaker: ${message.text}"
     }
 }

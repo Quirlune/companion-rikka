@@ -1,6 +1,6 @@
 # velune 代码维护与模型接手手册
 
-适用0.57-preview，文档修订68。先读根 AGENTS.md 和 ARCHITECTURE；制作可导入资源另读 AI_IMPORT_GUIDE.txt。本手册以仓库根为路径基准，可用于 Windows 或 Linux/Codex Cloud。
+当前验收版本0.66-preview/code234（execution26 / wire34，SQLite1），文档修订78；九域审查修复与此前三项故障修复已纳入，原生输出平滑按用户授权的替代方案使用展示端逐帧合并与追加文字淡入（未找到适用的原版 Android 实现）。APK 构建、同签名安装及隔离 API36 模拟器中的应用到本地合成 HTTPS 请求和关键界面验收通过；真实云模型和实体手机体验未验证。先读根 AGENTS.md 和 ARCHITECTURE；制作可导入资源另读 AI_IMPORT_GUIDE.txt。本手册以仓库根为路径基准，可用于 Windows 或 Linux/Codex Cloud。
 
 ## 接手流程
 
@@ -19,6 +19,8 @@
 | 新资源字段 | Models、ExtensionModels、CardModels、LibraryFormat、LibraryValidator | SqliteLibraryRepository、对应编辑器；同时检查导入/撤回/冻结资源 |
 | 新行为 | Actions、ActionDescriptor/Registry、RunPlan、OutcomeValidation/Publication | 原生调用编辑器按描述符显示；不要另开执行器 |
 | 提示词和宏 | PromptCompiler、MacroReferences、PromptReferenceLanguage、HistoryReferences | PromptBlocksEditor/提示词引用编辑器，必须显示实际发送结构 |
+| 用户输入宏 | UserInputMacros、Actions、RuntimeSnapshots | UserMacroBehaviorEditor/UserMacroInput；只在新USER消息准入时展开，显示变换不改草稿 |
+| 隔离配置工作台 | ConfigurationWorkspaces、ConfigurationContext、ConfigurationAuthoringSchema | ConfigurationToolGateway/ConfigurationWorkspacePage；独立草稿锁，提交才获取运行锁，BUSY不停止聊天 |
 | 资源导入与移除 | ResourceArchiveImport、ConfigurationCommands、ResourceEditCommands、ResourceUsageIndex、ResourceKindCatalog | ConfigurationAdmission/导入预览；原子保存和撤回 |
 | 卡片与 XML | CardModels、XmlCardData、CardDisplays、CardMarkup、CardLayoutCommands | ui/CardResourcesEditor、CardDefinitionEditor、CardLayoutUi |
 | 主正文外观 | BodyAppearanceTemplates | ui/BodyAppearanceEditor、BodyAppearanceMarkup、StyledBody |
@@ -96,3 +98,11 @@ APK 默认位于 `app/build/outputs/apk/debug/app-debug.apk`。Windows 将命令
 README 只写当前入口和产品版本；ARCHITECTURE 只写当前边界与重要决策；DEVELOPMENT 写维护路径；AI_IMPORT_GUIDE 写作者契约；API_REFERENCE 用工具从实际 serializer 生成。HANDOFF 记录交付与限制。历史迁到 history，避免大量补丁段互相覆盖。
 
 机器参考不是完整 JSON Schema，也不保证业务有效性。扩展至少要通过真实解码、ConfigurationCommands.preview/apply 和当前 LibraryValidator；不以 json.loads 成功冒充导入成功。
+
+### Revision76 validation (2026-10-12)
+Source wire33/execution26, no packaging. Focused tests: ModelRequestMessagesTest5, HistoryTextReferenceTest4, AutomaticOptionsTest3, AutomaticOptionsEditingTest5, GoogleVertexTransportTest5, OpenRouterErrorDetailTest1, RikkaGatewayErrorTest1, BodyAppearanceMarkupTest9, PromptTemplateHistoryRoutingTest3 (36 total passed). App Kotlin compilation passed; regenerated authoring catalog. Initial test assertions corrected and rerun only affected checks. Authorized synthetic HTTP evidence: Haiku5.5 rejects assistant tail400 and accepts explicit user tail200; AI Studio gemini-3.8-flash single/multiple System paths200, with one transient503. Not mobile end-to-end verification. Device UI/rendering acceptance remains pending; no APK or production database changes.
+
+### Revision77 validation and packaging (2026-10-12)
+0.65-preview/code233, wire33/execution26, SQLite1. User-confirmed priority fixes: history-reference picker modal overlap; streamed HTML internal scrolling/DOM replacement/loading subtree and candidate-height callback; explicit “修复并重试” stores a visible editable USER prompt block before retrying automatic options. Existing customized blocks are preserved; no hidden prompt or load-time rewrite.
+Focused verification passed: AutomaticOptionsEditingTest5, BodyAppearanceMarkupTest9, PromptTemplateHistoryRoutingTest3 (17). External synthetic review probes passed3, reproducing two execution defects and one resource-deletion protection bypass; passing probes mean the unfixed defects were confirmed. APK assembleDebug passed in the same integration run. No repeated broad regression, real provider calls, production database access, installation or physical touch/visual verification.
+Independent multi-model review completed nine domains with root assessment: 1 P1 + 9 P2 remaining findings, plus two unquantified performance observations. Only the three user-confirmed faults were changed. Highest priority remains extension-policy overlay versus regeneration commit validation; privacy/credential copies and effective-provider HTTPS validation follow. Reports and synthetic probes are in the chat audit artifacts; device flicker and click feel remain user acceptance items.

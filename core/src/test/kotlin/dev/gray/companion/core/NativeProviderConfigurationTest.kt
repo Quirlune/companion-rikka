@@ -7,7 +7,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class NativeProviderConfigurationTest {
-    @Test fun signedNativeResponseSurvivesParsingAndStoredHistory() = kotlinx.coroutines.runBlocking {
+    @Test fun nativeModelOverrideUsesConnectionHttpsAdmissionRule() {
+        val model = payload("""{"_formatVersion":1,"providerOverwrite":{"type":"claude","baseUrl":"http://override.invalid/v1"}}""")
+        val issues = NativeProviderConfiguration.validateModel(model, "model")
+        assertEquals("model.providerOverwrite.baseUrl", issues.single().path)
+        assertTrue(NativeProviderConfiguration.validHttpsAddress("https://override.invalid/v1"))
+        assertFalse(NativeProviderConfiguration.validHttpsAddress("https://user@override.invalid/v1"))
+    }
+
+    @Test fun signedNativeResponseKeepsDisplayReasoningWithoutNativePayload() = kotlinx.coroutines.runBlocking {
         val nativeMessage = payload("""{"role":"ASSISTANT","parts":[{"type":"text","text":"answer"}],"metadata":{"signature":"signed-fixture"}}""")
         val nativeReasoning = ReasoningSnapshot("thinking", 1L, 2L, nativeMessage)
         val source = object : ModelGateway {
@@ -16,11 +24,11 @@ class NativeProviderConfigurationTest {
                 ModelResponse("answer", nativeReasoning)
         }
         val parsed = CandidateModelGateway(source, ReasoningParsingConfig()) {}.generateResponseAttempt(ModelProfile(), emptyList()) {}
-        assertEquals(nativeMessage, parsed.reasoning!!.nativeMessage)
+        assertNull(parsed.reasoning!!.nativeMessage)
         val library = Library(sessions = listOf(Session(id = "chat", messages = listOf(
             ChatMessage(role = Role.ASSISTANT, text = parsed.text, reasoningSnapshot = parsed.reasoning)))))
         val stored = LibraryFormat.decode(LibraryFormat.encode(library))
-        assertEquals(nativeMessage, stored.sessions.single().messages.single().reasoningSnapshot!!.nativeMessage)
+        assertNull(stored.sessions.single().messages.single().reasoningSnapshot!!.nativeMessage)
         assertEquals("thinking", stored.sessions.single().messages.single().reasoningSnapshot!!.text)
     }
 
@@ -35,7 +43,7 @@ class NativeProviderConfigurationTest {
             "selectedProfileId":"model"
         }"""
         val restored = LibraryFormat.decode(oldWire)
-        assertEquals(14, restored.schemaVersion)
+        assertEquals(LibraryFormat.CURRENT_VERSION, restored.schemaVersion)
         assertEquals("account", restored.connections.single().id)
         assertNull(restored.connections.single().nativeProvider)
         assertEquals("model", restored.profiles.single().id)

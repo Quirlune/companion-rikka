@@ -337,13 +337,15 @@ private fun ChatListNormal(
         ChatFontProvider(displaySetting = settings.displaySetting) {
             LazyColumn(
                 state = state,
-                contentPadding = PaddingValues(16.dp) + PaddingValues(bottom = 32.dp + innerPadding.calculateBottomPadding()),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp,
+                    top = if (compactBranchActions) innerPadding.calculateTopPadding() + 8.dp else 16.dp,
+                    bottom = 32.dp + innerPadding.calculateBottomPadding()),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier
                     .fillMaxSize()
                     .hazeSource(state = hazeState)
-                    .padding(top = innerPadding.calculateTopPadding()),
+                    .padding(top = if (compactBranchActions) 0.dp else innerPadding.calculateTopPadding()),
             ) {
             itemsIndexed(
                 items = conversation.messageNodes,

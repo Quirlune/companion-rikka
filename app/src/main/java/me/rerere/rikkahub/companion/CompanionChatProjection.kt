@@ -44,8 +44,12 @@ internal fun projectCompanionChat(
     presentationSettings: Settings = projectCompanionSettings(base, library, session),
 ): CompanionChatProjection {
     val settings = presentationSettings
+    val acceptedIds = history.mapTo(mutableSetOf()) { it.id }
     val pending = orderTurnRegions(
-        pendingOutputs.filter { it.text.isNotEmpty() || it.reasoningSnapshot != null },
+        pendingOutputs.filter {
+            (it.text.isNotEmpty() || it.reasoningSnapshot != null) &&
+                pendingOutputId(session.id, it) !in acceptedIds
+        },
         turnId = { it.turnId },
         outputSlot = { it.outputSlot },
     ).map { output ->
@@ -78,7 +82,16 @@ internal fun projectCompanionChat(
 
 /** One identity shared by pending message projection and its optional body presentation. */
 internal fun pendingOutputId(sessionId: String, output: PendingOutput): Uuid =
-    stableUuid("$sessionId:${output.workflowId}:${output.nodeId}:${output.outputSlot}:${output.turnId}")
+    outputPresentationId(sessionId, output.turnId, output.workflowId, output.nodeId, output.outputSlot)
+
+/** Physical output identity survives journal publication; candidate IDs remain independent. */
+private fun outputPresentationId(
+    sessionId: String, turnId: String?, workflowId: String, nodeId: String, slot: OutputSlot,
+    occurrence: Int = 0,
+): Uuid {
+    val route = "$sessionId:$workflowId:$nodeId:$slot:$turnId"
+    return stableUuid(if (occurrence == 0) route else "$route:occurrence:$occurrence")
+}
 
 /** Stable appearance/catalogue projection; the UI remembers it separately from streamed text. */
 internal fun projectCompanionSettings(base: Settings, library: Library, session: Session): Settings {
@@ -157,6 +170,7 @@ internal data class CompanionHistoryProjection(
     val branchChoices: Map<Uuid, List<CompanionBranchChoice>>,
     val logicalMessageIds: Map<Uuid, String>,
     val bodyDisplays: Map<Uuid, BodyDisplaySnapshot>,
+    val presentationIds: Map<Uuid, Uuid>,
 )
 
 /** Display-only nodes project compatible prompt paths and their own generation candidates. */
@@ -180,20 +194,24 @@ internal fun projectCompanionHistory(session: Session): CompanionHistoryProjecti
     val choices = mutableMapOf<Uuid, List<CompanionBranchChoice>>()
     val logicalIds = mutableMapOf<Uuid, String>()
     val bodyDisplays = mutableMapOf<Uuid, BodyDisplaySnapshot>()
+    val presentationIds = mutableMapOf<Uuid, Uuid>()
     val regionOccurrences = mutableMapOf<String, Int>()
     val nodes = visible.map { message ->
         val anchorTurn = anchorTurns[message.id]
         val turnRecord = anchorTurn?.let(records::get)
         val turnUser = anchorTurn?.let(users::get)
+        val workflowId = message.workflowId
+        val sourceNodeId = message.nodeId
         val nodeId = when {
-            anchorTurn != null -> stableUuid("turn:$anchorTurn:generation-anchor")
             message.role == Role.ASSISTANT && message.turnId != null &&
-                message.workflowId != null && message.nodeId != null -> {
+                workflowId != null && sourceNodeId != null -> {
                 val regionKey = "turn:${message.turnId}:workflow:${message.workflowId}:node:${message.nodeId}:slot:${message.outputSlot}"
                 val occurrence = regionOccurrences.getOrDefault(regionKey, 0)
                 regionOccurrences[regionKey] = occurrence + 1
-                stableUuid("$regionKey:occurrence:$occurrence")
+                outputPresentationId(session.id, message.turnId, workflowId, sourceNodeId,
+                    message.outputSlot, occurrence)
             }
+            anchorTurn != null -> stableUuid("turn:$anchorTurn:generation-anchor")
             else -> stableUuid(message.id)
         }
         val activeId = message.activeTextRevisionId ?: message.id
@@ -263,9 +281,10 @@ internal fun projectCompanionHistory(session: Session): CompanionHistoryProjecti
             }
         }
         choices[nodeId] = branchChoices
+        uiMessages.forEach { presentationIds[it.id] = nodeId }
         MessageNode(id = nodeId, messages = uiMessages, selectIndex = selectedIndex)
     }
-    return CompanionHistoryProjection(nodes, choices, logicalIds, bodyDisplays)
+    return CompanionHistoryProjection(nodes, choices, logicalIds, bodyDisplays, presentationIds)
 }
 
 private fun ChatMessage.displayForRevision(revisionId: String): BodyDisplaySnapshot? =

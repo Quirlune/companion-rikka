@@ -4,6 +4,7 @@ import java.security.MessageDigest
 import kotlinx.serialization.Serializable
 
 @Serializable enum class HistorySegmentMode { COMPRESS, EXPAND }
+@Serializable enum class HistoryReadMode { MESSAGES, TEXT }
 
 /** References an existing text revision, never a second stored copy of its text. */
 @Serializable data class HistorySourceRef(val messageId: String, val revisionId: String, val fingerprint: String,
@@ -39,7 +40,9 @@ import kotlinx.serialization.Serializable
     val compressed: Boolean = false, val sourceKind: HistorySourceKind = HistorySourceKind.DISPLAY,
     val format: HistoryReferenceFormat? = null, val rangeExplicit: Boolean = false,
     /** Original speaker filter, before selecting the range. null keeps all BODY source roles. */
-    val sourceRole: Role? = null
+    val sourceRole: Role? = null,
+    /** TEXT inserts labelled floors into the outer prompt block; MESSAGES emits structured API messages. */
+    val readMode: HistoryReadMode = HistoryReadMode.MESSAGES
 )
 data class HistoryProjection(
     val messages: List<ChatMessage>, val issues: List<Issue> = emptyList(),

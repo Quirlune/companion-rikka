@@ -5,6 +5,16 @@ data class MessageOperationResult(val session: Session? = null, val issues: List
     val succeeded: Boolean get() = session != null && issues.none { it.error }
 }
 
+/** In-memory proof of a checked admission; the existing recovery journal persists its inputs. */
+class RegenerationAdmission private constructor(
+    internal val original: Session,
+    internal val candidate: Session
+) {
+    companion object {
+        internal fun checked(original: Session, candidate: Session) = RegenerationAdmission(original, candidate)
+    }
+}
+
 data class MessageCapabilities(
     val canEditText: Boolean,
     val canDeleteText: Boolean,
@@ -77,6 +87,12 @@ object MessageOperations {
         if (index < 0) return MessageCapabilities(false, false, false, false, false,
             "消息不存在", "消息不存在")
         val message = session.messages[index]
+        if (session.pendingRun != null) return MessageCapabilities(
+            canEditText = false,
+            canDeleteText = message.id == session.pendingRun.turnId && rollbackPendingUserTurn(session, message.id).succeeded,
+            canRegenerate = false, canSelectGenerationVariant = false, canFork = false,
+            regenerateReason = "请先结束当前断点", forkReason = "请先结束当前断点"
+        )
         val userId = if (message.role == Role.USER) message.id else message.turnId
         val record = session.turnRecords.firstOrNull { it.userMessageId == userId }
         val latest = latestUser(session)?.id == userId
@@ -206,21 +222,52 @@ object MessageOperations {
         ))
     }
 
+    /** Separate the immutable restore boundary from the policy approved before execution. */
+    fun admitRegeneration(original: Session, candidate: Session, live: Library): RegenerationAdmission {
+        val user = latestUser(original) ?: throw IllegalArgumentException("找不到当前用户消息")
+        val prepared = prepareRegeneration(original, user.id).session
+            ?: throw IllegalArgumentException("重新生成恢复边界无效")
+        val expected = CompletedWorlds.withExtensionPolicyForNewTurn(live, prepared)
+        require(candidate == expected) { "重新生成候选与准入世界不一致" }
+        return RegenerationAdmission.checked(original, candidate)
+    }
+
+    /** Recovery uses its saved admission, never today's switches or resource definitions. */
+    fun restoreRegenerationAdmission(recovery: RunRecovery): RegenerationAdmission {
+        val original = recovery.regenerationBase
+            ?: throw IllegalArgumentException("重新生成断点缺少原始恢复边界")
+        val candidate = recovery.initialSession
+        require(recovery.regenerating && recovery.sessionId == original.id && candidate.id == original.id &&
+            latestUser(original)?.id == recovery.turnId && latestUser(candidate)?.id == recovery.turnId) {
+            "重新生成断点来源不一致"
+        }
+        val prepared = prepareRegeneration(original, recovery.turnId).session
+            ?: throw IllegalArgumentException("重新生成恢复边界无效")
+        require(candidate.copy(executableWorld = prepared.executableWorld) == prepared &&
+            CompletedWorlds.isExtensionPolicyOverlay(prepared.executableWorld, candidate.executableWorld)) {
+            "重新生成断点与获准执行世界不一致"
+        }
+        return RegenerationAdmission.checked(original, candidate)
+    }
+
     /** Commit a successful candidate once, carrying the old answer's variants forward. */
-    fun commitRegeneration(original: Session, candidate: Session, result: RunResult): MessageOperationResult {
+    fun commitRegeneration(original: Session, candidate: Session, result: RunResult,
+                           admission: RegenerationAdmission? = null): MessageOperationResult {
         if (result.status != RunStatus.SUCCESS) return unavailable("turn", "工作流未成功，原回答已保留")
+        if (admission != null && (original != admission.original || candidate != admission.candidate))
+            return unavailable("turn", "重新生成准入后会话或执行世界已改变")
         val user = latestUser(original) ?: return unavailable("turn", "找不到当前用户消息")
         val record = latestRecord(original, user.id)
         if (record == null) {
             if (!unfinishedLatestRound(original, user.id) || candidate.id != original.id ||
                 candidate.messages != original.messages || candidate.macroHistory != original.macroHistory ||
-                captureRuntime(candidate) != captureRuntime(original) || candidate.turnRecords != original.turnRecords)
+                captureRuntime(candidate) != captureRuntime(admission?.candidate ?: original) || candidate.turnRecords != original.turnRecords)
                 return unavailable("turn", "未完成轮次的候选与当前会话不一致")
             return recordSuccessfulTurn(candidate, result)
         }
         if (!record.restoreAllowed || candidate.id != original.id || latestUser(candidate)?.id != user.id)
             return unavailable("turn", "重新生成期间会话或恢复边界已改变")
-        val expected = prepareRegeneration(original, user.id).session
+        val expected = admission?.candidate ?: prepareRegeneration(original, user.id).session
         if (expected == null || candidate.messages != expected.messages || candidate.macroHistory != expected.macroHistory ||
             captureRuntime(candidate) != captureRuntime(expected))
             return unavailable("turn", "重新生成候选与当前会话不一致")
@@ -342,7 +389,9 @@ object MessageOperations {
         }
 
     /** Delete the selected text candidate; the final deletion leaves a logical tombstone. */
-    fun deleteMessage(session: Session, messageId: String): MessageOperationResult = changeText(session, messageId) { current ->
+    fun deleteMessage(session: Session, messageId: String): MessageOperationResult =
+        if (session.pendingRun != null) rollbackPendingUserTurn(session, messageId)
+        else changeText(session, messageId) { current ->
         val replacement = current.textRevisions.maxWithOrNull(compareBy<TextRevision> { it.createdAt }.thenBy { it.id })
         if (replacement == null) current.copy(
             text = "", textRevisions = emptyList(), activeTextRevisionId = null,
@@ -352,6 +401,64 @@ object MessageOperations {
             textRevisions = current.textRevisions.filterNot { it.id == replacement.id },
             activeTextRevisionId = replacement.id, activeTextRevisionCreatedAt = replacement.createdAt, bodyDisplay = replacement.bodyDisplay
         )
+    }
+
+    /** Remove only the USER message that opened a paused round, restoring its complete before-world. */
+    fun rollbackPendingUserTurn(session: Session, messageId: String): MessageOperationResult {
+        val pending = session.pendingRun ?: return unavailable("message.$messageId", "没有可撤回的断点")
+        if (pending.regenerating || pending.sessionId != session.id || pending.turnId != messageId)
+            return unavailable("message.$messageId", "只能撤回触发本轮的用户消息")
+        val initial = pending.initialSession
+        val userIndex = initial.messages.lastIndex
+        val user = initial.messages.lastOrNull()
+        if (initial.id != session.id || user == null || user.id != messageId || user.role != Role.USER ||
+            user.outputSlot != OutputSlot.BODY || user.deleted ||
+            session.messages.getOrNull(userIndex) != user ||
+            session.messages.take(userIndex) != initial.messages.take(userIndex) ||
+            session.messages.drop(userIndex + 1).any { it.role != Role.ASSISTANT || it.turnId != messageId })
+            return unavailable("message.$messageId", "触发消息或本轮消息来源已改变")
+        val record = session.turnRecords.lastOrNull()
+        if (record == null || record.userMessageId != messageId || !record.restoreAllowed ||
+            record.selectedVariantId != pending.id || record.checkpoint != pending.checkpoint ||
+            session.turnRecords.dropLast(1) != initial.turnRecords || !selectedRoundHistoryKnown(session, record))
+            return unavailable("message.$messageId", "本轮检查点或宏历史已改变")
+        val prefix = macroPrefix(session.macroHistory, record.checkpoint.macroLengths)
+            ?: return unavailable("message.$messageId", "宏历史缺少发送前的版本")
+        val before = pending.beforeUserSession ?: run {
+            // An older journal has no pre-send Session. Its prior selected candidate may prove
+            // the original pinned world, even though new-turn policy replaced the admitted one.
+            val beforeWorld = initial.executableWorld?.let { admitted ->
+                initial.turnRecords.lastOrNull()?.let { prior ->
+                    val selected = prior.variants.firstOrNull { it.id == prior.selectedVariantId }
+                    val previousUser = initial.messages.dropLast(1).lastOrNull {
+                        it.role == Role.USER && it.outputSlot == OutputSlot.BODY
+                    }
+                    selected?.after?.completedWorld?.takeIf { candidate ->
+                        prior.restoreAllowed && previousUser?.id == prior.userMessageId &&
+                            selectedRoundHistoryKnown(initial, prior) &&
+                            selected.replyIds.all { replyId -> initial.messages.dropLast(1).any {
+                                it.id == replyId && it.turnId == prior.userMessageId
+                            } } &&
+                            selected.after.copy(completedWorld = null) ==
+                                pending.checkpoint.runtime.copy(completedWorld = null) &&
+                            admitted.choices == candidate.choices
+                    }
+                }
+            }
+            if ((initial.executableWorld != null && beforeWorld == null) ||
+                initial.runtimeSnapshot().copy(completedWorld = null) != pending.checkpoint.runtime.copy(completedWorld = null))
+                return unavailable("message.$messageId", "旧断点缺少完整的发送前快照，无法安全撤回")
+            initial.withRuntime(pending.checkpoint.runtime.copy(completedWorld = beforeWorld)).copy(
+                messages = initial.messages.dropLast(1), macroHistory = prefix, executableWorld = beforeWorld
+            )
+        }
+        if (before.id != session.id || before.pendingRun != null ||
+            before.messages + user != initial.messages || before.turnRecords != initial.turnRecords ||
+            before.macroHistory.filterValues { it.isNotEmpty() } != prefix.filterValues { it.isNotEmpty() } ||
+            session.macroHistory.filterValues { it.isNotEmpty() } !=
+                mergeMacros(prefix, record.variants.first { it.id == pending.id }.macroAppends).filterValues { it.isNotEmpty() })
+            return unavailable("message.$messageId", "发送前快照与当前轮次不一致")
+        return MessageOperationResult(before.copy(updatedAt = System.currentTimeMillis()))
     }
 
     fun invalidateRestore(session: Session): Session = session.copy(

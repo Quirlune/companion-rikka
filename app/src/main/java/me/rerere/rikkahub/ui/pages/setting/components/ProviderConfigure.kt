@@ -532,6 +532,7 @@ private fun ProviderConfigureGoogle(
             value = provider.location,
             onValueChange = { onEdit(provider.copy(location = it.trim())) },
             label = { Text(stringResource(R.string.setting_provider_page_location)) },
+            supportingText = { Text("填写区域标识（如 us-central1）或 global；需与模型支持区域一致，不会自动换区。") },
             modifier = Modifier.fillMaxWidth(),
         )
 
@@ -541,5 +542,6 @@ private fun ProviderConfigureGoogle(
             label = { Text(stringResource(R.string.setting_provider_page_project_id)) },
             modifier = Modifier.fillMaxWidth(),
         )
+        Text("拉取的是 Google 发布的 Gemini 模型目录，不代表当前项目和区域已获调用权限。", style = MaterialTheme.typography.bodySmall)
     }
 }

@@ -14,16 +14,28 @@ data class ResourceUse(
 object ResourceUsageIndex {
     const val LIMITATION = "用量包括配置关联、扩展、会话、收藏及可静态识别的引用；动态地址和运行时选择不能完整推断。"
 
-    fun usages(library: Library, target: ResourceLocation): List<ResourceUse> = buildList {
+    /** Scan [library] as the final candidate; [referenceLibrary] supplies only the removed
+     * target's former definition so deleted addresses/workflows still resolve.
+     */
+    fun usages(library: Library, target: ResourceLocation, referenceLibrary: Library = library): List<ResourceUse> = buildList {
         val ref = target.resource
-        val entry = target.entryId?.let { id -> ResourceEditCommands.entries(library, ref).singleOrNull { it.id == id } }
+        val definitions = targetCatalog(library, referenceLibrary, ref)
+        val entry = target.entryId?.let { id -> ResourceEditCommands.entries(definitions, ref).singleOrNull { it.id == id } }
         val entryAddress = entry?.let {
             when (ref.kind) {
                 ExtensionResourceKind.CHARACTER -> "character.${it.key}"
-                ExtensionResourceKind.PACKAGE -> library.packages.singleOrNull { pack -> pack.id == ref.id }?.let { pack -> "pack.${pack.namespace}.${it.key}" }
+                ExtensionResourceKind.PACKAGE -> definitions.packages.singleOrNull { pack -> pack.id == ref.id }?.let { pack -> "pack.${pack.namespace}.${it.key}" }
                 else -> null
             }
         }
+        // Prefer final-candidate resolution when an address is rebound in the same edit.
+        // The former target definition is only needed for addresses left dangling by deletion.
+        fun staticReferences(owner: ResourceLocation, expression: String): List<ResourceLocation> =
+            staticTargets(library, owner, expression).ifEmpty { staticTargets(definitions, owner, expression) }
+        fun references(owner: ExtensionFieldRef?, expression: String): List<ResourceLocation> =
+            ResourceLocations.resolveReference(library, owner, expression).ifEmpty {
+                ResourceLocations.resolveReference(definitions, owner, expression)
+            }
         fun use(location: ResourceLocation?, path: String, label: String, kind: ResourceUseKind, removable: Boolean = false) {
             add(ResourceUse(target, location, path, label, kind, removable))
         }
@@ -60,8 +72,8 @@ object ResourceUsageIndex {
         }
         ResourceTemplateSlots.list(library).forEach { slot ->
             MacroTemplateTokens.scan(slot.text).tokens.filter { it.closed }.forEach { token ->
-                val targets = staticTargets(library, slot.location, token.expression).ifEmpty {
-                    ResourceLocations.resolveReference(library, slot.location.field, token.expression)
+                val targets = staticReferences(slot.location, token.expression).ifEmpty {
+                    references(slot.location.field, token.expression)
                 }
                 if (targets.any { candidate ->
                     candidate.resource == ref && (target.entryId == null || candidate.entryId == target.entryId)
@@ -71,14 +83,14 @@ object ResourceUsageIndex {
         }
         fun outsideTemplate(path: String, title: String, text: String) {
             MacroTemplateTokens.scan(text).tokens.filter { it.closed }.forEach { token ->
-                if (ResourceLocations.resolveReference(library, null, token.expression).any {
+                if (references(null, token.expression).any {
                         it.resource == ref && (target.entryId == null || it.entryId == target.entryId)
                     }) use(null, "$path.span.${token.start}.${token.endExclusive}", "$title：${token.expression}", ResourceUseKind.TEMPLATE)
             }
         }
-        val ownedWorkflows = ResourceTemplateSlots.workflows(library, ref).map { it.id }.toSet()
-        val ownedNodes = ResourceTemplateSlots.workflows(library, ref).flatMap { it.nodes }.map { it.id }.toSet()
-        val ownedBlocks = ResourceTemplateSlots.workflows(library, ref)
+        val ownedWorkflows = ResourceTemplateSlots.workflows(definitions, ref).map { it.id }.toSet()
+        val ownedNodes = ResourceTemplateSlots.workflows(definitions, ref).flatMap { it.nodes }.map { it.id }.toSet()
+        val ownedBlocks = ResourceTemplateSlots.workflows(definitions, ref)
             .filter { target.workflowId == null || it.id == target.workflowId }.flatMap { it.nodes }
             .filter { target.nodeId == null || it.id == target.nodeId }.flatMap { it.blocks }
             .filter { target.blockId == null || it.id == target.blockId }.map { it.id }.toSet()
@@ -94,7 +106,7 @@ object ResourceUsageIndex {
                     val arguments = descriptor?.fields.orEmpty().filter { it.type == ActionFieldType.MACRO }.map { it.key }
                     arguments.forEach { key ->
                         val value = node.arguments[key].orEmpty()
-                        if (staticTargets(library, nl, value.removeSurrounding("{{", "}}")).any { it.resource == ref && (target.entryId == null || it.entryId == target.entryId) })
+                        if (staticReferences(nl, value.removeSurrounding("{{", "}}")).any { it.resource == ref && (target.entryId == null || it.entryId == target.entryId) })
                             use(nl.copy(section = "arguments.$key"), ResourceLocations.path(nl) + ".argument.$key", "动作 ${node.title} 的宏地址：$value", ResourceUseKind.TEMPLATE)
                     }
                     listOfNotNull(descriptor?.injectionTargetWorkflowField, descriptor?.injectionTargetNodeField).forEach { key ->
@@ -111,8 +123,8 @@ object ResourceUsageIndex {
             val selected = when (ref.kind) {
                 ExtensionResourceKind.CHARACTER -> session.characterId == ref.id
                 ExtensionResourceKind.MAIN -> session.mainCallId == ref.id || ref.id in session.historyDigests
-                ExtensionResourceKind.PACKAGE -> library.loadedPromptPackages(session).any { it.id == ref.id } || ref.id in session.packageIds
-                ExtensionResourceKind.GROUP -> library.loadedCallGroups(session).any { it.id == ref.id } || ref.id in session.groupIds
+                ExtensionResourceKind.PACKAGE -> definitions.loadedPromptPackages(session).any { it.id == ref.id } || ref.id in session.packageIds
+                ExtensionResourceKind.GROUP -> definitions.loadedCallGroups(session).any { it.id == ref.id } || ref.id in session.groupIds
             }
             if (selected && target.entryId == null) use(null, path, "${if (kind == ResourceUseKind.SAVED_CHAT) "收藏" else "会话"}：${session.title}", kind)
             fun origins(origins: Iterable<ResultOrigin>, at: String) {
@@ -154,6 +166,7 @@ object ResourceUsageIndex {
                     else ResourceEditCommands.entries(recovery.frozenResources, ref).any { it.id == target.entryId }
                 if (frozenContainsTarget) use(null, "$path.pendingRun.${recovery.id}", "待恢复运行使用的冻结资源／词条", ResourceUseKind.RECOVERY)
                 visitSession(recovery.initialSession, "$path.pendingRun.initialSession", ResourceUseKind.RECOVERY, depth + 1)
+                recovery.beforeUserSession?.let { visitSession(it, "$path.pendingRun.beforeUserSession", ResourceUseKind.RECOVERY, depth + 1) }
                 recovery.regenerationBase?.let { visitSession(it, "$path.pendingRun.regenerationBase", ResourceUseKind.RECOVERY, depth + 1) }
                 recovery.environments.forEach { visitSession(it.session, "$path.pendingRun.environment.${it.id}", ResourceUseKind.RECOVERY, depth + 1) }
                 origins(recovery.resultOrigins.values + recovery.macroHistory.values.flatten().flatMap { listOfNotNull(it.origin, it.valueOrigin) }, "$path.pendingRun.runtime")
@@ -166,6 +179,20 @@ object ResourceUsageIndex {
         library.sessions.forEach { visitSession(it, "session.${it.id}", ResourceUseKind.SESSION) }
         library.savedChats.forEach { visitSession(it.snapshot, "savedChat.${it.id}", ResourceUseKind.SAVED_CHAT) }
     }.distinct()
+
+    private fun targetCatalog(candidate: Library, source: Library, ref: ExtensionResourceRef): Library {
+        if (candidate === source) return candidate
+        return when (ref.kind) {
+            ExtensionResourceKind.CHARACTER -> candidate.copy(characters = candidate.characters.filterNot { it.id == ref.id } +
+                source.characters.filter { it.id == ref.id })
+            ExtensionResourceKind.MAIN -> candidate.copy(mainCalls = candidate.mainCalls.filterNot { it.id == ref.id } +
+                source.mainCalls.filter { it.id == ref.id })
+            ExtensionResourceKind.PACKAGE -> candidate.copy(packages = candidate.packages.filterNot { it.id == ref.id } +
+                source.packages.filter { it.id == ref.id })
+            ExtensionResourceKind.GROUP -> candidate.copy(groups = candidate.groups.filterNot { it.id == ref.id } +
+                source.groups.filter { it.id == ref.id })
+        }
+    }
 
     /** Conservative library-wide candidates; character-relative references are narrowed only by a character owner. */
     internal fun staticTargets(library: Library, owner: ResourceLocation, expression: String): List<ResourceLocation> {

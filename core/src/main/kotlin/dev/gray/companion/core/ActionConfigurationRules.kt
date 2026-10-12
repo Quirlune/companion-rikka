@@ -3,7 +3,9 @@ package dev.gray.companion.core
 /** Saved built-in action configuration rules. Rendered parameters retain their runtime checks. */
 internal object ActionConfigurationRules {
     fun outputProcessing(node: WorkflowNode, path: String): List<Issue> =
-        if (node.outputProcessing.isNotEmpty() && node.actionId in setOf(
+        if (node.outputProcessing.isNotEmpty() && node.actionId == "user.macro.create")
+            listOf(Issue("$path.outputProcessing", "创建用户宏行为不处理输出文本"))
+        else if (node.outputProcessing.isNotEmpty() && node.actionId in setOf(
                 "state.set", "state.increment", "macro.write", "macro.activate", "macro.process"))
             listOf(Issue("$path.outputProcessing", "此动作的输出处理会与目标值不一致；请在宏处理步骤中修改值"))
         else emptyList()

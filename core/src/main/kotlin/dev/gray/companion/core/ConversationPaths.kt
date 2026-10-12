@@ -98,6 +98,42 @@ object ConversationPaths {
         )) } ?: restored
     }
 
+    /** Remove this prompt's candidate and the continuations owned by that candidate, in this chat. */
+    fun deleteGenerationVariant(session: Session, turnId: String, variantId: String): MessageOperationResult {
+        if (session.pendingRun != null) return unavailable("请先结束当前生成或恢复")
+        val current = snapshot(session)
+        val hydrated = hydrate(session)
+        val record = hydrated.turnRecords.firstOrNull { it.userMessageId == turnId }
+            ?: return unavailable("这一轮没有运行状态检查点")
+        val removedIndex = record.variants.indexOfFirst { it.id == variantId }
+        if (removedIndex < 0) return unavailable("生成候选不存在")
+        val remaining = record.variants.filterNot { it.id == variantId }
+        val selected = if (record.selectedVariantId != variantId) hydrated else {
+            if (!record.restoreAllowed) return unavailable("手动修改过运行状态，此轮不能恢复")
+            if (remaining.isNotEmpty()) {
+                val next = remaining[(removedIndex - 1).coerceAtLeast(0).coerceAtMost(remaining.lastIndex)]
+                val operation = selectGenerationVariant(hydrated, turnId, next.id)
+                operation.session ?: return operation
+            } else {
+                // Reuse the checked single-round rollback, excluding the removed future first.
+                val boundary = MessageOperations.forkAtVariant(hydrated, turnId, variantId)
+                val prefix = boundary.session ?: return boundary
+                val operation = MessageOperations.deleteGenerationVariant(prefix, turnId, variantId)
+                operation.session?.copy(id = session.id, isPinned = session.isPinned) ?: return operation
+            }
+        }
+        fun withoutCandidate(records: List<TurnRecord>) = records.map { item ->
+            if (item.userMessageId == turnId) item.copy(variants = item.variants.filterNot { it.id == variantId }) else item
+        }
+        val paths = selected.inactivePaths.mapNotNull { path ->
+            if (!samePrompt(current, path, turnId)) path
+            else if (path.turnRecords.any { it.userMessageId == turnId && it.selectedVariantId == variantId }) null
+            else path.copy(turnRecords = withoutCandidate(path.turnRecords))
+        }
+        return MessageOperationResult(selected.copy(turnRecords = withoutCandidate(selected.turnRecords),
+            inactivePaths = paths, updatedAt = System.currentTimeMillis()))
+    }
+
     /** Historical regeneration stays in this chat and preserves its old continuation. */
     fun regenerationBase(session: Session, messageId: String): MessageOperationResult {
         if (session.pendingRun != null) return unavailable("请先结束当前生成或恢复")

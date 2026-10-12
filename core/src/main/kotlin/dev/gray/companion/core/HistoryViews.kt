@@ -9,9 +9,12 @@ object HistoryViews {
         if (!semantics.historySources && result.fields.any { it.name == "source" }) return null
         if (!semantics.localHistoryFormats && result.fields.any { it.name == "format" }) return null
         if (!semantics.historySourceRoleSelection && result.fields.any { it.name == "speaker" }) return null
+        if (executionVersion < 26 && result.fields.any { it.name == "as" }) return null
         return when (ref) {
             is PromptReferenceLanguage.LegacyReference -> when (ref.expression) {
-                "history", "history.raw", "history.text" -> HistorySelection(compressed = ref.expression != "history.raw")
+                "history", "history.raw", "history.text" -> HistorySelection(
+                    compressed = ref.expression != "history.raw",
+                    readMode = if (ref.expression == "history") HistoryReadMode.MESSAGES else HistoryReadMode.TEXT)
                 "history.display" -> if (semantics.historySources) HistorySelection() else null
                 "history.model" -> if (semantics.historySources) HistorySelection(sourceKind = HistorySourceKind.MODEL_RAW) else null
                 else -> null
@@ -114,7 +117,12 @@ object HistoryViews {
             range = HistoryRange(), apiRole = local.apiRole, mergeMessages = false, prefix = "", suffix = "",
             floorPrefix = local.floorPrefix, floorSuffix = local.floorSuffix, speakers = local.speakers,
             floors = emptyList(), insertions = emptyList())
-        val displayMain = main.copy(history = displayHistory)
+        val textHistory = if (executionVersion >= 26 && selection.readMode == HistoryReadMode.TEXT)
+            displayHistory.copy(mergeMessages = false, apiRole = null,
+                speakers = displayHistory.speakers.map { it.copy(apiRole = null) },
+                floors = displayHistory.floors.map { it.copy(apiRole = null) })
+        else displayHistory
+        val displayMain = main.copy(history = textHistory)
         val activeNumbers = session.messages.filter { it.outputSlot == OutputSlot.BODY && !it.deleted }
             .withIndex().associate { it.value.id to it.index + 1 }
         val capturedNumbers = view?.let { HistoryMemory.captureSources(state, it.captureId) }?.withIndex()

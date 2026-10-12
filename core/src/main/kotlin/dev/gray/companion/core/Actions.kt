@@ -66,7 +66,8 @@ data class ActionContext(
     val activationWrites: Map<String, Boolean> = emptyMap(),
     val injectionWrites: List<PromptInjectionPatch> = emptyList(),
     val historyWrites: HistoryMemoryPatch = HistoryMemoryPatch(),
-    val historyRead: HistoryPromptRead? = null
+    val historyRead: HistoryPromptRead? = null,
+    val userMacroWrites: Map<String, UserMacroDefinition> = emptyMap()
 )
 fun interface ActionHandler { suspend fun execute(context: ActionContext): ActionOutcome }
 data class RegisteredAction(val descriptor: ActionDescriptor, val handler: ActionHandler)
@@ -94,6 +95,13 @@ class ActionRegistry {
                 ActionOutcome(context.gateway.generateAttempt(profile, context.messages, context.onDelta))
             }
             .register(ActionDescriptor("text.render", "组合文本", "无需模型，将输入模板中的宏展开为新的调用宏；不创建界面", pureReplay = PureReplayKind.TEXT_RENDER)) { context -> ActionOutcome(context.input) }
+            .register(ActionDescriptor("user.macro.create", "创建用户宏", "登记当前聊天的输入快捷词；发送新消息时才展开或抽取")) { context ->
+                require(ExecutionSemantics(context.executionVersion).userInputMacros) { "此恢复版本不支持用户输入宏" }
+                val definition = requireNotNull(context.node.userMacro) { "请先配置用户宏" }
+                val issue = UserInputMacros.validate(definition).firstOrNull { it.error }
+                require(issue == null) { issue!!.message }
+                ActionOutcome(userMacroWrites = mapOf(definition.shortcut to definition))
+            }
             .register(ActionDescriptor("plugin.run", "插件代码", "执行已启用插件的纯文本代码；结果可供其他行为读取", listOf(
                 ActionFieldDescriptor("pluginId", "插件标识", required = true)
             ), pureReplay = PureReplayKind.PLUGIN_TEXT)) { context ->
@@ -341,7 +349,8 @@ internal fun ActionDescriptor.executionIssue(): String? {
 }
 
 internal fun ActionOutcome.hasEffects(): Boolean = stateWrites.isNotEmpty() || emittedEvents.isNotEmpty() ||
-    macroWrites.isNotEmpty() || activationWrites.isNotEmpty() || injectionWrites.isNotEmpty() || !historyWrites.isEmpty()
+    macroWrites.isNotEmpty() || activationWrites.isNotEmpty() || injectionWrites.isNotEmpty() ||
+    userMacroWrites.isNotEmpty() || !historyWrites.isEmpty()
 
 internal fun readCopySource(library: Library, session: Session, source: String, target: MacroTargetSnapshot? = null,
                            onRead: ((String, String?, MacroVersion?) -> Unit)? = null): String? {

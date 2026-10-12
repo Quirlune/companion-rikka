@@ -29,7 +29,7 @@ import dev.gray.companion.core.WorkflowNode
 @Composable
 internal fun ActionArgumentForm(node: WorkflowNode, action: ActionDescriptor?, onChange: (WorkflowNode) -> Unit, references: List<PromptReferenceChoice> = emptyList()) {
     if (action?.fields?.isNotEmpty() == true) {
-        Text("动作参数", style = MaterialTheme.typography.titleSmall)
+        Text("行为参数", style = MaterialTheme.typography.titleSmall)
         action.fields.forEach { field ->
             ActionFieldLine(field, node.arguments[field.key].orEmpty(), field.key in node.arguments, references,
                 onReset = { onChange(node.copy(arguments = node.arguments - field.key)) },
@@ -45,7 +45,7 @@ internal fun ActionArgumentForm(node: WorkflowNode, action: ActionDescriptor?, o
         Text(if (advanced) "收起其他参数${if (extraKeys.isNotEmpty()) "（${extraKeys.size}）" else ""}" else "其他参数${if (extraKeys.isNotEmpty()) "（${extraKeys.size}）" else ""} · 展开")
     }
     if (advanced) {
-        Text("保留导入的参数；修改名称前请确认动作处理器支持它。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("保留导入的参数；修改名称前请确认行为类型支持它。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         extraKeys.forEach { argumentKey -> key(argumentKey) {
             AdvancedArgumentLine(argumentKey, node.arguments[argumentKey].orEmpty(), node.arguments.keys) { newKey, newValue ->
                 val arguments = if (newKey == null) node.arguments - argumentKey

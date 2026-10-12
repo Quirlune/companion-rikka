@@ -16,6 +16,7 @@ import dev.gray.companion.core.Role
 import dev.gray.companion.core.ModelUsageRecord
 import dev.gray.companion.NativeProviderCodec
 import dev.gray.companion.core.UsageStatus
+import dev.gray.companion.core.boundedModelFinishReason
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -42,12 +43,29 @@ import kotlinx.serialization.json.jsonObject
 import me.rerere.ai.util.HttpException
 import okhttp3.OkHttpClient
 import org.koin.core.context.GlobalContext
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentHashMap
 import java.io.IOException
 
 class GatewayFailure(message: String, cause: Throwable? = null, retryable: Boolean = true,
     serialFallback: Boolean = false) : ModelRequestFailure(message, retryable, serialFallback, cause)
+
+/** A short provider diagnostic for UI. Do not echo arbitrary response JSON, credentials or prompts. */
+internal fun safeHttpDiagnostic(failure: Throwable): String? {
+    val http = generateSequence(failure) { it.cause }.filterIsInstance<HttpException>().lastOrNull() ?: return null
+    val message = http.message?.takeIf { it.isNotBlank() && it.length <= 2_048 &&
+        !it.trimStart().startsWith('{') && !it.trimStart().startsWith('[') }
+        ?.replace(Regex("(?i)\\bBearer\\s+[^\\s,;]+"), "Bearer [已隐藏]")
+        ?.replace(Regex("(?i)\\b(?:sk|or)-[A-Za-z0-9_-]{8,}"), "[已隐藏]")
+        ?.replace(Regex("(?i)\\b(?:api[_ -]?key|authorization)\\s*[:=]\\s*[^\\s,;]+"), "[已隐藏]")
+        ?.replace(Regex("https?://[^\\s,;]+"), "[链接已隐藏]")
+        ?.replace(Regex("\\b[A-Za-z0-9_-]{40,}\\b"), "[已隐藏]")
+        ?.replace(Regex("[\\p{Cntrl}]+"), " ")
+        ?.trim()?.take(240)?.takeIf { it.isNotBlank() }
+    fun label(value: String?): String? = value?.takeIf { it.length in 1..40 &&
+        it.all { char -> char.isLetterOrDigit() || char in "._- " } }
+    return listOfNotNull(label(http.providerName)?.let { "提供商 $it" },
+        label(http.providerCode)?.let { "代码 $it" }, message).joinToString(" · ").ifBlank { null }
+}
 
 class RikkaGateway(
     context: Context, private val credentials: CredentialStore,
@@ -69,7 +87,9 @@ class RikkaGateway(
         limits[ModelCatalog.credentialId(profile)] ?: 1
     private val manager by lazy {
         val sharedClient = GlobalContext.get().get<OkHttpClient>()
-        ProviderManager(sharedClient.newBuilder().callTimeout(120, TimeUnit.SECONDS).build(), applicationContext)
+        // Streaming may remain active for longer than two minutes; the shared client's
+        // read timeout limits idle network reads without imposing a total SSE lifetime.
+        ProviderManager(sharedClient.newBuilder().callTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS).build(), applicationContext)
     }
 
     override suspend fun generate(profile: ModelProfile, messages: List<ChatMessage>, onDelta: suspend (String) -> Unit): String {
@@ -146,14 +166,16 @@ class RikkaGateway(
                 ModelReasoning.HIGH -> ReasoningLevel.HIGH
                 ModelReasoning.XHIGH -> ReasoningLevel.XHIGH
                 ModelReasoning.MAX -> ReasoningLevel.MAX
+                null -> null
             },
             customHeaders = profile.resolvedHeaders.map { CustomHeader(it.name, it.value) } + model.customHeaders,
-            customBody = model.customBodies)
+            customBody = model.customBodies, legacyGeneration = profile.legacyGeneration)
         val startedAt = System.currentTimeMillis()
         var status = UsageStatus.FAILED
         var promptTokens: Long? = null
         var completionTokens: Long? = null
         var reportedTotal: Long? = null
+        var finishReason: String? = null
         try {
             manager.getProviderByType(setting).streamText(setting, uiMessages, params).collect { chunk ->
                 if (profile.nativeModel != null || profile.resolvedProvider != null)
@@ -189,6 +211,7 @@ class RikkaGateway(
                         completionTokens = maxOf(completionTokens ?: 0L, chunk.usage.completionTokens.toLong())
                         reportedTotal = maxOf(reportedTotal ?: 0L, chunk.usage.totalTokens.toLong())
                     }
+                    is StreamChunk.Finish -> finishReason = boundedModelFinishReason(chunk.finishReason)
                     is StreamChunk.ToolCallStart -> throw GatewayFailure("当前调用尚未配置客户端工具执行器", retryable = false)
                     else -> Unit
                 }
@@ -210,7 +233,8 @@ class RikkaGateway(
                 ?: Regex("(?:response|HTTP|status|Unknown error)[^0-9]{0,16}([45][0-9]{2})", RegexOption.IGNORE_CASE)
                     .find(failure.message.orEmpty())?.groupValues?.get(1)
             val safe = when {
-                status != null -> "模型服务返回 HTTP $status"
+                status != null -> "模型服务返回 HTTP $status" +
+                    (safeHttpDiagnostic(failure)?.let { "：$it" } ?: "")
                 failure is IOException -> "网络连接失败"
                 else -> "模型服务请求失败"
             }
@@ -229,7 +253,8 @@ class RikkaGateway(
             me.rerere.rikkahub.utils.JsonInstant.encodeToJsonElement(UIMessage.serializer(), nativeMessages.last()).jsonObject else null
         return ModelResponse(answer.toString(), if (reasoningStartedAt != null || nativeMessage != null)
             ReasoningSnapshot(reasoningText.toString(), reasoningStartedAt ?: startedAt,
-                reasoningFinishedAt ?: System.currentTimeMillis(), nativeMessage) else null)
+                reasoningFinishedAt ?: System.currentTimeMillis(), nativeMessage) else null,
+            finishReason)
     }
 
     companion object {

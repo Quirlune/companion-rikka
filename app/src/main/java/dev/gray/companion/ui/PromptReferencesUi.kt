@@ -86,10 +86,10 @@ internal fun promptReferenceChoices(
     add(choice("角色名称", "{{character.name}}", "characters", "角色资料", "聊天角色的显示名称", listOf(characterOwner), locations = listOfNotNull(characterOwner.location?.copy(section = "name"))))
     val historyOwners = listOfNotNull(mainOwner?.copy(location = mainOwner.location?.copy(section = "history")))
     add(choice("结构化历史", "{{history}}", "history", "聊天历史", "按主调用的历史规则插入消息", historyOwners))
-    add(choice("原始历史", "{{history.raw}}", "history", "聊天历史", "读取原始 BODY 楼层", historyOwners))
+    add(choice("原始历史文本", "{{history.raw}}", "history", "聊天历史", "将原始 BODY 楼层展开为带发言者前缀的一段文本", historyOwners))
     add(choice("最终展示正文历史", "{{history.display}}", "history", "聊天历史", "读取最终语义 BODY 正文；与用户看到的正文一致", historyOwners))
     add(choice("模型原文历史", "{{history.model}}", "history", "聊天历史", "读取已归档的初始模型原文；旧楼层若未留存原文会报告缺失", historyOwners))
-    add(choice("历史纯文本", "{{history.text}}", "history", "聊天历史", "将投影后的历史展开为文本", historyOwners))
+    add(choice("历史纯文本", "{{history.text}}", "history", "聊天历史", "将处理后的历史展开为带发言者前缀的一段文本；标签不是 API 角色", historyOwners))
     add(choice("历史楼层数量", "{{history.count}}", "history", "聊天历史", "投影后的历史消息数量", historyOwners))
     add(choice("历史摘要与记忆标识", "{{history.summary}}", "history", "聊天历史", "历史处理成功生成的摘要和可供普通调用选择的记忆段标识；未生成时为空", historyOwners))
     add(choice("展示正文记忆标识", "{{history.display.summary}}", "history", "聊天历史", "最终展示正文来源的有效摘要与记忆段标识", historyOwners))
@@ -304,7 +304,7 @@ internal fun PromptReferenceSheet(
             item { Text("目录包含当前聊天、编辑配置与可绑定的提示词包；未加载的资料会标明，本轮结果需成功完成后才能引用。", style = MaterialTheme.typography.bodySmall) }
             if (choices.any { it.macro.startsWith("{{type:builtin.in:history.name:messages") || it.macro.startsWith("{{type:builtin.in:history.name:context") }) {
                 onConfigureHistory?.let { configure -> item {
-                    TextButton(onClick = { onDismiss(); configure() }) { Text("历史上下文…") }
+                    TextButton(onClick = { configure(); onDismiss() }) { Text("历史上下文…") }
                 } }
                 item { HistoryReferenceComposer(choices, { onInsert(it); onDismiss() }) }
             }

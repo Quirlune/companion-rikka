@@ -1,6 +1,7 @@
 package dev.gray.companion.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -26,7 +27,6 @@ import me.rerere.rikkahub.ui.components.ui.Select
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import me.rerere.rikkahub.data.model.Avatar
-import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.UIAvatar
 import me.rerere.rikkahub.ui.theme.CustomColors
 
@@ -82,16 +82,31 @@ internal fun EditorSection(
 ) {
     var expanded by rememberSaveable { mutableStateOf(initiallyExpanded) }
     val focus = LocalFocusManager.current
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        CardGroup {
-            item(
-                onClick = { focus.clearFocus(); expanded = !expanded },
-                headlineContent = { Text(title) },
-                supportingContent = summary?.let { value -> { Text(value, maxLines = 2, overflow = TextOverflow.Ellipsis) } },
-                trailingContent = { Icon(if (expanded) HugeIcons.ArrowUp01 else HugeIcons.ArrowDown01, if (expanded) "收起$title" else "展开$title") },
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth()
+                .clip(MaterialTheme.shapes.small)
+                .clickable(onClickLabel = if (expanded) "收起$title" else "展开$title") {
+                    focus.clearFocus()
+                    expanded = !expanded
+                }
+                .padding(horizontal = 4.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(title, style = MaterialTheme.typography.titleSmall)
+                summary?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis) }
+            }
+            Icon(
+                if (expanded) HugeIcons.ArrowUp01 else HugeIcons.ArrowDown01,
+                contentDescription = if (expanded) "收起$title" else "展开$title",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (expanded) Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        if (expanded) Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
     }
 }
 

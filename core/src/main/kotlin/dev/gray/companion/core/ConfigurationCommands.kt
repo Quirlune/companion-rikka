@@ -163,7 +163,9 @@ object ConfigurationCommands {
         excludedChange(base, working)?.let { fail(it, "配置包不能修改会话、收藏或运行状态") }
         val normalized = LibraryFormat.upgrade(working.withStandardCharacterFields())
         excludedChange(base, normalized)?.let { fail(it, "配置包不能修改会话、收藏或运行状态") }
-        val issues = (LibraryValidator.validate(normalized) + additionalValidation(normalized)).filter { it.error }
+        val issues = (LibraryValidator.validate(normalized) + removedPersonaIssues(base, normalized) +
+            removedResourceIssues(base, normalized) +
+            additionalValidation(normalized)).filter { it.error }
         if (issues.isNotEmpty()) return ConfigurationPreview(null, issues)
         val plan = ConfigurationPlan(label, diffResources(base, normalized), diffSettings(base, normalized))
         return ConfigurationPreview(plan)
@@ -214,7 +216,9 @@ object ConfigurationCommands {
         val settingNames = settings.map { it.key }.toSet()
         val incidentalSetting = diffSettings(current, normalized).firstOrNull { it.key !in settingNames }
         if (incidentalSetting != null) fail("config.${incidentalSetting.key}", "配置规范化会改动未触及设置")
-        val issues = (LibraryValidator.validate(normalized) + additionalValidation(normalized)).filter { it.error }
+        val issues = (LibraryValidator.validate(normalized) + removedPersonaIssues(current, normalized) +
+            removedResourceIssues(current, normalized) +
+            additionalValidation(normalized)).filter { it.error }
         if (issues.isNotEmpty()) return ConfigurationApplyResult(null, issues = issues)
         if (changes.isEmpty() && settings.isEmpty()) ConfigurationApplyResult(current)
         else ConfigurationApplyResult(normalized, if (forward) ConfigurationEditReceipt(label = label, changes = changes, settings = settings) else null)
@@ -224,6 +228,31 @@ object ConfigurationCommands {
         ConfigurationApplyResult(null, issues = listOf(Issue(failure.path, failure.message ?: "配置操作冲突")))
     } catch (_: Exception) {
         ConfigurationApplyResult(null, issues = listOf(Issue("config", "配置操作无法完成")))
+    }
+
+    private fun removedPersonaIssues(before: Library, after: Library): List<Issue> =
+        before.personas.filter { old -> after.personas.none { it.id == old.id } }.flatMap { old ->
+            after.personaReferences(old.id).map { path -> Issue(path, "用户身份仍被引用，不能删除：${old.name}") }
+        }
+
+    /** Evaluate deletions against the final candidate, including a plan's repairs in the same transaction.
+     * The former target definition is used only to resolve its addresses and workflow IDs.
+     */
+    private fun removedResourceIssues(before: Library, after: Library): List<Issue> {
+        val previous = ResourceLocations.resources(before)
+        val current = ResourceLocations.resources(after).toSet()
+        val removed = previous.filter { it !in current }.map(::ResourceLocation)
+        val removedEntries = previous.filter { it in current &&
+            it.kind in setOf(ExtensionResourceKind.CHARACTER, ExtensionResourceKind.PACKAGE) }.flatMap { ref ->
+            val remaining = ResourceEditCommands.entries(after, ref).map { it.id }.toSet()
+            ResourceEditCommands.entries(before, ref).filter { it.id !in remaining }
+                .map { ResourceLocation(ref, entryId = it.id) }
+        }
+        return (removed + removedEntries).flatMap { target ->
+            ResourceEditCommands.deletionUses(after, target, before).map { use ->
+                Issue(use.path, "仍被使用：${use.label}")
+            }
+        }.distinct()
     }
 
     private fun command(library: Library, command: JsonObject, path: String): Library {

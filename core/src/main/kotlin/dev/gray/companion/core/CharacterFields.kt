@@ -53,16 +53,17 @@ fun Library.withStandardCharacterFields(): Library {
 fun Library.startNewConversation(characterId: String? = null): Library {
     require(characterId == null || characters.any { it.id == characterId }) { "角色卡不存在" }
     val selected = sessions.firstOrNull { it.id == selectedSessionId }
+    val nextCharacterId = characterId ?: selected?.characterId ?: characters.firstOrNull()?.id.orEmpty()
+    val card = characters.firstOrNull { it.id == nextCharacterId }
     val fresh = Session(
         title = ConversationMetadata.defaultTitle(),
         titlePending = false,
-        characterId = characterId ?: selected?.characterId ?: characters.firstOrNull()?.id.orEmpty(),
+        characterId = nextCharacterId,
         mainCallId = selected?.mainCallId ?: mainCalls.firstOrNull()?.id.orEmpty(),
         packageIds = selected?.packageIds?.toList() ?: emptyList(),
         groupIds = selected?.groupIds?.toList() ?: emptyList(),
-        personaId = selectedPersonaId ?: selected?.personaId
+        personaId = card?.boundPersonaId ?: selectedPersonaId ?: selected?.personaId
     )
-    val card = characters.firstOrNull { it.id == fresh.characterId }
     val resolver = MacroResolver(this, fresh)
     val greetings = (listOf(card?.greeting.orEmpty()) + card?.alternateGreetings.orEmpty())
         .filter { it.isNotBlank() }.map { resolver.render(it) }.filter { it.isNotBlank() }

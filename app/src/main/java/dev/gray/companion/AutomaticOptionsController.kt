@@ -17,6 +17,7 @@ data class AutomaticOptionsUiState(
     val options: List<AutomaticOption> = emptyList(),
     val loading: Boolean = false,
     val error: String? = null,
+    val repairAvailable: Boolean = false,
 )
 
 internal class AutomaticOptionsController(
@@ -86,7 +87,8 @@ internal class AutomaticOptionsController(
         val request = try { AutomaticOptions.request(snapshot, session) }
         catch (failure: Exception) {
             mutable.value = AutomaticOptionsUiState(session.id, source.key,
-                error = failure.message ?: "自动选项提示词无法编译")
+                error = failure.message ?: "自动选项提示词无法编译",
+                repairAvailable = failure is AutomaticOptionsAssistantPrefill)
             return
         }
         if (request == null) {

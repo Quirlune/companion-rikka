@@ -41,11 +41,12 @@ internal fun RecoveryFooter(
     onManual: suspend (RecoveryFailure, String, String?) -> Boolean,
     onEditPrompt: (RecoveryFailure) -> Unit,
     onFinish: suspend () -> Boolean,
+    onRollbackUser: suspend () -> String?,
 ) {
     val failures = recovery?.failures.orEmpty().filterNot { busy && it.provisional }
     if (recovery == null) return
     if (failures.isEmpty()) {
-        if (!busy) PausedRunExit(recovery, onFinish)
+        if (!busy) PausedRunExit(recovery, onFinish, onRollbackUser)
         return
     }
 
@@ -171,6 +172,27 @@ internal fun RecoveryFooter(
                         enabled = !busy && !actionPending,
                     ) { Text("结束本轮，保留已保存结果") }
                 }
+                if (!recovery.regenerating) {
+                    Text("删除触发本轮的用户消息后，会撤销本轮已保存结果，回到发送前。",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    TextButton(
+                        onClick = {
+                            if (!busy && !actionPending) scope.launch {
+                                actionPending = true
+                                actionError = null
+                                try {
+                                    val issue = onRollbackUser()
+                                    if (issue == null) showDetails = false else actionError = issue
+                                } catch (cancelled: CancellationException) {
+                                    throw cancelled
+                                } catch (failure: Throwable) {
+                                    actionError = failure.message ?: "撤回失败，请稍后再试。"
+                                } finally { actionPending = false }
+                            }
+                        },
+                        enabled = !busy && !actionPending,
+                    ) { Text("删除触发消息，撤回本轮") }
+                }
             }
         },
         confirmButton = { TextButton(onClick = { if (!actionPending) showDetails = false }) { Text("关闭") } },
@@ -179,7 +201,8 @@ internal fun RecoveryFooter(
 
 /** An interrupted final publication can leave saved receipts without a failed node to retry. */
 @Composable
-private fun PausedRunExit(recovery: RunRecovery, onFinish: suspend () -> Boolean) {
+private fun PausedRunExit(recovery: RunRecovery, onFinish: suspend () -> Boolean,
+    onRollbackUser: suspend () -> String?) {
     var showDialog by remember(recovery.id) { mutableStateOf(false) }
     var pending by remember(recovery.id) { mutableStateOf(false) }
     var error by remember(recovery.id) { mutableStateOf<String?>(null) }
@@ -199,25 +222,42 @@ private fun PausedRunExit(recovery: RunRecovery, onFinish: suspend () -> Boolean
                 Text(if (recovery.regenerating)
                     "这次重新生成尚未发布的新候选及其运行结果会被放弃，原回答与原状态会保留。结束后可以重新生成。"
                 else "结束后会清除本轮断点，已经保存到会话的结果会保留，未完成的部分不再继续。")
+                if (!recovery.regenerating) Text("也可删除触发本轮的用户消息，撤销本轮已保存结果并回到发送前。")
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             }
         },
         confirmButton = {
-            TextButton(enabled = !pending, onClick = {
-                if (!pending) {
+            Column {
+                if (!recovery.regenerating) TextButton(enabled = !pending, onClick = {
                     pending = true
                     error = null
                     scope.launch {
                         try {
-                            if (onFinish()) showDialog = false else error = "无法结束本轮，请稍后重试。"
+                            val issue = onRollbackUser()
+                            if (issue == null) showDialog = false else error = issue
                         } catch (cancelled: CancellationException) {
                             throw cancelled
-                        } catch (_: Throwable) {
-                            error = "无法结束本轮，请稍后重试。"
+                        } catch (failure: Throwable) {
+                            error = failure.message ?: "撤回失败，请稍后再试。"
                         } finally { pending = false }
                     }
-                }
-            }) { Text(if (pending) "处理中…" else if (recovery.regenerating) "放弃新候选，保留原回答" else "结束本轮") }
+                }) { Text("删除触发消息，撤回本轮") }
+                TextButton(enabled = !pending, onClick = {
+                    if (!pending) {
+                        pending = true
+                        error = null
+                        scope.launch {
+                            try {
+                                if (onFinish()) showDialog = false else error = "无法结束本轮，请稍后重试。"
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Throwable) {
+                                error = "无法结束本轮，请稍后重试。"
+                            } finally { pending = false }
+                        }
+                    }
+                }) { Text(if (pending) "处理中…" else if (recovery.regenerating) "放弃新候选，保留原回答" else "结束本轮") }
+            }
         },
         dismissButton = { TextButton(enabled = !pending, onClick = { showDialog = false }) { Text("暂不结束") } },
     )

@@ -81,4 +81,54 @@ class ModelRequestMessagesTest {
             invocation.profile!!, source + ChatMessage(role = Role.SYSTEM, text = "manual correction")) {}
         assertEquals(listOf(Role.USER, Role.SYSTEM, Role.SYSTEM), requests.single().map { it.role })
     }
+    @Test fun blockMergeBoundariesSurviveFinalGatewayAndLegacyIgnoresFlags() = runBlocking {
+        val main = MainCall(id = "main", history = HistoryConfig(mergeMessages = false))
+        val library = Library(mainCalls = listOf(main))
+        val session = Session(id = "session", mainCallId = main.id)
+        val node = WorkflowNode(id = "node", inputTemplate = "", includeHistory = false, blocks = listOf(
+            PromptBlock(template = "a", role = Role.ASSISTANT),
+            PromptBlock(template = "b", role = Role.ASSISTANT, mergeAdjacentMessages = false),
+            PromptBlock(template = "c", role = Role.ASSISTANT),
+            PromptBlock(template = "d", role = Role.ASSISTANT)))
+        val preview = PromptCompiler().preview(library, session, node, "")
+        assertTrue(preview.issues.toString(), preview.issues.none { it.error })
+        assertEquals(listOf("a", "b", "c\nd"), preview.messages.map { it.text })
+        val requests = mutableListOf<List<ChatMessage>>()
+        val gateway = object : ModelGateway {
+            override suspend fun generate(profile: ModelProfile, messages: List<ChatMessage>, onDelta: suspend (String) -> Unit): String {
+                requests += messages
+                return "done"
+            }
+        }
+        CandidateModelGateway(gateway, ReasoningParsingConfig(), 26).generateAttempt(
+            ModelProfile(id = "profile", model = "offline"), preview.messages) {}
+        assertEquals(preview.messages.map { it.text }, requests.single().map { it.text })
+        assertEquals(listOf("a\nb\nc\nd"),
+            PromptCompiler().preview(library, session, node, "", executionVersion = 25).messages.map { it.text })
+    }
+
+    @Test fun textHistoryKeepsOneOuterRoleWhileMessageHistoryKeepsSourceRoles() {
+        val main = MainCall(id = "main", history = HistoryConfig(mergeMessages = false))
+        val library = Library(mainCalls = listOf(main))
+        val session = Session(id = "session", mainCallId = main.id, messages = listOf(
+            ChatMessage(id = "a", role = Role.ASSISTANT, text = "answer"),
+            ChatMessage(id = "u", role = Role.USER, text = "question")))
+        val selection = HistorySelection(compressed = false, readMode = HistoryReadMode.TEXT)
+        val node = WorkflowNode(id = "node", inputTemplate = "", includeHistory = false,
+            blocks = listOf(PromptBlock(role = Role.SYSTEM, template = HistoryReferences.expression(selection))))
+        val text = PromptCompiler().preview(library, session, node, "")
+        assertTrue(text.issues.toString(), text.issues.none { it.error })
+        assertEquals(listOf(Role.SYSTEM), text.messages.map { it.role })
+        assertEquals("Assistant: answer\nUser: question", text.messages.single().text)
+        val legacy = node.copy(blocks = listOf(PromptBlock(template = "{{history.raw}}")))
+        assertEquals(text.messages.single().text, PromptCompiler().preview(library, session, legacy, "").messages.single().text)
+        assertEquals("assistant: answer\nuser: question", PromptCompiler().preview(library, session, legacy, "", executionVersion = 25).messages.single().text)
+        val structured = node.copy(blocks = listOf(PromptBlock(template = HistoryReferences.expression(
+            selection.copy(readMode = HistoryReadMode.MESSAGES)), mergeAdjacentMessages = false)))
+        val messages = PromptCompiler().preview(library, session, structured, "")
+        assertTrue(messages.issues.toString(), messages.issues.none { it.error })
+        assertEquals(listOf(Role.ASSISTANT, Role.USER), messages.messages.map { it.role })
+        assertTrue(messages.messages.all { !it.mergeAdjacentMessages })
+    }
+
 }

@@ -11,6 +11,7 @@ data class ProviderConfigureOptions(
 data class ProviderModelOptions(
     val typesAndCapabilities: Boolean = true,
     val advancedSettings: Boolean = true,
+    val customRequestBody: Boolean = true,
     val builtInTools: Boolean = true,
     val editModelId: Boolean = false,
     val prepareNewOverride: (me.rerere.ai.provider.ProviderSetting) -> me.rerere.ai.provider.ProviderSetting = { it },

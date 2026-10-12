@@ -17,6 +17,7 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowDown01
 import me.rerere.hugeicons.stroke.PencilEdit01
 import me.rerere.rikkahub.RikkaNavDisplay
+import me.rerere.rikkahub.ui.components.ui.CardGroup
 
 @Serializable
 private sealed interface CallEditorRoute : NavKey {
@@ -96,11 +97,10 @@ internal fun MainCallEditor(
         else onSwitchResource?.invoke(null, targetId)
     }
     fun addCall() {
-        val key = nextCallOutputKey(outputKeysForNewNodes(library, item.configuredWorkflows()), "call")
         val siblings = item.configuredWorkflows()
         val workflow = Workflow(title = nextDisplayName(siblings.map { it.title }, "调用"),
             slug = nextEditorSlug(siblings.map { it.slug }, "call"),
-            nodes = listOf(WorkflowNode(outputKey = key, slug = key, recordTrajectory = false)))
+            nodes = emptyList())
         openDetails(workflow)
     }
     // Legacy resources without an explicit primary keep their original runtime/output contract.
@@ -172,9 +172,25 @@ internal fun MainCallEditor(
                     val modelNode = modelNodes.lastOrNull { it.enabled && it.visible && it.outputSlot == OutputSlot.BODY }
                         ?: modelNodes.lastOrNull { it.visible && it.outputSlot == OutputSlot.BODY }
                         ?: modelNodes.lastOrNull { it.enabled } ?: modelNodes.lastOrNull()
-                    modelNode?.generation?.profileId?.let { overrideId ->
-                        val label = profiles.firstOrNull { it.id == overrideId }?.name?.takeIf { it.isNotBlank() } ?: overrideId
-                        Text("当前正文节点使用：$label（在默认调用设置中调整）", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (modelNode != null) SharedModelGenerationEditor(
+                        options = modelNode.generation,
+                        reasoningParsing = modelNode.reasoningParsing,
+                        profiles = profiles,
+                        modelLabel = "主回复行为模型",
+                    ) { generation, parsing ->
+                        val current = item.workflows.firstOrNull { it.id == default.id }
+                            ?: return@SharedModelGenerationEditor
+                        updateWorkflow(current.copy(nodes = current.nodes.map { node ->
+                            if (node.id == modelNode.id) node.copy(generation = generation, reasoningParsing = parsing) else node
+                        }))
+                    }
+                    val removableDefaultSlotIds = remember(item, library, actions) {
+                        val cleanupLibrary = library?.let { current ->
+                            current.copy(mainCalls = current.mainCalls.filterNot { it.id == item.id } + item)
+                        }
+                        modelNode?.let { node ->
+                            cleanupLibrary?.let { DefaultPromptSlots.unusedDefaultDuplicates(node, it) }
+                        }.orEmpty()
                     }
                     if (modelNode != null) EditorDestinationRow("提示词", "${modelNode.blocks.size} 个提示词块") {
                         requestPrompt(PromptEditRequest(modelNode.blocks, referencesForWritingNode(referenceChoices(), modelNode.id), ResourceLocation(sourceResource, workflowId = default.id, nodeId = modelNode.id)) { blocks ->
@@ -185,9 +201,20 @@ internal fun MainCallEditor(
                     if (DefaultCallRules.compatible(default) && DefaultPromptSlots.ensureMissing(default) != default) {
                         OutlinedButton(onClick = {
                             item.workflows.firstOrNull { it.id == default.id }?.let { updateWorkflow(DefaultPromptSlots.ensureMissing(it)) }
-                        }, enabled = !editingBusy) { Text("补齐四个提示词接收槽") }
-                        Text("仅向当前草稿补入缺少的接收槽；已有提示词与原聊天保留，保存后生效。", style = MaterialTheme.typography.bodySmall,
+                        }, enabled = !editingBusy) { Text("添加四个默认接收槽") }
+                        Text("仅在当前默认模型还没有接收槽时创建一组；已有接收槽与原聊天保留，保存后生效。", style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (removableDefaultSlotIds.isNotEmpty() && modelNode != null) {
+                        val removableNames = modelNode.blocks.filter { it.id in removableDefaultSlotIds }.map { it.title }
+                        OutlinedButton(onClick = {
+                            val current = item.workflows.firstOrNull { it.id == default.id }
+                            if (current != null) updateWorkflow(current.copy(nodes = current.nodes.map { node ->
+                                if (node.id == modelNode.id) node.copy(blocks = node.blocks.filterNot { it.id in removableDefaultSlotIds }) else node
+                            }))
+                        }, enabled = !editingBusy) { Text("移除 ${removableDefaultSlotIds.size} 个空默认槽") }
+                        Text("仅清理完整默认配置且未被任何提示注入引用的槽：${removableNames.joinToString("、")}。自定义槽与已保存聊天的冻结内容保留；保存主调用后生效。",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     if (modelNode != null) NodeTrajectoryControl(modelNode, {}, usesModel = true)
                     if (modelNode != null) RegexOutputCopyEditor(modelNode, outputKeysForNewNodes(library, item.configuredWorkflows())) { copy ->
@@ -357,10 +384,9 @@ internal fun GroupEditor(
         return (item.workflows + main?.workflows.orEmpty() + loadedGroups.flatMap { it.workflows }).distinctBy { it.id }
     }
     fun addCall() {
-        val key = nextCallOutputKey(outputKeysForNewNodes(library, item.workflows), "call")
         val workflow = Workflow(title = nextDisplayName(item.workflows.map { it.title }, "调用"),
             slug = nextEditorSlug(item.workflows.map { it.slug }, "call"),
-            nodes = listOf(WorkflowNode(outputKey = key, slug = key, recordTrajectory = false)))
+            nodes = emptyList())
         openDetails(workflow)
     }
     val sourceResource = ExtensionResourceRef(ExtensionResourceKind.GROUP, item.id)
@@ -389,15 +415,49 @@ internal fun GroupEditor(
         entry<CallEditorRoute.Home> { route ->
             CallEditorPage("调用组", item != baseline, onBack, { onSave(item.copy(name = item.name.trim())) }, saving, { backs[route] = it }) {
                 EditorTitleRow(item.name, { rename = true })
-                EditorDestinationRow("卡片", "${item.cards.size} 项 · 数据、显示与布局") { open(CallEditorRoute.Cards) }
-                EditorDestinationRow("组内调用", "${item.workflows.size} 项") { open(CallEditorRoute.Calls) }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { open(CallEditorRoute.Cards) }, modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 10.dp)) {
+                        Text("卡片", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    OutlinedButton(onClick = { open(CallEditorRoute.Bindings) },
+                        modifier = Modifier.weight(1f).semantics { contentDescription = "关联提示词包" },
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 10.dp)) {
+                        Text("提示词包", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    OutlinedButton(onClick = { open(CallEditorRoute.Info) }, modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 10.dp)) {
+                        Text("资源信息", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
                 HorizontalDivider()
-                EditorDestinationRow("关联提示词包", "${item.boundPackageIds.size} 项") { open(CallEditorRoute.Bindings) }
-                EditorDestinationRow("资源信息与默认状态", item.description.lineSequence().firstOrNull()?.take(48)?.takeIf { it.isNotBlank() }) { open(CallEditorRoute.Info) }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("调用 · ${item.workflows.size}", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                    TextButton(onClick = ::addCall) { Text("添加调用") }
+                }
+                if (item.workflows.isEmpty()) Text("暂无调用，添加后可配置一个或多个行为。",
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                CardGroup {
+                    item.workflows.sortedBy { !it.enabled }.forEach { workflow ->
+                        item(onClick = { openDetails(workflow) },
+                            headlineContent = { Text(workflow.title.ifBlank { "未命名调用" }, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                            supportingContent = {
+                                Column {
+                                    val types = workflow.nodes.map { node -> callBehaviorTypeLabel(node.actionId, actions) }.distinct()
+                                    val summary = types.take(2).joinToString("、") + if (types.size > 2) "等" else ""
+                                    Text("${workflow.nodes.size} 个行为" + if (summary.isBlank()) "" else " · $summary",
+                                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    Text(workflowScheduleLabel(workflow), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                }
+                            },
+                            trailingContent = {
+                                Switch(workflow.enabled, { updateWorkflow(workflow.copy(enabled = it)) },
+                                    modifier = Modifier.semantics { contentDescription = "启用${workflow.title.ifBlank { "调用" }}" })
+                            })
+                    }
+                }
             }
         }
-        entry<CallEditorRoute.Calls> { route -> CallListEditor("组内调用", item.workflows, ::pop, { id -> item.workflows.firstOrNull { it.id == id }?.let(::openDetails) }, ::addCall,
-            { workflow, enabled -> updateWorkflow(workflow.copy(enabled = enabled)) }, { backs[route] = it }) }
         entry<CallEditorRoute.Details> { route -> callDrafts[route.id]?.let { draft ->
             val call = draft.value
             CallDetailsEditor(draft.baseline, call, { callDrafts[route.id] = draft.copy(value = it) }, actions, profiles, outputKeysForNewNodes(library, item.workflows + call),

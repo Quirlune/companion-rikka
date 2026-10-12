@@ -11,6 +11,8 @@ class HttpException(
     message: String,
     val statusCode: Int? = null,
     cause: Throwable? = null,
+    val providerCode: String? = null,
+    val providerName: String? = null,
 ) : RuntimeException(message, cause)
 
 /** Keep transport status even when parsing a provider's error body replaces the exception. */

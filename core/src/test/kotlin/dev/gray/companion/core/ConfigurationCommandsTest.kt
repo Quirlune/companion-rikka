@@ -8,6 +8,63 @@ import kotlinx.serialization.json.JsonObject
 class ConfigurationCommandsTest {
     private fun emptyLibrary() = LibraryFormat.upgrade(Library())
 
+    @Test fun packageRemovalChecksFinalReferencesAndAllowsSameTransactionRepair() {
+        val before = emptyLibrary().copy(
+            characters = listOf(CharacterCard(id = "card", name = "Hero", namespace = "hero", greeting = "{{pack.story.tone}}")),
+            packages = listOf(PromptPackage(id = "pack", name = "Story", namespace = "story",
+                entries = listOf(PromptEntry(id = "tone", key = "tone", text = "warm")))))
+        val removed = """{"format":"companion.config.v1","commands":[{"op":"remove","kind":"package","id":"pack"}]}"""
+        val blocked = ConfigurationCommands.preview(removed, before)
+        assertNull(blocked.plan)
+        assertTrue(blocked.issues.toString(), blocked.issues.any { "静态引用" in it.message })
+
+        val repaired = ConfigurationCommands.preview("""{"format":"companion.config.v1","commands":[
+            {"op":"mergePatch","kind":"character","id":"card","patch":{"greeting":""}},
+            {"op":"remove","kind":"package","id":"pack"}]}""", before)
+        assertNotNull(repaired.issues.toString(), repaired.plan)
+        val applied = ConfigurationCommands.apply(repaired.plan!!, before)
+        assertNotNull(applied.issues.toString(), applied.library)
+        assertTrue(applied.library!!.packages.isEmpty())
+    }
+
+    @Test fun removedEntryAndAcceptedOriginRemainProtected() {
+        val before = emptyLibrary().copy(
+            characters = listOf(CharacterCard(id = "card", name = "Hero", namespace = "hero", greeting = "{{pack.story.tone}}")),
+            packages = listOf(PromptPackage(id = "pack", name = "Story", namespace = "story",
+                entries = listOf(PromptEntry(id = "tone", key = "tone", text = "warm")))))
+        val withoutEntry = before.copy(packages = listOf(before.packages.single().copy(entries = emptyList())))
+        val entryPreview = ConfigurationCommands.previewEdit(before, withoutEntry)
+        assertNull(entryPreview.plan)
+        assertTrue(entryPreview.issues.toString(), entryPreview.issues.any { "静态引用" in it.message })
+
+        val rebound = before.copy(packages = listOf(before.packages.single().copy(
+            entries = listOf(PromptEntry(id = "replacement", key = "tone", text = "new")))))
+        val reboundPreview = ConfigurationCommands.previewEdit(before, rebound)
+        assertNotNull(reboundPreview.issues.toString(), reboundPreview.plan)
+
+        val accepted = before.copy(characters = emptyList(), sessions = listOf(Session(id = "chat",
+            resultOrigins = mapOf("value" to ResultOrigin("pack", "flow", "node")))))
+        val deletion = ConfigurationCommands.preview("""{"format":"companion.config.v1","commands":[
+            {"op":"remove","kind":"package","id":"pack"}]}""", accepted)
+        assertNull(deletion.plan)
+        assertTrue(deletion.issues.toString(), deletion.issues.any { "已接受" in it.message })
+    }
+
+    @Test fun undoCannotRemoveNewlyReferencedPackage() {
+        val base = LibraryFormat.upgrade(emptyLibrary().copy(
+            characters = listOf(CharacterCard(id = "card", name = "Hero", namespace = "hero")))
+            .withStandardCharacterFields())
+        val created = ConfigurationCommands.preview("""{"format":"companion.config.v1","resources":{
+            "packages":[{"id":"pack","name":"Story","namespace":"story","entries":[{"id":"tone","key":"tone","text":"warm"}]}]}}""", base)
+        val applied = ConfigurationCommands.apply(requireNotNull(created.plan), base)
+        val later = requireNotNull(applied.library).copy(characters = listOf(
+            applied.library!!.characters.single().copy(greeting = "{{pack.story.tone}}")))
+        val undo = ConfigurationCommands.undo(requireNotNull(applied.receipt), later)
+        assertNull(undo.library)
+        assertTrue(undo.issues.toString(), undo.issues.any { "静态引用" in it.message })
+    }
+
+
     @Test fun oldUndoImagesUseAppendedDefaultsButStillDetectLaterMemoryEdits() {
         val base = LibraryFormat.upgrade(Library(mainCalls = listOf(MainCall(id = "main", name = "Old"))))
         val preview = ConfigurationCommands.preview("""{"format":"companion.config.v1","commands":[

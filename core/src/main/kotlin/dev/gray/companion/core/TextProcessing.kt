@@ -37,11 +37,17 @@ import kotlinx.serialization.Serializable
     val steps: List<TextProcessStep> = emptyList()
 )
 
-internal fun ModelCallOptions.resolve(library: Library, workflow: Workflow): ModelProfile? {
+internal fun ModelCallOptions.resolve(library: Library, workflow: Workflow,
+    executionVersion: Int = ExecutionSemantics.CURRENT): ModelProfile? {
     val id = profileId ?: workflow.modelProfileId ?: library.selectedProfileId
     val base = ModelCatalog.resolveProfile(library, id) ?: return null
+    if (ExecutionSemantics(executionVersion).behaviorOnlyGeneration) {
+        return base.copy(temperature = temperature, topP = topP, maxTokens = maxTokens,
+            reasoning = reasoning, customBody = emptyList())
+    }
     return base.copy(temperature = temperature ?: base.temperature, topP = topP ?: base.topP,
-        maxTokens = maxTokens ?: base.maxTokens, reasoning = reasoning ?: base.reasoning)
+        maxTokens = maxTokens ?: base.maxTokens, reasoning = reasoning ?: base.reasoning ?: ModelReasoning.OFF,
+        legacyGeneration = true)
 }
 
 internal fun canonicalWriteAddress(raw: String): String? {
@@ -65,6 +71,10 @@ internal fun WorkflowNode.declaredStateWriteAddress(descriptor: ActionDescriptor
 
 /** Typed History targets participate in scheduling, but are never ordinary text macro addresses. */
 internal fun WorkflowNode.declaredOutputAddresses(descriptor: ActionDescriptor?): Set<String> = buildSet {
+    if (actionId == "user.macro.create") {
+        userMacro?.shortcut?.let { add("user-macro:$it") }
+        return@buildSet
+    }
     add("result.$outputKey")
     declaredStateWriteAddress(descriptor)?.let(::add)
     declaredWriteAddress(descriptor)?.let(::add)

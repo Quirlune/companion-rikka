@@ -1,6 +1,6 @@
 # velune — instructions for coding agents
 
-Current application: 0.57-preview / code225; resource wire30; new execution23; SQLite1. Documentation revision68 (2026-10-10) does not change application semantics.
+Current validated application: 0.66-preview / code234 (wire34/execution26; SQLite1). Revision78 (2026-10-12) addresses the nine-domain review findings as well as the earlier three fixes. Native output smoothing uses display-side frame merging and appended-text fade-in under the user's authorized fallback: no applicable original Android implementation was found. The APK built and passed same-signature installation and app-to-local-synthetic-HTTPS checks in an isolated API36 emulator, including request roles, BODY-only history, generation options and key UI flows. Real cloud-model calls and physical-device experience remain unverified.
 
 ## Start here
 Read `docs/ARCHITECTURE.md` and `docs/DEVELOPMENT.md`. For extension authoring read `docs/AI_IMPORT_GUIDE.txt`, use `docs/AI_IMPORT_API_REFERENCE.json` and `docs/examples/`. For cloud setup read `docs/CODEX_CLOUD.md`. Read only the relevant recent entry in `docs/HANDOFF.md` for delivered evidence.

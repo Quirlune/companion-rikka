@@ -28,6 +28,7 @@ object BodyOnlyArchives {
 
     internal fun candidate(outcome: ActionOutcome, executionVersion: Int, rawModelText: String? = null,
         fullResponseText: String? = null, reasoningSnapshot: ReasoningSnapshot? = null,
-        provenanceNote: String? = null): ValidatedCandidate = ValidatedCandidate(outcome, rawModelText,
-            fullResponse(fullResponseText, executionVersion), displayReasoning(reasoningSnapshot, executionVersion), provenanceNote)
+        provenanceNote: String? = null, modelFinishReason: String? = null): ValidatedCandidate = ValidatedCandidate(outcome, rawModelText,
+            fullResponse(fullResponseText, executionVersion), displayReasoning(reasoningSnapshot, executionVersion), provenanceNote,
+            boundedModelFinishReason(modelFinishReason))
 }

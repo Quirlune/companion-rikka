@@ -50,6 +50,45 @@ class DefaultPromptSlotsTest {
         assertTrue(DefaultPromptSlots.blockIssues(slot(), "slot", 9).any { it.message.contains("不支持") })
     }
 
+    @Test fun existingCustomSlotSetIsPreservedWithoutAddingDefaultSlots() {
+        val importedSlots = listOf(
+            PromptBlock(id = "gray_g11_slot_world", title = "世界观与环境 · 接收槽", injectionSlot = true),
+            PromptBlock(id = "gray_g11_slot_characters", title = "其他角色 · 接收槽", injectionSlot = true),
+            PromptBlock(id = "gray_g11_slot_rules", title = "其他规则 · 接收槽", injectionSlot = true),
+            PromptBlock(id = "gray_g11_slot_other", title = "其他资料 · 接收槽", injectionSlot = true),
+        )
+        val node = WorkflowNode(id = "gray_g11_generate", actionId = "model.generate", blocks = importedSlots)
+
+        val preserved = DefaultPromptSlots.ensureMissing(node)
+
+        assertEquals(importedSlots, preserved.blocks)
+        assertEquals(importedSlots.map { it.id }, preserved.blocks.map { it.id })
+        assertEquals(4, preserved.blocks.count { it.injectionSlot })
+        assertEquals(preserved, DefaultPromptSlots.ensureMissing(preserved))
+    }
+
+    @Test fun cleanupCandidatesExcludeConfiguredAndReferencedDefaultSlots() {
+        val imported = PromptBlock(id = "gray_g11_slot_world", title = "世界观与环境 · 接收槽", injectionSlot = true)
+        val defaults = DefaultPromptSlots.definitions.mapIndexed { index, definition ->
+            PromptBlock(id = "default-$index", title = definition.name, slug = definition.slug, injectionSlot = true)
+        }
+        val configured = defaults[2].copy(slotReferences = listOf("{{state.world}}"))
+        val similarName = PromptBlock(id = "similar", title = "额外规则（注入槽1）", slug = "extra_rules_slot_1", injectionSlot = true)
+        val node = WorkflowNode(id = "model-node", actionId = "model.generate", blocks = listOf(imported, similarName) +
+            defaults.take(2) + configured + defaults.last())
+        val configuredTarget = WorkflowNode(id = "group-inject", actionId = "prompt.inject",
+            arguments = mapOf("targetBlockId" to " ${defaults[0].id} "))
+        val group = CallGroup(id = "group", name = "Group", workflows = listOf(Workflow(id = "inject",
+            nodes = listOf(configuredTarget))))
+        val start = session().copy(promptInjections = listOf(PromptInjection("session-inject", PromptBlock(),
+            ResultOrigin("group", "inject", "group-inject"), targetBlockId = defaults[1].id)))
+        val source = library(start, node, groups = listOf(group))
+
+        assertEquals(listOf(defaults.last().id), DefaultPromptSlots.unusedDefaultDuplicates(node, source))
+        assertTrue(DefaultPromptSlots.unusedDefaultDuplicates(WorkflowNode(id = "only-defaults", actionId = "model.generate",
+            blocks = defaults), source).isEmpty())
+    }
+
     @Test fun slotReferencesPrecedeStableLiteralSourcesAndSlotAndPluginDisablingSuppressThem() {
         val nodes = (1..3).map { WorkflowNode(id = "producer-$it", actionId = "text.render", outputKey = "producer-$it") }
         val group = CallGroup(id = "group", name = "Group", workflows = listOf(Workflow(id = "producers", nodes = nodes)))
@@ -166,7 +205,7 @@ class DefaultPromptSlotsTest {
         assertEquals(0, result.promptInjections.single().queueOrder)
         val committed = MessageOperations.recordSuccessfulTurn(start, result).session!!
         val roundTrip = LibraryFormat.decode(LibraryFormat.encode(source.copy(sessions = listOf(committed))))
-        assertEquals(19, roundTrip.schemaVersion)
+        assertEquals(LibraryFormat.CURRENT_VERSION, roundTrip.schemaVersion)
         assertEquals(1, roundTrip.sessions.single().promptInjections.single().contextOrder)
         val invalid = injector("invalid", 1, contextOrder = 0)
         assertTrue(LibraryValidator.validate(library(start, model(), listOf(invalid))).any {

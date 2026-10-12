@@ -24,6 +24,8 @@ sealed interface Screen : NavKey {
     @Serializable data class CompanionRecoveryPrompt(val sessionId: String, val runId: String, val nodeKey: String) : Screen
     @Serializable data object CompanionSession : Screen
     @Serializable data object CompanionChatDisplay : Screen
+    @Serializable data object CompanionConfigurationWorkspace : Screen
+    @Serializable data object CompanionBodyColors : Screen
     @Serializable data object CompanionAutomaticOptions : Screen
     @Serializable data class CompanionMemory(val visitId: String = "", val focus: dev.gray.companion.core.ResourceLocation? = null) : Screen
     @Serializable data object CompanionReasoning : Screen

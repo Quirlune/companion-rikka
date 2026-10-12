@@ -20,7 +20,19 @@ import kotlinx.serialization.json.JsonObject
     val text: String = "", val startedAt: Long = System.currentTimeMillis(), val finishedAt: Long? = null,
     val nativeMessage: JsonObject? = null
 )
-data class ModelResponse(val text: String, val reasoning: ReasoningSnapshot? = null)
+data class ModelResponse(val text: String, val reasoning: ReasoningSnapshot? = null,
+    val finishReason: String? = null)
+
+/** A provider-controlled label may be persisted; never retain arbitrary event text. */
+fun boundedModelFinishReason(value: String?): String? = value?.trim()?.takeIf {
+    it.length in 1..64 && it.all { char -> char.isLetterOrDigit() && char.code < 128 || char in "_.:-" }
+}
+
+fun modelResponseWasTruncated(finishReason: String?): Boolean = when (finishReason?.lowercase()) {
+    "length", "max_tokens", "max_output_tokens", "max_tokens_exceeded",
+    "model_context_window_exceeded" -> true
+    else -> finishReason?.lowercase()?.let { it == "incomplete" || it.startsWith("incomplete:") } == true
+}
 sealed interface ModelDelta {
     data class Text(val text: String) : ModelDelta
     data class Reasoning(val text: String) : ModelDelta

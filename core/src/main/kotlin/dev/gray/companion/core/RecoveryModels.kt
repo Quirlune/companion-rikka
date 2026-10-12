@@ -41,7 +41,8 @@ import kotlinx.serialization.Serializable
     val injectionAdds: List<PromptInjection> = emptyList(),
     val historyWrites: HistoryMemoryPatch = HistoryMemoryPatch(),
     val headWrites: Map<String, MacroHead> = emptyMap(),
-    val headRemovals: Set<String> = emptySet()
+    val headRemovals: Set<String> = emptySet(),
+    val userMacroWrites: Map<String, UserMacroDefinition> = emptyMap()
 )
 
 /** Preparation is captured before a wave starts, so a retry uses that wave's old world. */
@@ -58,7 +59,9 @@ import kotlinx.serialization.Serializable
     val renderedInput: String,
     val arguments: Map<String, String>,
     val profile: ModelProfile? = null,
-    val macroTarget: MacroTargetSnapshot? = null
+    val macroTarget: MacroTargetSnapshot? = null,
+    /** Null is an older journal without proof; empty means this input read no History. */
+    val inputSourceIds: List<String>? = null
 )
 
 /** Captured absence is distinct from a legacy preparation without a target snapshot. */
@@ -97,7 +100,10 @@ import kotlinx.serialization.Serializable
     val historyMemory: HistoryMemoryState = HistoryMemoryState(),
     val completedWorkflowIds: Set<String> = emptySet(),
     val currentOnlyMacros: Map<String, MacroHead> = emptyMap(),
-    val bodyDisplayReceipt: ChatMessage? = null
+    val bodyDisplayReceipt: ChatMessage? = null,
+    /** Exact session before the triggering USER message was sent; absent in older journals. */
+    val beforeUserSession: Session? = null,
+    val userMacros: Map<String, UserMacroDefinition> = emptyMap()
 ) {
     val acceptedCount: Int get() = accepted.size
 }

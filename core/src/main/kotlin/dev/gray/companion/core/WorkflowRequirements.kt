@@ -10,7 +10,8 @@ object WorkflowRequirements {
         val executionVersion = session.executableWorld?.executionVersion ?: ExecutionSemantics.CURRENT
         return workflows.filter { it.enabled && MemoryPlugins.workflowActive(library, session, it.id, executionVersion) }.flatMap { workflow ->
             workflow.nodes.filter { it.enabled && it.actionId in modelActions }.map { node ->
-                node.generation.resolve(ExecutionResources.forWorkflow(library, workflow.id, executionVersion), workflow)
+                node.generation.resolve(ExecutionResources.forWorkflow(library, workflow.id, executionVersion), workflow,
+                    executionVersion)
             }
         }.distinctBy { it?.id }
     }

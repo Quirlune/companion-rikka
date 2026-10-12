@@ -5,8 +5,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.MaterialTheme
@@ -17,7 +15,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
@@ -38,7 +35,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.gray.companion.AppController
 import dev.gray.companion.AutomaticOptionsUiState
 import dev.gray.companion.core.AutomaticOption
-import dev.gray.companion.core.AutomaticOptionsLayout
 import dev.gray.companion.core.AutomaticOptions
 import dev.gray.companion.core.RecoveryDecision
 import dev.gray.companion.core.RecoveryDecisionKind
@@ -57,6 +53,8 @@ import dev.gray.companion.ui.CardMenuDialog
 import dev.gray.companion.ui.menuCards
 import dev.gray.companion.ui.CardRegionDisplay
 import dev.gray.companion.ui.RecoveryFooter
+import dev.gray.companion.ui.userMacroCompletionProvider
+import dev.gray.companion.ui.userMacroOutputTransformation
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlin.time.Duration.Companion.milliseconds
@@ -95,6 +93,7 @@ fun CompanionChatPage(
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     var messageOutline by remember { mutableStateOf(false) }
+    var pendingGenerationDeletion by remember(sessionId) { mutableStateOf<CompanionBranchChoice.Generation?>(null) }
     var drafts by rememberSaveable(stateSaver = listSaver<Map<String, String>, String>(
         save = { values -> values.flatMap { (id, text) -> listOf(id, text) } },
         restore = { values -> values.chunked(2).associate { it[0] to it[1] } },
@@ -119,6 +118,19 @@ fun CompanionChatPage(
         }
         return
     }
+    pendingGenerationDeletion?.let { choice ->
+        AlertDialog(onDismissRequest = { pendingGenerationDeletion = null },
+            title = { Text("删除此候选？") },
+            text = { Text("此候选及沿用它的后续分支会被删除，其他提示词版本和候选仍保留。") },
+            confirmButton = { TextButton(onClick = {
+                pendingGenerationDeletion = null
+                scope.launch {
+                    controller.deleteGenerationVariant(session.id, choice.turnId, choice.variantId)
+                        .firstOrNull { it.error }?.let { snackbar.showSnackbar(it.message) }
+                }
+            }) { Text("删除") } },
+            dismissButton = { TextButton(onClick = { pendingGenerationDeletion = null }) { Text("取消") } })
+    }
     val pendingRecovery = session.pendingRun
 
     val appearanceSettings = LocalSettings.current
@@ -135,9 +147,10 @@ fun CompanionChatPage(
     val pendingOutputs = if (active) controllerState.pendingOutputs else emptyList()
     val bodyContent = remember(history, displaySession.messages, bodyTemplate, pendingOutputs) {
         val content = history.bodyDisplays.filterValues { it.html != null }.mapValues { (id, display) ->
-            @Composable { FrozenHtmlBody(display, id.toString()) }
+            @Composable { FrozenHtmlBody(display, history.presentationIds[id]?.toString() ?: id.toString()) }
         }.toMutableMap()
         if (BodyAppearanceTemplates.isCustom(bodyTemplate)) {
+            val styledBodies = mutableMapOf<kotlin.uuid.Uuid, Pair<String, String>>()
             val bodies = displaySession.messages.filter {
                 !it.deleted && it.role == Role.ASSISTANT && it.outputSlot == OutputSlot.BODY
             }.map { it.id }.toSet()
@@ -145,13 +158,16 @@ fun CompanionChatPage(
                 node.messages.forEach { message ->
                     if (history.logicalMessageIds[message.id] in bodies) {
                         val markdown = message.parts.filterIsInstance<UIMessagePart.Text>().joinToString("\n\n") { it.text }
-                        content[message.id] = @Composable { StyledBody(bodyTemplate, markdown, message.id.toString()) }
+                        styledBodies[message.id] = (history.presentationIds[message.id]?.toString() ?: message.id.toString()) to markdown
                     }
                 }
             }
             pendingOutputs.filter { it.outputSlot == OutputSlot.BODY && it.text.isNotEmpty() }.forEach { output ->
                 val id = pendingOutputId(session.id, output)
-                content[id] = @Composable { StyledBody(bodyTemplate, output.text, id.toString()) }
+                styledBodies[id] = id.toString() to output.text
+            }
+            styledBodies.forEach { (id, body) ->
+                content[id] = @Composable { StyledBody(bodyTemplate, body.second, body.first) }
             }
         }
         content
@@ -210,7 +226,8 @@ fun CompanionChatPage(
         }
     }
     fun submit(answer: Boolean) {
-        val text = input.textContent.text.toString().trim()
+        val raw = input.textContent.text.toString()
+        val text = if (input.isEditing()) raw.trim() else raw
         if (text.isBlank()) return
         scope.launch {
             if (activeBusy) {
@@ -245,8 +262,13 @@ fun CompanionChatPage(
             }
         }
     }
+    LaunchedEffect(currentOptions?.error) {
+        currentOptions?.error?.takeIf { it.isNotBlank() }?.let { snackbar.showSnackbar(it) }
+    }
+    dev.gray.companion.ui.ChatImmersiveMode()
     CompositionLocalProvider(LocalSettings provides settings) {
         OriginalChatPageLayout(
+                compactTopEdge = true,
                 settings = settings,
                 drawerState = drawerState,
                 drawerContent = drawerContent,
@@ -281,31 +303,15 @@ fun CompanionChatPage(
                 bottomBar = { hazeState ->
                     Column(Modifier.background(MaterialTheme.colorScheme.background)) {
                     CardRegionDisplay(library, displaySession, CardRegion.INPUT)
-                    val verticalOptions = library.automaticOptions.layout == AutomaticOptionsLayout.LEFT_VERTICAL
-                    @Composable fun OptionsPanel(vertical: Boolean) {
-                    if (active && library.automaticOptions.enabled) AutomaticOptionsStrip(
-                        vertical = vertical,
-                        options = currentOptions?.options.orEmpty(),
-                        loading = currentOptions?.loading == true,
-                        error = currentOptions?.error,
-                        sourceReady = optionsSourceKey != null,
-                        promptReady = library.automaticOptions.blocks != null || library.automaticOptions.prompt.isNotBlank(),
-                        editing = input.isEditing(),
-                        onSelect = { text ->
-                            if (optionStillCurrent(text)) {
-                                if (input.textContent.text.isBlank()) fillOption(text) else pendingOption = text
-                            }
-                        },
-                        onGenerate = onGenerateOptions,
-                        onSettings = onOpenOptionsSettings,
-                    )
-                    }
-                    if (!verticalOptions) OptionsPanel(false)
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
-                    if (verticalOptions) Box(Modifier.imePadding().navigationBarsPadding()) { OptionsPanel(true) }
                     ChatInput(
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.fillMaxWidth(),
                         state = input,
+                        completionProviders = if (input.isEditing()) emptyList() else remember(session.userMacros) {
+                            listOf(userMacroCompletionProvider(session.userMacros))
+                        },
+                        outputTransformation = if (input.isEditing()) null else remember(session.userMacros) {
+                            userMacroOutputTransformation(session.userMacros)
+                        },
                         loading = activeBusy,
                         settings = settings,
                         hazeState = hazeState,
@@ -344,9 +350,9 @@ fun CompanionChatPage(
                         else "修改回复文本，不重算世界状态",
                     )
                     }
-                    }
                 },
                 chatList = { padding, hazeState ->
+                    Box(Modifier.fillMaxSize()) {
                     ChatList(
                     innerPadding = padding,
                     conversation = conversation,
@@ -399,8 +405,10 @@ fun CompanionChatPage(
                                 return@launch
                             }
                             val issues = when (choice) {
-                                is CompanionBranchChoice.Generation -> controller.deleteGenerationVariant(
-                                    session.id, choice.turnId, choice.variantId)
+                                is CompanionBranchChoice.Generation -> {
+                                    pendingGenerationDeletion = choice
+                                    emptyList()
+                                }
                                 is CompanionBranchChoice.User -> controller.deleteMessage(session.id, choice.messageId)
                                 is CompanionBranchChoice.Text -> controller.deleteMessage(session.id, choice.messageId)
                                 is CompanionBranchChoice.Opening -> controller.deleteMessage(session.id, choice.messageId)
@@ -445,8 +453,13 @@ fun CompanionChatPage(
                     afterMessage = { node ->
                         val messageId = node.messages.getOrNull(node.selectIndex)?.id?.let { history.logicalMessageIds[it] }
                         val body = displaySession.messages.firstOrNull { it.id == messageId && !it.deleted && it.role == Role.ASSISTANT && it.outputSlot == OutputSlot.BODY }
-                        if (body != null) CardRegionDisplay(library, displaySession, CardRegion.CHAT,
-                            body, allowLegacyFloor = !activeBusy)
+                        if (body != null) {
+                            if (dev.gray.companion.core.modelResponseWasTruncated(body.modelFinishReason))
+                                Text("输出已达到模型长度限制，正文可能未完结", style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                            CardRegionDisplay(library, displaySession, CardRegion.CHAT,
+                                body, allowLegacyFloor = !activeBusy)
+                        }
                     },
                     footer = {
                         RecoveryFooter(
@@ -478,9 +491,36 @@ fun CompanionChatPage(
                                 val runId = pendingRecovery?.id
                                 if (runId != null) controller.finishRecovery(session.id, runId) else false
                             },
+                            onRollbackUser = {
+                                val turnId = pendingRecovery?.turnId
+                                val runId = pendingRecovery?.id
+                                if (turnId == null || runId == null) "断点已改变，请重新打开恢复选项"
+                                else controller.rollbackPendingUserTurn(session.id, runId, turnId).firstOrNull { it.error }?.message
+                            },
                         )
                     },
                     )
+                    // Overlay only the option chips; do not grow the Scaffold's bottom bar.
+                    BoxWithConstraints(Modifier.fillMaxSize().padding(padding).padding(end = 8.dp, bottom = 8.dp)) {
+                        if (active && library.automaticOptions.enabled && !input.isEditing()) AutomaticOptionsStrip(
+                            modifier = Modifier.align(Alignment.BottomEnd).widthIn(max = 240.dp)
+                                .heightIn(max = minOf(320.dp, maxHeight)),
+                            options = currentOptions?.options.orEmpty(),
+                            loading = currentOptions?.loading == true,
+                            error = currentOptions?.error,
+                            repairAvailable = currentOptions?.repairAvailable == true,
+                            sourceReady = optionsSourceKey != null,
+                            promptReady = library.automaticOptions.blocks != null || library.automaticOptions.prompt.isNotBlank(),
+                            onSelect = { option ->
+                                if (optionStillCurrent(option)) {
+                                    if (input.textContent.text.isBlank()) fillOption(option) else pendingOption = option
+                                }
+                            },
+                            onGenerate = onGenerateOptions,
+                            onSettings = onOpenOptionsSettings,
+                        )
+                    }
+                    }
                 },
             )
         openedCardId?.let { id ->
@@ -500,49 +540,41 @@ fun CompanionChatPage(
 
 @Composable
 private fun AutomaticOptionsStrip(
-    options: List<AutomaticOption>, loading: Boolean, error: String?, sourceReady: Boolean,
-    promptReady: Boolean, editing: Boolean, onSelect: (AutomaticOption) -> Unit,
-    vertical: Boolean,
+    options: List<AutomaticOption>, loading: Boolean, error: String?, repairAvailable: Boolean, sourceReady: Boolean,
+    promptReady: Boolean, onSelect: (AutomaticOption) -> Unit,
     onGenerate: () -> Unit, onSettings: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var expanded by remember(options) { mutableStateOf<AutomaticOption?>(null) }
-    val panelModifier = if (vertical) Modifier.width(144.dp).heightIn(max = 300.dp).verticalScroll(rememberScrollState()) else Modifier.fillMaxWidth()
-    Column(panelModifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("自动选项", style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
-            if (loading) {
-                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                Text("  正在生成", style = MaterialTheme.typography.labelSmall)
-            }
-            TextButton(onClick = onSettings) { Text("设置") }
-        }
-        @Composable fun OptionChip(option: AutomaticOption) {
+    Column(modifier.verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        options.forEach { option ->
             AssistChip(onClick = {
                 if (option.title != null) expanded = if (expanded == option) null else option else onSelect(option)
-            }, shape = androidx.compose.foundation.shape.RoundedCornerShape(50),
-                modifier = if (vertical) Modifier.fillMaxWidth() else Modifier.widthIn(max = 320.dp),
-                label = { Text(option.title ?: option.content, maxLines = if (option.title == null) 3 else Int.MAX_VALUE,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }, enabled = !editing)
+            }, shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                colors = androidx.compose.material3.AssistChipDefaults.assistChipColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+                label = { Text(option.title ?: option.content, maxLines = 3,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) })
+            if (expanded == option) Surface(shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(option.content, style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState()))
+                    Row {
+                        TextButton(onClick = { onSelect(option) }) { Text("填入输入框") }
+                        TextButton(onClick = { expanded = null }) { Text("收起") }
+                    }
+                }
+            }
         }
-        if (vertical) options.forEach { OptionChip(it) }
-        else if (options.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(options) { OptionChip(it) }
-        }
-        expanded?.takeIf { it in options }?.let { option ->
-            Text(option.content, style = MaterialTheme.typography.bodyMedium,
-                modifier = if (vertical) Modifier else Modifier.heightIn(max = 180.dp).verticalScroll(rememberScrollState()))
-            TextButton(onClick = { onSelect(option) }, enabled = !editing) { Text("填入输入框") }
-        }
-        error?.takeIf { it.isNotBlank() }?.let {
-            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-        }
-        if (editing) Text("编辑历史消息时不能填入选项。", style = MaterialTheme.typography.bodySmall)
-        if (!promptReady) {
-            Text("请先填写选项的语气与方向。", style = MaterialTheme.typography.bodySmall)
-            OutlinedButton(onClick = onSettings) { Text("填写提示词") }
+        if (loading) Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+            CircularProgressIndicator(Modifier.padding(10.dp).size(16.dp), strokeWidth = 2.dp)
         } else if (options.isEmpty() || error != null) {
-            OutlinedButton(onClick = onGenerate, enabled = sourceReady && !loading) { Text(if (error != null) "重新生成选项" else "生成选项") }
-            if (!sourceReady) Text("正文准备好后可以生成选项。", style = MaterialTheme.typography.bodySmall)
+            AssistChip(onClick = if (!promptReady) onSettings else onGenerate,
+                enabled = !promptReady || sourceReady,
+                colors = androidx.compose.material3.AssistChipDefaults.assistChipColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+                label = { Text(if (error != null && repairAvailable) "修复并重试" else if (error != null) "重试选项" else "生成选项") })
         }
     }
 }

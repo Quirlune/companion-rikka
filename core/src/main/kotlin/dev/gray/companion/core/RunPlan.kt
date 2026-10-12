@@ -102,6 +102,7 @@ internal data class RunPlan(val events: Map<String, EventPlan>) {
             val events = linkedMapOf<String, EventPlan>()
             val categories = mutableMapOf<String, String>()
             for (workflow in workflows.filter { it.enabled }) for (node in workflow.nodes.filter { it.enabled }) {
+                if (node.actionId == "user.macro.create") continue
                 val target = node.declaredWriteAddress(availableActions[node.actionId]?.descriptor)
                     ?.takeIf { it.startsWith("result.") }?.substringAfter("result.")
                 for (key in (listOfNotNull(node.outputKey, target) + listOfNotNull(

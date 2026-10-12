@@ -34,11 +34,9 @@ internal fun PromptBlocksEditor(
     tags: List<PromptTag> = emptyList(),
     owner: ResourceLocation? = null,
 ) {
-    val baseline = remember(initial) {
-        val used = initial.map { it.slug }.filter { it.isNotEmpty() }.toMutableSet()
-        initial.map { block -> MacroNaming.normalize(block, used).also { used += it.slug } }
-    }
-    var blocks by remember(initial) { mutableStateOf(baseline) }
+    val baseline = initial
+    // Legacy placement is converted in this draft only; cancel leaves the saved call intact.
+    var blocks by remember(initial) { mutableStateOf(initial.map { it.copy(position = PromptPosition.BEFORE_HISTORY, depth = 0) }) }
     val undo = remember { mutableStateListOf<List<PromptBlock>>() }
     var undoGroup by remember { mutableStateOf<String?>(null) }
     var confirmBack by remember { mutableStateOf(false) }
@@ -98,8 +96,7 @@ internal fun PromptBlocksEditor(
         Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(onClick = {
-                    val block = PromptBlock(title = nextDisplayName(blocks.map { it.title }, "提示词"),
-                        slug = nextEditorSlug(blocks.map { it.slug }, "prompt"))
+                    val block = PromptBlock(title = nextDisplayName(blocks.map { it.title }, "提示词"))
                     edit(blocks + block); selectedId = block.id; focus.clearFocus()
                 }) { Icon(HugeIcons.Add01, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("添加") }
                 TextButton(onClick = { if (undo.isNotEmpty()) { blocks = undo.removeAt(undo.lastIndex); undoGroup = null } }, enabled = undo.isNotEmpty()) { Text("撤销") }
@@ -115,7 +112,7 @@ internal fun PromptBlocksEditor(
                                 Row(Modifier.fillMaxWidth().longPressDraggableHandle().padding(start = 12.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Column(Modifier.weight(1f).clickable { focus.clearFocus(); selectedId = block.id; undoGroup = null }.padding(vertical = 14.dp)) {
                                         Text(block.title.ifBlank { "提示词" }, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text("${block.role.name.lowercase()} · ${promptPositionLabel(block)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text("${block.role.name.lowercase()}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                     Switch(block.enabled, { enabled -> edit(blocks.map { if (it.id == block.id) it.copy(enabled = enabled) else it }) })
                                     TextButton(onClick = { focus.clearFocus(); selectedId = block.id; undoGroup = null }) { Text("编辑") }
@@ -148,20 +145,25 @@ internal fun PromptBlocksEditor(
                                 PromptTemplateField("内容", block.template, references, { update(block.copy(template = it), "template:${block.id}") }, minLines = 3, owner = owner?.let { ExtensionFieldRef(it.resource.kind, it.resource.id, ExtensionField.BLOCK_TEMPLATE, workflowId = it.workflowId, nodeId = it.nodeId, blockId = block.id) })
                                 TextProcessingEditor("内容处理", block.processing, references) { update(block.copy(processing = it)) }
                             }
-                            EditorSection("插入位置与触发", promptPositionLabel(block)) {
-                                ChoiceLine("插入位置", block.position, listOf(PromptPosition.BEFORE_HISTORY to "历史之前", PromptPosition.IN_HISTORY to "历史中", PromptPosition.AFTER_HISTORY to "历史之后")) { update(block.copy(position = it)) }
-                                if (block.position == PromptPosition.IN_HISTORY) {
-                                    var depth by remember(block.id, block.depth) { mutableStateOf(block.depth.toString()) }
-                                    OutlinedTextField(depth, { text -> depth = text; text.toIntOrNull()?.takeIf { it >= 0 }?.let { update(block.copy(depth = it)) } }, label = { Text("距历史末尾的消息数") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                                    Text("0 位于最后一条之后。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
+                            EditorSection("触发条件", "位置由提示词列表顺序决定") {
                                 ToggleLine("引用均为空或不可用时隐藏整条", block.hideWhenReferencesEmpty) { update(block.copy(hideWhenReferencesEmpty = it)) }
                                 Text(if (block.injectionSlot) "槽停用或条件不满足时，槽内来源和注入均不发送；来源语法错误仍会报告。" else "只对含引用的提示词生效；纯文字照常保留，语法错误仍会报告。",
                                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 HorizontalDivider()
                                 TriggerEditor(block.recognition, block.condition, references) { recognition, condition -> update(block.copy(recognition = recognition, condition = condition)) }
                             }
-                            TextButton(onClick = { deleteId = block.id }) { Icon(HugeIcons.Delete01, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("删除提示词") }
+                            EditorSection("其他设置", if (block.mergeAdjacentMessages) "允许合并相邻同角色消息" else "保留独立消息边界") {
+                                ToggleLine("合并相邻同角色消息", block.mergeAdjacentMessages) {
+                                    update(block.copy(mergeAdjacentMessages = it))
+                                }
+                                Text("关闭后，本条目产生的消息不与前后同角色消息拼接，便于保留独立 Assistant 段落。可在提示词预览检查实际消息顺序。",
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            OutlinedButton(onClick = { deleteId = block.id },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
+                                Icon(HugeIcons.Delete01, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("删除提示词")
+                            }
                         }
                     }
                 }
@@ -170,10 +172,9 @@ internal fun PromptBlocksEditor(
     }
     }
     renameId?.let { id -> blocks.firstOrNull { it.id == id }?.let { block ->
-        NamingDialog("提示词名称", block.title, block.slug,
-            blocks.filterNot { it.id == id }.map { it.title }, blocks.filterNot { it.id == id }.map { it.slug },
-            { renameId = null }) { name, slug ->
-            edit(blocks.map { if (it.id == id) it.copy(title = name, slug = slug) else it }); renameId = null
+        PromptBlockNameDialog(block.title, blocks.filterNot { it.id == id }.map { it.title },
+            { renameId = null }) { name ->
+            edit(blocks.map { if (it.id == id) it.copy(title = name) else it }); renameId = null
         }
     } }
     deleteId?.let { id -> AlertDialog(
@@ -182,6 +183,25 @@ internal fun PromptBlocksEditor(
         dismissButton = { TextButton(onClick = { deleteId = null }) { Text("取消") } },
     ) }
     if (confirmBack) DraftLeaveDialog({ confirmBack = false }, { confirmBack = false; onSave(blocks) }, { confirmBack = false; onBack() })
+}
+
+@Composable
+private fun PromptBlockNameDialog(initialName: String, siblingNames: List<String>, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var name by remember(initialName) { mutableStateOf(initialName) }
+    val nameError = MacroNaming.nameProblem(name.trim(), siblingNames)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("提示词名称") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(name, { name = it }, label = { Text("名称") }, singleLine = true,
+                    isError = nameError != null, modifier = Modifier.fillMaxWidth())
+                if (nameError != null) Text(nameError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(name.trim()) }, enabled = nameError == null) { Text("保存") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 @Composable
@@ -223,10 +243,4 @@ private fun CompactRoleSelector(role: Role, onChange: (Role) -> Unit) {
             Role.entries.forEach { option -> DropdownMenuItem(text = { Text(option.name.lowercase(), style = MaterialTheme.typography.bodyMedium) }, onClick = { onChange(option); open = false }) }
         }
     }
-}
-
-internal fun promptPositionLabel(block: PromptBlock) = when (block.position) {
-    PromptPosition.BEFORE_HISTORY -> "历史之前"
-    PromptPosition.AFTER_HISTORY -> "历史之后"
-    PromptPosition.IN_HISTORY -> "历史中 · 深度 ${block.depth}"
 }

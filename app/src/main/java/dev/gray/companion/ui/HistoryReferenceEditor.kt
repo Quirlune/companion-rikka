@@ -31,6 +31,7 @@ internal fun HistoryReferenceEditor(
     val viewOptions = listOf<Pair<String?, String>>(null to "当前历史") + views.map { (id, title) -> (id as String?) to title } +
         if (selectedView != null && views.none { it.first == selectedView }) listOf(selectedView to "未找到副本：$selectedView") else emptyList()
     val hasRange = selection.rangeExplicit || selection.range != HistoryRange()
+    val textMode = selection.readMode == HistoryReadMode.TEXT
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().heightIn(max = 720.dp).verticalScroll(rememberScrollState())
@@ -41,6 +42,13 @@ internal fun HistoryReferenceEditor(
             ChoiceLine("读取内容", selection.compressed, listOf(false to "原始楼层", true to "历史规则与摘要处理后")) {
                 selection = selection.copy(compressed = it)
             }
+            ChoiceLine("输出形式", selection.readMode, listOf(
+                HistoryReadMode.MESSAGES to "结构化消息", HistoryReadMode.TEXT to "单段纯文本")) {
+                selection = selection.copy(readMode = it)
+            }
+            Text(if (textMode) "文本模式会把所选楼层写成一段带发言者前缀的正文，例如 Assistant: …\nUser: …。这些前缀只是普通文本；整段仍使用外层提示词块的 API 角色。"
+                else "结构化模式按消息分别输出，并保留每条消息的 API 角色。",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             ChoiceLine("正文来源", selection.sourceKind, listOf(
                 HistorySourceKind.DISPLAY to "最终展示正文", HistorySourceKind.MODEL_RAW to "模型初始原文")) {
                 selection = selection.copy(sourceKind = it, viewId = null, revision = null)
@@ -50,7 +58,8 @@ internal fun HistoryReferenceEditor(
             ChoiceLine("来源发言方", selection.sourceRole, historySourceRoleChoices) {
                 selection = selection.copy(sourceRole = it)
             }
-            Text("按原聊天发言方筛选，再从匹配楼层中选择范围；下方发送 API 角色只改变本次投影，原楼层与发言者不变。",
+            Text(if (textMode) "按原聊天发言方筛选，再从匹配楼层中选择范围；文本中的发言者标签不会成为独立 API 角色。"
+                else "按原聊天发言方筛选，再从匹配楼层中选择范围；下方发送 API 角色只改变本次投影，原楼层与发言者不变。",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             ChoiceLine("历史副本", selectedView, viewOptions) { selection = selection.copy(viewId = it, revision = null) }
             if (selectedView != null) {
@@ -85,16 +94,18 @@ internal fun HistoryReferenceEditor(
             } else Text(if (selection.sourceRole != null) "不指定范围时读取全部匹配楼层，不套用主调用的默认范围。" else "不指定时，处理后当前历史沿用主调用的默认范围。",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             HorizontalDivider()
-            Text("本引用的每楼格式", style = MaterialTheme.typography.titleMedium)
+            Text(if (textMode) "本引用的文本格式" else "本引用的每楼格式", style = MaterialTheme.typography.titleMedium)
             ToggleLine("单独设置本引用", selection.format != null) {
                 selection = selection.copy(format = if (it) (selection.format ?: HistoryReferenceFormat()) else null)
             }
             selection.format?.let { format ->
-                Text("独立投影使用这里的每楼与发言方规则，不再继承主调用的整体前后缀、消息合并、指定消息覆盖或历史插入项；楼层范围仍由上方选择。",
+                Text(if (textMode) "独立投影使用这里的逐楼包装；文本模式保留原发言方用于标签、忽略 API 角色映射，且不会继承主调用的整体前后缀、消息合并、指定消息覆盖或历史插入项；楼层范围仍由上方选择。"
+                    else "独立投影使用这里的每楼与发言方规则，不再继承主调用的整体前后缀、消息合并、指定消息覆盖或历史插入项；楼层范围仍由上方选择。",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("前后缀默认留空；原始发言者与发给模型的 API 角色分别设置。",
+                Text(if (textMode) "每楼前后缀默认留空；原发言方标签由历史楼层自动保留。"
+                    else "前后缀默认留空；原始发言者与发给模型的 API 角色分别设置。",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                ChoiceLine("通用发送 API 角色", format.apiRole, listOf<Pair<Role?, String>>(
+                if (!textMode) ChoiceLine("通用发送 API 角色", format.apiRole, listOf<Pair<Role?, String>>(
                     null to "保留各楼原角色", Role.SYSTEM to "系统", Role.USER to "用户", Role.ASSISTANT to "助手")) {
                     selection = selection.copy(format = format.copy(apiRole = it))
                 }
@@ -108,13 +119,16 @@ internal fun HistoryReferenceEditor(
                 }
                 HorizontalDivider()
                 Text("按原始发言方覆盖", style = MaterialTheme.typography.titleSmall)
-                HistoryReferenceSpeakerEditor(Role.SYSTEM, "系统", format) { selection = selection.copy(format = it) }
-                HistoryReferenceSpeakerEditor(Role.USER, "用户", format) { selection = selection.copy(format = it) }
-                HistoryReferenceSpeakerEditor(Role.ASSISTANT, "助手（原始 ASSISTANT）", format) { selection = selection.copy(format = it) }
+                HistoryReferenceSpeakerEditor(Role.SYSTEM, "系统", format, textMode) { selection = selection.copy(format = it) }
+                HistoryReferenceSpeakerEditor(Role.USER, "用户", format, textMode) { selection = selection.copy(format = it) }
+                HistoryReferenceSpeakerEditor(Role.ASSISTANT, "助手（原始 ASSISTANT）", format, textMode) { selection = selection.copy(format = it) }
                 TextButton(onClick = { selection = selection.copy(format = null) }) { Text("移除本引用设置，沿用主调用") }
             }
-            Text(if (soleStructuredBlock) "作为单独结构化 History 提示词块时，会按每楼 API 角色分别发送。"
-                else "与其他文字混合时，由外层消息决定发送角色；每楼 API 角色不会分别发送。",
+            Text(when {
+                textMode -> "文本模式始终作为一段内容插入；Assistant、User 等前缀只是正文文字，不会拆成多条带角色的 API 消息。"
+                soleStructuredBlock -> "作为单独结构化 History 提示词块时，会按每楼 API 角色分别发送。"
+                else -> "与其他文字混合时，由外层消息决定发送角色；每楼 API 角色不会分别发送。"
+            },
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -132,18 +146,18 @@ internal fun HistoryReferenceEditor(
 
 @Composable
 private fun HistoryReferenceSpeakerEditor(
-    speaker: Role, label: String, format: HistoryReferenceFormat, onChange: (HistoryReferenceFormat) -> Unit,
+    speaker: Role, label: String, format: HistoryReferenceFormat, textMode: Boolean, onChange: (HistoryReferenceFormat) -> Unit,
 ) {
     val rule = format.speakers.firstOrNull { it.speaker == speaker }
     fun update(changed: HistorySpeakerRule) = onChange(format.copy(speakers = format.speakers.map {
         if (it.speaker == speaker) changed else it
     }))
-    ToggleLine("原始$label 楼层单独设置", rule != null) { enabled ->
+    ToggleLine(if (textMode) "原始$label 楼层包装单独设置" else "原始$label 楼层单独设置", rule != null) { enabled ->
         onChange(format.copy(speakers = if (enabled) format.speakers + HistorySpeakerRule(speaker)
             else format.speakers.filterNot { it.speaker == speaker }))
     }
     if (rule == null) return
-    ChoiceLine("$label 的发送 API 角色", rule.apiRole, listOf<Pair<Role?, String>>(
+    if (!textMode) ChoiceLine("$label 的发送 API 角色", rule.apiRole, listOf<Pair<Role?, String>>(
         null to "继承通用设置", Role.SYSTEM to "系统", Role.USER to "用户", Role.ASSISTANT to "助手")) {
         update(rule.copy(apiRole = it))
     }

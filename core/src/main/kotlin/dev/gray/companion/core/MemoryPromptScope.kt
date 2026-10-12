@@ -44,8 +44,12 @@ class MemoryPromptScope internal constructor(
             else includedChildren.map { child -> HistoryViews.summaryMessage(child).copy(text =
                 "[小摘要；原文第 ${positions[child.sources.first().messageId]}–${positions[child.sources.last().messageId]} 楼；共 ${child.sources.size} 楼]\n${child.summary}") }
         val format = selection.format
-        val display = main.copy(history = if (format == null) HistoryConfig() else HistoryConfig(
-            apiRole = format.apiRole, floorPrefix = format.floorPrefix, floorSuffix = format.floorSuffix, speakers = format.speakers))
+        val displayHistory = if (format == null) HistoryConfig() else HistoryConfig(
+            apiRole = format.apiRole, floorPrefix = format.floorPrefix, floorSuffix = format.floorSuffix, speakers = format.speakers)
+        val textHistory = if (executionVersion >= 26 && selection.readMode == HistoryReadMode.TEXT)
+            displayHistory.copy(apiRole = null, speakers = displayHistory.speakers.map { it.copy(apiRole = null) })
+        else displayHistory
+        val display = main.copy(history = textHistory)
         val numbers = positions + includedChildren.associate { "history-memory:${it.id}" to requireNotNull(positions[it.sources.first().messageId]) }
         val pending = HistoryContext.Pending(messages, messages.joinToString("\n") { it.text }, messages.lastOrNull()?.id.orEmpty(),
             messages.size, refs.size)
