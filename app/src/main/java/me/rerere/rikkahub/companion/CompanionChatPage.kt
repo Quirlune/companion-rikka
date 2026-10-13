@@ -314,7 +314,7 @@ fun CompanionChatPage(
     LaunchedEffect(session.id, pendingRegenerationAnchor, activeBusy,
         controllerState.generationPreview, history.nodes) {
         val anchor = pendingRegenerationAnchor ?: return@LaunchedEffect
-        val preview = controllerState.generationPreview ?: return@LaunchedEffect
+        val preview = controllerState.generationPreview ?: displaySession
         if (!activeBusy || preview.messages.none { it.id == anchor && it.role == Role.USER && !it.deleted })
             return@LaunchedEffect
         val index = history.nodes.indexOfFirst { node ->
@@ -356,8 +356,14 @@ fun CompanionChatPage(
                 } else {
                     val original = session.messages.firstOrNull { it.id == messageId }
                     val failure = if (original?.role == Role.USER) {
+                        regenerationAnchor = messageId
+                        pendingRegenerationAnchor = messageId
                         if (controller.editUserAndSend(session.id, messageId, text)) null
-                        else controller.error.value ?: "消息未发送，请重试"
+                        else {
+                            regenerationAnchor = null
+                            pendingRegenerationAnchor = null
+                            controller.error.value ?: "消息未发送，请重试"
+                        }
                     } else controller.editMessage(session.id, messageId, text).firstOrNull { it.error }?.message
                     if (failure == null) {
                         editingCoreMessageId = null
@@ -674,9 +680,10 @@ fun CompanionChatPage(
                     )
                     // ChatList fills its parent. Keep the option controls in the same Box so
                     // they overlay the list instead of receiving zero height below it.
-                    Box(Modifier.matchParentSize().padding(padding).padding(end = 8.dp, bottom = 8.dp)) {
                         if (active && library.automaticOptions.enabled && !input.isEditing()) AutomaticOptionsStrip(
-                            modifier = Modifier.align(Alignment.BottomEnd),
+                            modifier = Modifier.align(Alignment.BottomEnd)
+                                .offset(x = (-8).dp, y = -(padding.calculateBottomPadding() + 8.dp))
+                                .size(48.dp),
                             options = currentOptions?.options.orEmpty(),
                             loading = currentOptions?.loading == true,
                             onSelect = { option ->
@@ -685,7 +692,6 @@ fun CompanionChatPage(
                                 }
                             },
                         )
-                    }
                     }
                 },
             )
@@ -740,7 +746,7 @@ private fun AutomaticOptionsStrip(
     var menuOpen by remember(options) { mutableStateOf(false) }
     var expandedOption by remember(options) { mutableStateOf<AutomaticOption?>(null) }
     Box(modifier) {
-        IconButton(onClick = { menuOpen = true }, enabled = options.isNotEmpty()) {
+        IconButton(onClick = { menuOpen = true }, enabled = options.isNotEmpty(), modifier = Modifier.size(48.dp)) {
             if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
             else Icon(Lucide.ListRestart, contentDescription = "查看自动选项")
         }

@@ -471,10 +471,13 @@ object MessageOperations {
     fun forkAt(session: Session, messageId: String): MessageOperationResult {
         val index = session.messages.indexOfFirst { it.id == messageId }
         if (index < 0) return unavailable("message.$messageId", "消息不存在")
-        if (index == session.messages.lastIndex) return MessageOperationResult(session.copy(
+        val message = session.messages[index]
+        // A completed or paused round can have no visible reply. Its USER may still be the
+        // final message, but editing it must restore the before-round world and accepted macros.
+        if (index == session.messages.lastIndex && (message.role != Role.USER ||
+                session.turnRecords.none { it.userMessageId == message.id })) return MessageOperationResult(session.copy(
             id = newId(), isPinned = false, updatedAt = System.currentTimeMillis()
         ))
-        val message = session.messages[index]
         val record = session.turnRecords.firstOrNull { it.userMessageId == (if (message.role == Role.USER) message.id else message.turnId) }
             ?: return unavailable("message.$messageId", "较早的消息没有运行状态检查点，不能安全复制")
         if (!record.restoreAllowed) return unavailable("message.$messageId", "手动修改过运行状态，不能从此处复制")

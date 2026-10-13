@@ -1,6 +1,6 @@
 # velune 代码维护与模型接手手册
 
-当前版本0.75-preview/code243，修订93（wire37/execution28，SQLite1）。包含内置Agent、插件宿主、生图、独立收藏、历史前缀、日志与悬浮输入框；MENU插件前端直接在横三点浮层显示。APK及隔离模拟器验收结果、已知冷启动ANR和未验证范围见HANDOFF最新条目。
+当前版本0.76-preview/code244，修订94（wire37/execution28，SQLite1）。本轮收紧自动选项点击锚点，补编辑发送准备异常收尾，修正无可见回复轮次编辑时的检查点回退；保留Rev93内置Agent、插件宿主、生图、独立收藏、历史前缀与半透明输入框。APK及隔离模拟器验收结果、已知冷启动ANR和未验证范围见HANDOFF最新条目。
 
 先读根AGENTS.md和ARCHITECTURE.md。作者资料入口为docs/authoring-kit/START_HERE.txt，单文件说明VELUNE_EXTERNAL_AI_ONE_FILE.txt可交给外部AI；六份知识文档同时随APK打包供内置Agent读取。schema目录由docs/examples/AuthoringTools.java生成。更新知识后同步作者包和单文件合辑，再构建APK；不要把作者工具包ZIP当作可导入资源包。
 

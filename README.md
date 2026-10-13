@@ -2,9 +2,9 @@
 
 Android 对话与角色工作流应用，复用 RikkaHub 原生前端，使用独立 Kotlin 核心管理提示词、调用、分支、扩展、卡片与记忆。
 
-当前版本：**0.75-preview / versionCode243**，修订93（wire37/execution28，SQLite1）。集成独立 Agent 工作台、离线作者资料、BizyAir 插图、暂停继续、历史纯文本前缀、独立收藏副本及统一日志；输入框半透明，三点悬浮卡片直接展示重要插件前端，正文文字与插图可分别设置宽度。构建与测试记录以 [最新交接](docs/HANDOFF.md) 为准。
+当前版本：**0.76-preview / versionCode244**，修订94（wire37/execution28，SQLite1）。集成独立 Agent 工作台、离线作者资料、BizyAir 插图、暂停继续、历史纯文本前缀、独立收藏副本及统一日志；输入框半透明，三点悬浮卡片直接展示重要插件前端，正文文字与插图可分别设置宽度。构建与测试记录以 [最新交接](docs/HANDOFF.md) 为准。
 
-[下载 APK 与外部 AI 作者包](https://github.com/Quirlune/companion-rikka/releases/tag/v0.75-preview)。将作者包或其中的完整中文文案交给支持文件阅读的 AI，可指导它制作本应用可导入的资源 ZIP；生成文件与运行脚本取决于平台能力。作者包本身不是扩展，不能直接导入应用。
+[下载最新版 APK](https://github.com/Quirlune/companion-rikka/releases/tag/v0.76-preview)；[外部 AI 作者包](https://github.com/Quirlune/companion-rikka/releases/tag/v0.75-preview)沿用0.75版。将作者包或其中的完整中文文案交给支持文件阅读的 AI，可指导它制作本应用可导入的资源 ZIP；生成文件与运行脚本取决于平台能力。作者包本身不是扩展，不能直接导入应用。
 
 兼容包名和资源格式继续使用 `companion`；应用名称为 velune。插件联网目前独立直连，不继承应用代理。Agent 模型推理需要登录/联网；系统结束应用进程后，不自动重放工具或付费请求。实际手机滚动、闪退与服务端兼容性仍应结合设备体验与日志判断。
 

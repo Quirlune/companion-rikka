@@ -18,6 +18,26 @@ class ConversationPathsTest {
     private fun continueWith(session: Session, id: String, text: String, answer: String) =
         accepted(session.copy(messages = session.messages + ChatMessage(id = id, text = text)), answer)
 
+    @Test fun editingLastUserWithAcceptedSilentRoundRestoresItsCheckpoint() {
+        val staged = Session(id = "chat", messages = listOf(ChatMessage(id = "u1", text = "old")))
+        val completed = MessageOperations.recordSuccessfulTurn(staged, RunResult(
+            state = mapOf("accepted" to "old effect"), results = mapOf("answer" to "old result"),
+            replies = emptyList(), traces = emptyList(), macroHistory = mapOf("story" to listOf(
+                MacroVersion(1, "old macro", origin, turnId = "u1")
+            )))).session!!
+        assertEquals(listOf("u1"), completed.messages.map { it.id })
+        val edited = ConversationPaths.editUserAndSend(completed, "u1", "new").session!!
+        assertEquals(listOf("new"), edited.messages.map { it.text })
+        assertTrue(edited.state.isEmpty())
+        assertTrue(edited.results.isEmpty())
+        assertTrue(edited.macroHistory.values.flatten().isEmpty())
+        assertTrue(edited.turnRecords.isEmpty())
+        val original = ConversationPaths.selectUserVersion(edited, "u1", "u1").session!!
+        assertEquals(completed.messages, original.messages)
+        assertEquals(completed.state, original.state)
+        assertEquals(completed.macroHistory, original.macroHistory)
+    }
+
     @Test fun editedPromptOwnsRepliesAndContinuationAfterSerialization() {
         val original = continueWith(initial(), "u2", "tea", "old future")
         val edited = ConversationPaths.editUserAndSend(original, "u1", "train").session!!

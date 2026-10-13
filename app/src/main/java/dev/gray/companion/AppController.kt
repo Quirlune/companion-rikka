@@ -667,7 +667,13 @@ class AppController internal constructor(
             ?: return@withLock listOf(Issue("session", "会话不存在"))
         if (expectedPendingRunId != null && session.pendingRun?.id != expectedPendingRunId)
             return@withLock listOf(Issue("recovery", "断点已改变，请重新打开恢复选项"))
-        val result = operation(session)
+        val result = try {
+            operation(session)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            return@withLock listOf(Issue("session", "消息操作准备失败（${failure.javaClass.simpleName}）；原数据仍保留"))
+        }
         val candidate = result.session ?: return@withLock result.issues
         val world = candidate.executableWorld
         val checkpointRollback = session.pendingRun?.let { pending ->
@@ -953,7 +959,16 @@ class AppController internal constructor(
     suspend fun editUserAndSend(sessionId: String, messageId: String, text: String): Boolean {
         val accepted = CompletableDeferred<Boolean>()
         viewModelScope.launch {
-            run(text, appendUser = false, accepted = accepted, expectedSessionId = sessionId, editedUserMessageId = messageId)
+            try {
+                AppEventLog.record("主聊天", "编辑发送准备开始")
+                run(text, appendUser = false, accepted = accepted, expectedSessionId = sessionId, editedUserMessageId = messageId)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                setError("编辑发送准备失败（${failure.javaClass.simpleName}），请查看日志后重试")
+            } finally {
+                if (!accepted.isCompleted) accepted.complete(false)
+            }
         }
         return accepted.await()
     }
@@ -1061,6 +1076,9 @@ class AppController internal constructor(
             if (recovery == null && !appendUser && staged.messages.lastOrNull()?.let { !it.deleted && it.role == Role.USER && it.text == runInput } != true) {
                 setError("当前会话没有可重试的消息"); return@withLock null
             }
+            // Resolve every fallible execution dependency before publishing the path or busy state.
+            // Otherwise a preparation exception can leave the chat permanently marked as running.
+            val executionOwners = PluginParticipation.executionOwners(executionLibrary, staged)
             val next = if (regenerationMessageId != null && recovery == null)
                 old.copy(sessions = old.sessions.map { if (it.id == session.id) MessageOperations.discardRecovery(it) else it })
                 else if (staged.id == session.id) old.copy(sessions = old.sessions.map { if (it.id == session.id) staged else it })
@@ -1076,7 +1094,7 @@ class AppController internal constructor(
             if (regenerationMessageId == null) lastRetry = session.id to runInput
             val completion = CompletableDeferred<Unit>()
             runCompletion = completion
-            runningExtensionIds = PluginParticipation.executionOwners(executionLibrary, staged)
+            runningExtensionIds = executionOwners
             PreparedTurn(next, staged, revision, secrets, runInput, regenerationBase,
                 if (appendUser && recovery == null && regenerationBase == null && editedUserMessageId == null)
                     MessageOperations.discardRecovery(session) else null,

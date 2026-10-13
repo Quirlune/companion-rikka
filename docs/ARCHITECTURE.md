@@ -1,5 +1,14 @@
 # velune 当前架构
 
+## Revision94：历史编辑、分支与自动选项点击范围（2026-10-13，已授权）
+
+- 核对历史/当前USER编辑发送、AI文本编辑、同层候选切换与重生成，修复历史USER编辑报错而未建立提示词分支的问题；旧路径和已接受状态必须可恢复，不能重放历史副作用或混合候选来源。沿用ConversationPaths / MessageOperations及单一AppController事务。
+- 自动选项入口限定为底部48dp图标锚点，去除全屏布局锚点；保留弹出、失焦关闭和填入输入框行为。
+- core94负责core路径/消息操作与必要定向用例；root负责AppController、聊天投影/UI、文档及交付。不得互改文件；核心接口变化先交主代理决定。交付0.76-preview/code244，保持wire37/execution28/SQLite1及签名。8项定向检查与APK构建通过；真实WorkflowEngine配本地ModelGateway验证三轮历史编辑、AI文本保留、候选往返和无副作用重放。
+
+
+- 已确认缺口：编辑发送的准备异常未完成accepted等待；执行所有者解析曾位于busy发布后；末尾USER已有TurnRecord但无可见回复时forkAt错误直拷当前运行值。分别补异常收尾/先解析后发布/按检查点回退。历史USER“调用前卡住”的完整现场未复现，不将这些缺口断言为设备故障的唯一根因。
+
 ## Revision93：打包验收与外部AI作者包（2026-10-13，用户确认，含GitHub同步）
 
 - 交付0.75-preview/code243，保持wire37/execution28/SQLite1及原应用身份/签名，集成截至Revision92的源码。构建后在隔离模拟器验安装、启动和新增关键交互；已有定向单元测试结果复用，不重复扩大回归。失败按具体证据修复。
