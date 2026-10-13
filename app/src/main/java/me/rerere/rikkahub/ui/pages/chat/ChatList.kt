@@ -95,9 +95,11 @@ import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.service.ChatError
 import me.rerere.rikkahub.ui.components.message.ChatMessage
+import me.rerere.rikkahub.ui.components.message.CompanionToolbarAction
 import me.rerere.rikkahub.ui.components.ui.ErrorCardsDisplay
 import me.rerere.rikkahub.ui.components.ui.ListSelectableItem
 import me.rerere.rikkahub.ui.components.ui.RabbitLoadingIndicator
+import me.rerere.rikkahub.ui.components.ui.CompanionOrbitLoading
 import me.rerere.rikkahub.ui.components.ui.Tooltip
 import me.rerere.rikkahub.ui.hooks.ImeLazyListAutoScroller
 import me.rerere.rikkahub.ui.theme.ChatFontProvider
@@ -116,6 +118,8 @@ fun ChatList(
     state: LazyListState,
     loading: Boolean,
     processingStatus: String? = null,
+    responseStarted: Boolean = false,
+    activeResponseIds: Set<Uuid> = emptySet(),
     previewMode: Boolean,
     settings: Settings,
     hazeState: HazeState,
@@ -139,11 +143,15 @@ fun ChatList(
     enableTts: Boolean = true,
     footer: (@Composable () -> Unit)? = null,
     assistantTextContent: Map<Uuid, @Composable () -> Unit> = emptyMap(),
+    assistantTextContentSelectable: Set<Uuid> = emptySet(),
     afterMessage: (@Composable (MessageNode) -> Unit)? = null,
     branchSelectionEnabled: (MessageNode) -> Boolean = { true },
     onBranchSelectionDisabled: (MessageNode) -> Unit = {},
     compactBranchActions: Boolean = false,
     messageActionsEnabled: (MessageNode) -> Boolean = { true },
+    captureForBlur: Boolean = true,
+    rerollActions: (UIMessage) -> List<CompanionToolbarAction> = { emptyList() },
+    autoFollowGeneration: Boolean = true,
 ) {
     AnimatedContent(
         targetState = previewMode,
@@ -168,6 +176,8 @@ fun ChatList(
                 state = state,
                 loading = loading,
                 processingStatus = processingStatus,
+                responseStarted = responseStarted,
+                activeResponseIds = activeResponseIds,
                 settings = settings,
                 hazeState = hazeState,
                 errors = errors,
@@ -190,11 +200,15 @@ fun ChatList(
                 enableTts = enableTts,
                 footer = footer,
                 assistantTextContent = assistantTextContent,
+                assistantTextContentSelectable = assistantTextContentSelectable,
                 afterMessage = afterMessage,
                 branchSelectionEnabled = branchSelectionEnabled,
                 onBranchSelectionDisabled = onBranchSelectionDisabled,
                 compactBranchActions = compactBranchActions,
                 messageActionsEnabled = messageActionsEnabled,
+                captureForBlur = captureForBlur,
+                rerollActions = rerollActions,
+                autoFollowGeneration = autoFollowGeneration,
             )
         }
     }
@@ -207,6 +221,8 @@ private fun ChatListNormal(
     state: LazyListState,
     loading: Boolean,
     processingStatus: String? = null,
+    responseStarted: Boolean = false,
+    activeResponseIds: Set<Uuid> = emptySet(),
     settings: Settings,
     hazeState: HazeState,
     errors: List<ChatError>,
@@ -229,11 +245,15 @@ private fun ChatListNormal(
     enableTts: Boolean = true,
     footer: (@Composable () -> Unit)? = null,
     assistantTextContent: Map<Uuid, @Composable () -> Unit> = emptyMap(),
+    assistantTextContentSelectable: Set<Uuid> = emptySet(),
     afterMessage: (@Composable (MessageNode) -> Unit)? = null,
     branchSelectionEnabled: (MessageNode) -> Boolean = { true },
     onBranchSelectionDisabled: (MessageNode) -> Unit = {},
     compactBranchActions: Boolean = false,
     messageActionsEnabled: (MessageNode) -> Boolean = { true },
+    captureForBlur: Boolean = true,
+    rerollActions: (UIMessage) -> List<CompanionToolbarAction> = { emptyList() },
+    autoFollowGeneration: Boolean = true,
 ) {
     var expandedMessageActions by remember(conversation.id) { mutableStateOf<Uuid?>(null) }
     LaunchedEffect(loading, state.isScrollInProgress, conversation.messageNodes) {
@@ -242,7 +262,7 @@ private fun ChatListNormal(
         }
     }
     val scope = rememberCoroutineScope()
-    val loadingState by rememberUpdatedState(loading)
+    val loadingState by rememberUpdatedState(loading && autoFollowGeneration)
     var isRecentScroll by remember { mutableStateOf(false) }
     val conversationUpdated by rememberUpdatedState(conversation)
     val density = LocalDensity.current
@@ -268,6 +288,9 @@ private fun ChatListNormal(
 
     fun List<LazyListItemInfo>.isAtBottom(): Boolean {
         val lastItem = lastOrNull() ?: return false
+        // A short HTML placeholder can leave space under an ordinary visible row.
+        // Only the actual tail sentinel means that the viewport follows the end.
+        if (lastItem.key != ScrollBottomKey) return false
         val inputBarHeight = with(density) { innerPadding.calculateBottomPadding().toPx() }
         val lastPos = lastItem.offset + lastItem.size
         val inputPos = (state.layoutInfo.viewportEndOffset - inputBarHeight.roundToInt())
@@ -344,12 +367,13 @@ private fun ChatListNormal(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier
                     .fillMaxSize()
-                    .hazeSource(state = hazeState)
+                    .then(if (captureForBlur) Modifier.hazeSource(state = hazeState) else Modifier)
                     .padding(top = if (compactBranchActions) 0.dp else innerPadding.calculateTopPadding()),
             ) {
             itemsIndexed(
                 items = conversation.messageNodes,
                 key = { index, item -> item.id },
+                contentType = { _, _ -> "chat-message" },
             ) { index, node ->
                 Column {
                     ListSelectableItem(
@@ -368,7 +392,8 @@ private fun ChatListNormal(
                             node = node,
                             model = node.currentMessage.modelId?.let(modelById::get),
                             assistant = assistant,
-                            loading = loading && index == lastMessageIndex,
+                            loading = loading && (index == lastMessageIndex ||
+                                (compactBranchActions && node.id in activeResponseIds)),
                             onRegenerate = {
                                 onRegenerate(node.currentMessage)
                             },
@@ -402,12 +427,14 @@ private fun ChatListNormal(
                             readOnly = readOnly,
                             enableTts = enableTts,
                             assistantTextContent = assistantTextContent[node.currentMessage.id],
+                            assistantTextContentSelectable = node.currentMessage.id in assistantTextContentSelectable,
                             branchSelectionEnabled = branchSelectionEnabled(node),
                             onBranchSelectionDisabled = { onBranchSelectionDisabled(node) },
                             compactBranchActions = compactBranchActions,
                             messageActionsEnabled = !loading && messageActionsEnabled(node),
                             compactActionsExpanded = expandedMessageActions == node.id,
                             onCompactActionsExpandedChange = { expandedMessageActions = if (it) node.id else null },
+                            rerollActions = rerollActions(node.currentMessage),
                         )
                     }
                     afterMessage?.invoke(node)
@@ -423,16 +450,18 @@ private fun ChatListNormal(
                 }
             }
 
-            if (loading) {
+            if (loading && (!compactBranchActions || !responseStarted)) {
                 item(LoadingIndicatorKey) {
                     Row(
                         modifier = Modifier.padding(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        RabbitLoadingIndicator(
-                            modifier = Modifier.size(28.dp)
-                        )
+                        if (compactBranchActions) {
+                            CompanionOrbitLoading(modifier = Modifier.size(28.dp))
+                        } else {
+                            RabbitLoadingIndicator(modifier = Modifier.size(28.dp))
+                        }
                         AnimatedVisibility(
                             visible = processingStatus != null,
                         ) {

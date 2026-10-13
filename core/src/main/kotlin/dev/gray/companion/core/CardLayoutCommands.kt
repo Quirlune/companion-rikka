@@ -7,7 +7,6 @@ object CardLayoutCommands {
         fun failure(message: String) = ExtensionEditResult(null, listOf(Issue("session.$sessionId.cardPlacements", message)))
         if (library.selectedSessionId != sessionId) return failure("当前会话已切换，请重新打开卡片布局")
         val session = library.sessions.firstOrNull { it.id == sessionId } ?: return failure("当前会话不存在")
-        if (session.pendingRun != null) return failure("当前会话仍有断点，请先恢复或结束这一轮")
         if (session.cardPlacements != expected) return failure("卡片布局已改变，请重新打开后调整")
         val issues = validate(next, "session.$sessionId.cardPlacements")
         if (issues.isNotEmpty()) return ExtensionEditResult(null, issues)

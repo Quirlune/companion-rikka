@@ -26,6 +26,7 @@ internal fun changeCallBehaviorType(node: WorkflowNode, action: ActionDescriptor
     return node.copy(actionId = action.id,
         title = if (defaultTitle) callBehaviorTypeLabel(action.id, actions) else node.title,
         arguments = arguments, visible = false,
+        recordTrajectory = action.usesModel,
         includeHistory = if (action.usesModel) node.includeHistory else false,
         inputTemplate = if (action.id == "prompt.inject" && node.inputTemplate == "{{input}}") "" else node.inputTemplate)
 }
@@ -34,7 +35,7 @@ internal fun newCallBehavior(action: ActionDescriptor, nodes: List<WorkflowNode>
     val key = nextCallOutputKey(usedKeys + nodes.map { it.outputKey }, "step")
     val node = WorkflowNode(title = nextDisplayName(nodes.map { it.title }, callBehaviorTypeLabel(action.id, actions)),
         actionId = action.id, outputKey = key, slug = nextEditorSlug(nodes.map { it.slug }, "output"),
-        visible = false, includeHistory = action.usesModel, inputTemplate = if (action.id == "prompt.inject") "" else "{{input}}", recordTrajectory = false)
+        visible = false, includeHistory = action.usesModel, inputTemplate = if (action.id == "prompt.inject") "" else "{{input}}", recordTrajectory = action.usesModel)
     return if (action.id.startsWith("prompt.")) node.copy(arguments = mapOf("id" to node.id)) else node
 }
 

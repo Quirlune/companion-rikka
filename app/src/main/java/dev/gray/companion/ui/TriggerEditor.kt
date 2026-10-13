@@ -91,7 +91,6 @@ internal fun TriggerEditor(
     if (condition != null && expression.isBlank() && condition.key.isNotBlank()) {
         val compareLabel = triggerCompareChoices.firstOrNull { it.first == condition.op }?.second ?: condition.op.name
         EditorSection("旧状态条件", "${condition.key} · $compareLabel", initiallyExpanded = false) {
-            Text("保留的旧状态条件 · 与可视条件按 AND 判断", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             TextFieldLine("状态键", condition.key, { onChange(recognition, condition.copy(key = it)) })
             ChoiceLine("比较", condition.op, triggerCompareChoices) { onChange(recognition, condition.copy(op = it)) }
             if (condition.op != Compare.EXISTS) TextFieldLine("比较值", condition.value, { onChange(recognition, condition.copy(value = it)) })

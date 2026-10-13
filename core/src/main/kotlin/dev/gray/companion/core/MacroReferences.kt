@@ -9,7 +9,7 @@ internal fun macroExpressionError(expression: String, executionVersion: Int = Ex
         val compiled = PromptReferenceLanguage.compile(expression)
         if (!ExecutionSemantics(executionVersion).localHistoryFormats && compiled.fields.any { it.name == "format" }) return "此恢复版本不支持 History 局部格式"
         if (!ExecutionSemantics(executionVersion).historySourceRoleSelection && compiled.fields.any { it.name == "speaker" }) return "此恢复版本不支持 History 原始发言方筛选"
-        if (executionVersion < 26 && compiled.fields.any { it.name == "as" }) return "此恢复版本不支持 History 文本读取方式"
+        if (executionVersion < 26 && compiled.fields.any { it.name in setOf("as", "prefixes") }) return "此恢复版本不支持 History 文本读取方式"
         val plan = compiled.reference as? PromptReferenceLanguage.QueryPlan
         return compiled.diagnostics.firstOrNull()?.message ?: when {
             plan?.historySelection != null -> null

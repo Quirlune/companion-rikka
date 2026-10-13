@@ -24,6 +24,7 @@ internal object ConfigurationCredentialCommit {
             writes.any { write -> when (write.kind) {
                 CredentialKind.API_KEY, CredentialKind.PRIVATE_KEY -> next.connections.none { it.id == write.connectionId }
                 CredentialKind.MODEL_API_KEY, CredentialKind.MODEL_PRIVATE_KEY -> next.profiles.none { it.id == write.connectionId }
+                CredentialKind.PLUGIN_SECRET -> true // Never accept plugin secrets through provider configuration writes.
             } })
             return@withContext listOf(Issue("connection.apiKey", "密钥编辑目标重复或已不存在"))
         for (write in writes) {

@@ -32,11 +32,16 @@ object ExtensionCommands {
         val definition = library.extensions.firstOrNull { it.id == extensionId } ?: return failure("extension.$extensionId", "集合不存在")
         if (definition.memory != null)
             return failure("extension.$extensionId.memory", "原生记忆请通过会话开关关闭；保存的规则与摘要保留")
-        if (library.sessions.any { extensionId in it.enabledExtensionIds && it.pendingRun != null })
-            return failure("extension.$extensionId", "仍有参与此插件的会话断点，请先恢复或结束该轮")
         // Ordinary collection deletion preserves its shared resources and accepted archives.
         return finish(library.copy(extensions = library.extensions.filterNot { it.id == extensionId },
-            sessions = library.sessions.map { PluginParticipation.disable(it, extensionId) }),
+            sessions = library.sessions.map { session ->
+                val changed = PluginParticipation.disable(session, extensionId)
+                val pending = session.pendingRun
+                if (changed != session || pending != null && extensionId in
+                    PluginParticipation.executionOwners(pending.frozenResources, pending.initialSession))
+                    MessageOperations.discardRecovery(changed)
+                else changed
+            }),
             "删除插件定义并撤销其会话参与；保留组成资源、共享关联和历史正文")
     }
 
@@ -48,14 +53,15 @@ object ExtensionCommands {
             return failure("extension.${expected.id}", "插件定义已改变，请重新打开后切换")
         if (library.selectedSessionId != sessionId) return failure("session.$sessionId", "当前会话已切换")
         val session = library.sessions.firstOrNull { it.id == sessionId } ?: return failure("session.$sessionId", "当前会话不存在")
-        if (session.pendingRun != null) return failure("session.$sessionId", "请先处理当前会话断点，再切换插件")
         if (included && session.executableWorld?.library?.extensions?.none { it.id == expected.id } == true)
             return failure("session.$sessionId.plugins", "旧环境没有此插件，请新建聊天使用当前配置")
         if ((expected.id in session.enabledExtensionIds) != expectedIncluded)
             return failure("session.$sessionId.plugins", "插件参与状态已改变，请重新打开后切换")
         val next = if (included) session.copy(enabledExtensionIds = (session.enabledExtensionIds + expected.id).distinct())
             else PluginParticipation.disable(session, expected.id)
-        return finish(library.copy(sessions = library.sessions.map { if (it.id == sessionId) next else it }),
+        return finish(library.copy(sessions = library.sessions.map {
+            if (it.id == sessionId && next != session) MessageOperations.discardRecovery(next) else it
+        }),
             if (included) "插件参与当前会话；主调用与手工关联保留" else "关闭当前会话插件并撤销其活动注入；历史正文和共享状态保留")
     }
 
@@ -81,11 +87,10 @@ object ExtensionCommands {
             return failure("session.$sessionId", "当前会话已切换，请重新选择磁贴配置")
         val session = library.sessions.firstOrNull { it.id == sessionId }
             ?: return failure("session.$sessionId", "当前会话不存在")
-        if (session.pendingRun != null)
-            return failure("session.$sessionId", "当前会话仍有断点，请先恢复或结束这一轮，再修改磁贴关联")
         val groups = if (included) (session.groupIds + groupId).distinct() else session.groupIds.filterNot { it == groupId }
         return finish(library.copy(sessions = library.sessions.map {
-            if (it.id == sessionId) it.copy(groupIds = groups) else it
+            if (it.id == sessionId && groups != session.groupIds)
+                MessageOperations.discardRecovery(it.copy(groupIds = groups)) else it
         }), if (included) "磁贴配置加入当前会话" else "移除当前会话的磁贴配置关联；资源及角色、主调用关联保留")
     }
 

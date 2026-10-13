@@ -1,0 +1,65 @@
+velune 外部 AI 内容包制作包（0.75-preview / code243；源码 revision93）
+============================================================
+
+你可以把 VELUNE_EXTERNAL_AI_ONE_FILE.txt 单独上传给任何能读取 TXT 的 AI，然后另附自己的原始资料与目标；它已经含本文件、当前完整架构地图、资源作者指南、美化语法指南、插件 API、内置 Agent 工作手册、真实示例、打包脚本及完整机器字段目录。若平台支持多文件上传，也可把本目录整个交给它；同名分文件便于搜索。机器字段目录只列序列化字段、枚举与动作，不是完整 JSON Schema；作者指南与最终 velune 导入预览共同决定有效性。
+
+本包的两个协议标记固定为 companion.config.v1 与 companion.bundle.v1；应用可见名称是 velune。原生 Library 备份的 schemaVersion=37，执行语义版本=28，SQLite 表版本=1；普通内容包的 config 根和 ZIP manifest 根均不能放 schemaVersion。请先核对接收设备确实装了对应版本：较旧安装包可能不接受新字段。资源包不安装应用、不创建聊天、不保存连接密钥，也不替用户打开扩展总开关。
+
+本包附带的五个示例 ZIP 已在 2026-10-13 使用 0.75-preview/code243、源码 revision93 的真实 ResourceArchiveImport → ConfigurationCommands.preview → apply 路径验证通过，包含内部 LibraryValidator 检查。这个结果只覆盖五个原样示例的资源导入；没有进行真实服务 API 请求、用户设备交互或所有扩展组合验证。修改示例内容或目标应用版本后，应重新做导入预览。
+
+先选内容类型
+------------
+1. 角色/世界观/词条：优先 character、package；原文不是模板时设 isTemplate=false。普通资料不意味着需要联网、模型调用或 JavaScript。
+2. 状态卡、规则显示或模型工作流：使用 group + 默认关闭的 extension。卡片放 CallGroup.cards，模型调用放 workflows；读完整作者指南的卡片、提示词、宏、触发时机小节。
+3. 自定义 JS 逻辑：在 extension.code 声明版本，并用 group 节点 plugin.run 调用。v1 是同步纯文本；v2 才能用有限的 host.invoke。必须先读插件 API；网络声明不是设备授权，密钥只能由用户在原生界面填写。
+4. 内置记忆、自动选项和插图有各自配置/启停，不要以普通第三方扩展冒充。没有实现的宿主能力（任意网页、文件、Shell、消息级图标动作、任意宿主模型接口）不能靠发明 JSON 字段取得。
+插件 API 所说的“图片附件能力留待后续”指通用第三方 JavaScript 宿主接口；内置 BizyAir 插图是另一条已有功能路径。
+
+卡片入口与输入栏：当前输入栏为漂浮半透明样式。重要、需要主动打开的扩展前端可以沿用 CallGroup.cards 的 CardResource，在 CardDefinition 中选支持 MENU 的 presentation 并设 defaultRegion="MENU"；用户从聊天右上角省略号选中后，卡片在当前页的悬浮层打开。普通状态或低重要性进度别占常驻横条或遮盖输入。生图进度横条已移除，也没有被自动登记到三点菜单；有真正重要的前端需求时才设计 MENU 卡片。CardRegion.INPUT 和 CardPresentation.STRIP 仍是协议中的兼容选项，不能称为已删除；不要加 importance/overlay/menuAction 等想象字段。附带的静态状态卡使用 MENU 是演示该合同，并非建议所有状态都放进菜单。
+
+推荐给外部 AI 的完整任务提示（复制后填写方括号）
+------------------------------------------------
+请仅依据附带的《velune 外部 AI 内容包制作包》为 velune 0.75-preview/code243 制作可导入 ZIP。先读 AUTHORING_ARCHITECTURE 了解系统，再按任务读 AI_IMPORT_GUIDE、APPEARANCE_GUIDE、PLUGIN_API 与机器字段目录；内置 AGENT_GUIDE 的工作台权限只适用于应用内 Agent，不意味着你这个外部平台也有这些工具。我的目标：[具体功能、触发条件、内容、期望展示位置]。输入资料：[逐项列文件/文本及保留要求]。允许的外部服务：[无；或 HTTPS origin、方法、所需凭据别名，由我在设备上填写真实密钥]。请先确认任务是角色/词条、原生工作流、卡片还是 JS 插件；无法由现有宿主能力完成的部分要明确指出，不自造字段。
+
+输出要求：
+- 若你能创建文件并提供附件，请交付一个真实 .zip，ZIP 根有 manifest.json，配置文件遵守 companion.config.v1，所有正文 UTF-8，附件明确列在 manifest 且被资源引用。另给简短目录清单、资源 ID/名称、启用后的预期行为、需要我在设备上填的内容、导入预览与使用步骤。
+- 若你只能回复文本，按文件名分别给出 manifest.json、配置 JSON、引用的每个附件的完整内容，再给出可运行的 Python 标准库打包命令/脚本。不要把 Markdown 代码围栏写进真实 JSON 文件，不声称已生成 ZIP 或已通过导入。
+- 保留用户资料的字句与顺序；如需改写/新增提示词，逐项标出。保持资源 ID 稳定，扩展默认 enabled=false，不使用真实密钥、私人路径、会话记录或生产数据库。未获授权不要改全局 selectedProfileId/automaticOptions/memoryConfig 等设置。
+- 检查 JSON 语法、ZIP 路径、manifest、附件引用、ID/宏引用和配置边界。只有具备本项目当前真实导入器时才可声称通过资源解码、preview、apply；否则写明“待 velune 导入预览验证”。任何运行时效果、模型输出格式和手机布局也要区分已验证与待体验。
+
+如果需求信息不足，优先提出会改变产物类型的少量问题；可合理推断的文案、颜色、ID 等细节自行处理，附上推断。不要把外部平台自己的插件/工具格式直接塞进 velune。
+
+阅读顺序与交付内容
+------------------
+先读《当前系统与作者架构地图》，再读《当前作者指南》1–6节选定资源种类和一个示例；需要动态行为再读7–11节，美化读《卡片与正文外观作者指南》，需要联网再读《插件宿主 API v2》。机器字段目录按类型检索，不能把 optional=true 当“省略后一定合法”。示例共五个：角色与绑定身份、原生 XML 状态卡、字面世界观词条、外部文本附件词条、v2 HTTP 插件。四个直接配置示例能先改 JSON 再打 ZIP；附件示例只能经 ZIP 打包使用，因为 $text 在装配时才展开。
+
+最小 ZIP 的目录是：
+  manifest.json
+  payload.config.json
+其中 manifest 内容为：
+  {"format":"companion.bundle.v1","label":"我的内容包","files":[{"path":"payload.config.json","kind":"config"}]}
+payload.config.json 根为：
+  {"format":"companion.config.v1","label":"我的内容包","resources":{"groups":[],"extensions":[]}}
+这是骨架，不表示空内容包具有有用功能。manifest.files 的 kind=config 表示该文件本身是配置根；group 等单资源 kind 的文件则直接是资源对象。manifest 与 config 的可用键彼此不同，勿混用。路径使用 ZIP 根相对的正斜杠；manifest.json 必须就在 ZIP 根，不能多包一层目录。
+
+本包 build_bundle.py 用 Python 3.10+ 标准库打包，示例命令：
+  python build_bundle.py examples/static-status.config.json static-status.bundle.zip
+  python build_bundle.py examples/character-persona.config.json character-persona.bundle.zip
+  python build_bundle.py examples/lore-package.config.json lore.bundle.zip
+  python build_bundle.py examples/lore-attachment.config.json lore-attachment.bundle.zip
+  python build_bundle.py examples/plugin-v2-http.config.json plugin-http.bundle.zip
+它拒绝覆盖已有 ZIP，检查文件路径、重复键、附件存在、文本编码和有限格式/尺寸。它不运行 velune 的 Kotlin 解码、LibraryValidator 或设备配置预览；输出里的“已检查”只指 ZIP 运输结构。`plugin-v2-http` 使用示例域名且默认关闭；仅制作或导入 ZIP 不会触发请求。用户启用扩展、授权并触发对应工作流后才可能联网，因此实际使用前必须换成自己控制的服务地址并核对权限。修改来源、权限和任务逻辑后，用户还需在扩展详情授权并填写凭据别名对应的秘密。
+
+没有 Python 的平台也可使用任意可信 ZIP 工具：必须使 manifest.json 直接处于压缩包根；用 UTF-8 保存每个文件；解压查看目录并检查路径、大小写冲突与漏掉的附件。平台若没有文件创建/下载工具，就只能提供文本供用户打包。直接导入 companion.config.v1 JSON 只适合没有 $text/$avatar 标记的情况。
+
+导入前检查与错误处理
+--------------------
+- 所有资源及引用到的 workflow/node/block/card/entry 使用稳定、互不冲突的 ID；显示名不是 ID。重复导入同 ID 可能更新现有资源，先看预览差异，不对用户已有配置做猜测性覆盖。
+- 自定义文本中的 {{...}} 要区分字面文字和合法模板。普通资料词条 isTemplate=false；模板引用必须有真实来源，不把宏语法当 JS/JSONPath。
+- 扩展默认关闭，用户预览/应用后在扩展列表打开。新扩展可能只对新聊天的冻结世界可见；已接受历史不被自动重写。调用模型/联网/收费动作须由用户自己决定启用与授权。
+- 卡片 XML 的 xmlSample、fields、elements 与实际 sourceTemplate 对应；导入器不会根据样例替作者自动生成字段。XML 不带属性、DTD、外部实体；CSS 仅是受限静态样式。
+- v2 HTTP 的权限 origin、方法、别名须与请求相符；服务返回 status、body 要在 JS 中校验。对可能已送达的副作用请求，不能因本地超时盲目重发。
+- “JSON 解析成功”只证明语法。最终请在 velune 原生导入预览里核对 issues、变更清单与目标现有资源，再应用；运行时模型格式、网络授权、显示布局需在实际使用时确认。
+- 预览报“未知字段”时删除臆造键并查机器目录；报“引用不存在”时查 ID/绑定；报“未引用文件”时删掉文件或从资源真实引用；报“版本不支持”时核对设备 APK 和资源类型，不能随意降低备份 schemaVersion；报“格式错误”时先核对 config/manifest/原生备份三种根结构。
+
+下面附完整规范和可复用的实际文件内容。即使只上传本包的一份 VELUNE_EXTERNAL_AI_ONE_FILE.txt，也可以让外部 AI 复制对应代码块为真实文件来打包；TXT 内的“示例”不等于已在用户设备导入。

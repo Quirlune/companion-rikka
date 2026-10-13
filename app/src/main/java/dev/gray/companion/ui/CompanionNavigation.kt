@@ -56,7 +56,6 @@ internal fun UserIdentityEditor(initial: UserIdentity, onSave: (UserIdentity) ->
                     )
                 },
                 headlineContent = { Text("头像") },
-                supportingContent = { Text("点击更换或移除头像") },
             )
         }
         if (avatarEditorOpen) CharacterAvatarEditor(CharacterCard(id = "local-user", name = item.name, avatar = item.avatar), { avatarBusy = it }) { item = item.copy(avatar = it) }

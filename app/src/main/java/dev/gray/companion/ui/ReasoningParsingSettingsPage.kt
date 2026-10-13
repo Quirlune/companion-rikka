@@ -20,8 +20,6 @@ internal fun ReasoningParsingSettingsPage(
 ) {
     var config by remember(baseline) { mutableStateOf(baseline) }
     EditorPage("思考解析", onBack, { onSave(config) }, dirty = config != baseline, saving = saving) {
-        Text("原生 API 思考会直接显示；下面仅控制模型把思考写在正文 XML 中时如何分离。思考内容不会进入两种 History。",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         ReasoningParsingFields(config) { config = it }
     }
 }
@@ -40,8 +38,6 @@ internal fun ReasoningParsingFields(config: ReasoningParsingConfig, onChange: (R
             TextFieldLine("思考结束标签", config.endTag, { onChange(config.copy(endTag = it)) })
         }
         ReasoningParsingMode.START_UNTIL_END -> {
-            Text("模型响应从第一个字符开始视为思考，遇到结束标签后才显示正文。", style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
             TextFieldLine("思考结束标签", config.endTag, { onChange(config.copy(endTag = it)) })
         }
     }

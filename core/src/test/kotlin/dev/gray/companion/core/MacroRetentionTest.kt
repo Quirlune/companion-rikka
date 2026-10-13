@@ -23,6 +23,29 @@ class MacroRetentionTest {
         return MessageOperations.recordSuccessfulTurn(before, result).session!!
     }
 
+    @Test fun modelTrajectorySwitchAppliesOnlyToNewExecution() = runBlocking {
+        val node = WorkflowNode(id = "reply", outputKey = "reply", visible = true,
+            recordTrajectory = false, includeHistory = false)
+        val before = user(session(), "hello")
+        val lib = library(before, listOf(node))
+        val gateway = object : ModelGateway {
+            override suspend fun generate(profile: ModelProfile, messages: List<ChatMessage>,
+                onDelta: suspend (String) -> Unit): String = " raw body "
+        }
+        val current = committed(before, WorkflowEngine().run(lib, before, "hello", gateway))
+        assertEquals(" raw body ", current.results["reply"])
+        assertEquals(" raw body ", current.messages.last().rawText)
+        assertTrue(current.macroHistory["result.reply"].isNullOrEmpty())
+        assertEquals(1, current.currentOnlyMacros.getValue("result.reply").version)
+        assertEquals(" raw body ", MacroResolver(lib, current).render("{{macro.reply}}"))
+
+        val oldWorld = CompletedWorlds.capture(lib, before, "hello", executionVersion = 27)
+        val oldBefore = before.copy(executableWorld = oldWorld)
+        val legacy = committed(oldBefore, WorkflowEngine().run(lib, oldBefore, "hello", gateway))
+        assertEquals(" raw body ", legacy.macroHistory.getValue("result.reply").single().rawText)
+        assertFalse("result.reply" in legacy.currentOnlyMacros)
+    }
+
     @Test fun replacementAndRecordingTogglesKeepOnlyRealUpdatePoints() = runBlocking {
         var current = session()
         var lib = Library()
@@ -141,7 +164,8 @@ class MacroRetentionTest {
         assertEquals("<body>A</body>", first.results["raw_reply"])
         assertEquals("A", first.messages.last().text)
         assertEquals(rawA, first.messages.last().rawText)
-        assertEquals(rawA, first.macroHistory.getValue("result.raw_reply").single().rawText)
+        assertTrue(first.macroHistory["result.raw_reply"].isNullOrEmpty())
+        assertEquals(1, first.currentOnlyMacros.getValue("result.raw_reply").version)
         assertEquals("A", first.macroHistory.getValue("result.body").single().text)
         val candidate = MessageOperations.prepareRegeneration(first, before.messages.single().id).session!!
         assertTrue(candidate.currentOnlyMacros.isEmpty())
@@ -199,20 +223,20 @@ class MacroRetentionTest {
         val json = LibraryFormat.json
         val restored = json.decodeFromString(Session.serializer(), json.encodeToString(Session.serializer(), saved))
         val receipt = restored.pendingRun!!.accepted.single()
-        assertEquals(" kept ", receipt.publication.macroAppends.getValue("result.good").single().rawText)
-        assertTrue(receipt.publication.headWrites.isEmpty())
+        assertTrue(receipt.publication.macroAppends.isEmpty())
+        assertEquals(1, receipt.publication.headWrites.getValue("result.good").version)
         assertEquals(" kept ", receipt.reply!!.rawText)
         val resumed = engine.resume(lib, restored, gateway, restored.pendingRun!!,
             RecoveryDecision(RecoveryDecisionKind.MANUAL, "flow/bad", manualText = "<ok>fixed</ok>"))
         assertEquals(RunStatus.SUCCESS, resumed.status)
         assertEquals(1, goodCalls)
-        assertEquals(first.macroHistory.getValue("result.good"), resumed.macroHistory.getValue("result.good"))
+        assertEquals(first.currentOnlyMacros.getValue("result.good"), resumed.currentOnlyMacros.getValue("result.good"))
         assertEquals(receipt.reply, resumed.replies.first { it.nodeId == "good" })
         assertNull(resumed.replies.first { it.nodeId == "bad" }.rawText)
         val finished = MessageOperations.continuePartialTurn(restored, resumed).session!!
         assertNull(finished.pendingRun)
-        assertEquals(setOf("result.good", "result.bad"), finished.macroHistory.keys)
-        assertNull(finished.macroHistory.getValue("result.bad").single().rawText)
+        assertTrue(finished.macroHistory.isEmpty())
+        assertEquals(setOf("result.good", "result.bad"), finished.currentOnlyMacros.keys)
         assertEquals("kept", finished.results["good"])
     }
 

@@ -71,7 +71,6 @@ internal fun AutomaticOptionsSettingsPage(
             }) },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("修改保留在当前草稿中，完成后继续编辑提示词。")
                     when (address) {
                         "state.automatic_options_legacy_style" -> OutlinedTextField(draft.prompt,
                             { draft = draft.copy(prompt = it) }, modifier = Modifier.fillMaxWidth(), minLines = 3,
@@ -116,7 +115,7 @@ internal fun AutomaticOptionsSettingsPage(
         scrollKey = section, navigationContent = { EditorSectionTabs(listOf("输入", "模型", "输出"), section) { section = it } }) {
         CardGroup {
             item(headlineContent = { Text("自动选项状态") },
-                supportingContent = { Text(if (draft.enabled) "已开启 · 在扩展列表切换" else "未开启 · 在扩展列表切换") })
+                supportingContent = { Text(if (draft.enabled) "已开启" else "未开启") })
         }
         when (section) {
             0 -> {
@@ -127,7 +126,7 @@ internal fun AutomaticOptionsSettingsPage(
                 PromptTemplateField("输入模板", node.inputTemplate, references, { changeNode(node.copy(inputTemplate = it)) }, minLines = 2)
                 TextProcessingEditor("输入处理", node.inputProcessing, references) { changeNode(node.copy(inputProcessing = it)) }
                 if (draft.prompt.isNotEmpty() || draft.blocks.orEmpty().any { AutomaticOptions.LEGACY_STYLE_MACRO in it.template }) {
-                    EditorSection("旧版语气", "通过旧版语气宏引用") {
+                    EditorSection("旧版语气") {
                         OutlinedTextField(draft.prompt, { draft = draft.copy(prompt = it) }, enabled = !saving,
                             modifier = Modifier.fillMaxWidth(), minLines = 3, label = { Text("旧版语气文字") })
                     }
@@ -140,9 +139,8 @@ internal fun AutomaticOptionsSettingsPage(
                 Text("选项数量", style = MaterialTheme.typography.titleMedium)
                 Select((1..AutomaticOptions.MAX_COUNT).toList(), draft.count, { draft = draft.copy(count = it) },
                     modifier = Modifier.fillMaxWidth(), optionToString = { "$it 个" })
-                Text("选项在正文右下方竖排悬浮，仅条目本身带背景；点击标题可展开内容。", style = MaterialTheme.typography.bodySmall)
                 CardGroup {
-                    item(headlineContent = { Text("生成选项标题") }, supportingContent = { Text("点击标题展开内容，再填入输入框") },
+                    item(headlineContent = { Text("生成选项标题") },
                         trailingContent = { Switch(draft.titlesEnabled, { draft = draft.copy(titlesEnabled = it) }, enabled = !saving) })
                 }
                 AutomaticOptions.effectiveItems(draft).forEachIndexed { index, spec ->
@@ -152,7 +150,7 @@ internal fun AutomaticOptionsSettingsPage(
                         items[index] = value
                         draft = draft.copy(items = items)
                     }
-                    EditorSection("选项 ${index + 1}", "按标签匹配；同名标签按出现顺序分配") {
+                    EditorSection("选项 ${index + 1}") {
                         OutlinedTextField(spec.contentTag, { changeSpec(spec.copy(contentTag = it)) }, enabled = !saving,
                             modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("内容标签（不含尖括号）") })
                         if (draft.titlesEnabled) OutlinedTextField(spec.titleTag, { changeSpec(spec.copy(titleTag = it)) }, enabled = !saving,
@@ -162,13 +160,12 @@ internal fun AutomaticOptionsSettingsPage(
                 TextProcessingEditor("输出处理", node.outputProcessing, references) { changeNode(node.copy(outputProcessing = it)) }
                 EditorSection("当前 XML 输出协议", "可通过 ${AutomaticOptions.PROTOCOL_MACRO} 引用") {
                     Text(AutomaticOptions.protocol(draft))
-                    Text("修改标签或标题开关后，引用此宏的提示块会自动使用当前协议。自定义固定格式不会被自动覆盖。")
                     if (draft.blocks.orEmpty().none { it.enabled && AutomaticOptions.PROTOCOL_MACRO in it.template })
                         Text("提示词尚未引用当前协议，请使用下方按钮同步，或在完整提示词中手动引用。", color = MaterialTheme.colorScheme.error)
                     TextButton(onClick = { draft = AutomaticOptions.withCurrentProtocol(draft) }, enabled = !saving) {
                         Text("将输出格式块替换为当前 XML 协议")
                     }
-                    EditorDestinationRow("编辑完整提示词", "所有提示词均可修改；协议不会隐藏追加") { editingPrompts = true }
+                    EditorDestinationRow("编辑完整提示词") { editingPrompts = true }
                 }
             }
         }

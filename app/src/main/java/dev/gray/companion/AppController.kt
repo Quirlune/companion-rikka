@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import dev.gray.companion.core.*
+import dev.gray.companion.agent.AgentPromptRecorder
 import dev.gray.companion.data.GatewayFailure
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -26,6 +27,12 @@ import java.io.File
 import java.io.InputStream
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.put
 import me.rerere.rikkahub.ui.hooks.readBooleanPreference
 
 data class PendingOutput(val workflowId: String, val nodeId: String, val text: String, val outputSlot: OutputSlot = OutputSlot.BODY, val turnId: String? = null, val reasoningSnapshot: ReasoningSnapshot? = null)
@@ -55,13 +62,14 @@ class AppController internal constructor(
     private val actions: ActionRegistry,
     dependencies: ControllerDependencies,
 ) : ViewModel() {
-    constructor(context: Context, actions: ActionRegistry = ActionRegistry.defaults(QuickJsPluginExecutor())) :
+    constructor(context: Context, actions: ActionRegistry = defaultPluginActions(context)) :
         this(context, actions, ControllerDependencies.android(context))
 
     val actionDescriptors: List<ActionDescriptor> get() = actions.descriptors()
     private val repository = dependencies.library
     private val usageRepository = dependencies.usage
     private val gatewayFactory = dependencies.gateway
+    private val agentPromptRecorder = AgentPromptRecorder()
     private val usageMutex = Mutex()
     private var usageFrom = Long.MAX_VALUE
     private val _usage = MutableStateFlow<List<ModelUsageRecord>>(emptyList())
@@ -70,6 +78,8 @@ class AppController internal constructor(
     val usageError: StateFlow<String?> = _usageError.asStateFlow()
     private val credentials = dependencies.credentials
     private val applicationContext = context.applicationContext
+    val agent by lazy { dev.gray.companion.agent.AgentController(applicationContext, viewModelScope, this) }
+    private val pluginAccess by lazy { PluginAccessStore(applicationContext, credentials) }
     private data class PreparedTurn(
         val library: Library,
         val session: Session,
@@ -86,6 +96,7 @@ class AppController internal constructor(
     )
     private val mutex = Mutex()
     @Volatile private var runJob: Job? = null
+    @Volatile private var stopAfterCheckpoint = false
     @Volatile private var runCompletion: CompletableDeferred<Unit>? = null
     @Volatile private var runningExtensionIds: Set<String> = emptySet()
     @Volatile private var revision = 0L
@@ -117,10 +128,70 @@ class AppController internal constructor(
             NativeProviderCodec.requiredCredentialSlots(profile).associateWith { credentials.get(it) }
         }
         NativeProviderCodec.request(profile) { secrets[it].orEmpty() }
-        gatewayFactory(credentialSnapshot(secrets), session.id,
-            snapshot.connections.associate { it.id to it.maxConcurrentRequests }, ::recordUsage)
+        agentPromptRecorder.wrap(session.id, gatewayFactory(credentialSnapshot(secrets), session.id,
+            snapshot.connections.associate { it.id to it.maxConcurrentRequests }, ::recordUsage))
     }
     val automaticOptions: StateFlow<AutomaticOptionsUiState> = optionsController.state
+
+    private val illustrationCredential = CredentialSlot("builtin.bizyair.illustration", CredentialKind.PLUGIN_SECRET)
+    private val illustrationController = IllustrationController(viewModelScope, library,
+        gateway = { snapshot, session, profile ->
+            val secrets = withContext(Dispatchers.IO) {
+                NativeProviderCodec.requiredCredentialSlots(profile).associateWith { credentials.get(it) }
+            }
+            NativeProviderCodec.request(profile) { secrets[it].orEmpty() }
+            agentPromptRecorder.wrap(session.id, gatewayFactory(credentialSnapshot(secrets), session.id,
+                snapshot.connections.associate { it.id to it.maxConcurrentRequests }, ::recordUsage))
+        },
+        keyProvider = { withContext(Dispatchers.IO) { credentials.get(illustrationCredential) } },
+        client = BizyAirClient(File(applicationContext.filesDir, "illustrations")),
+        publish = { config, image, replaceSource -> mutex.withLock {
+            val current = _library.value
+            val source = current.sessions.firstOrNull { it.id == image.sessionId }
+            if (!storageReady || current.illustration != config || !config.enabled || source == null ||
+                !IllustrationCore.isCurrentSource(source, image.messageId, image.sourceKey)) false
+            else {
+                val next = current.copy(illustrationImages = current.illustrationImages.filterNot {
+                    it.sessionId == image.sessionId && it.messageId == image.messageId &&
+                        it.sourceKey == image.sourceKey && (replaceSource || it.afterParagraphId == image.afterParagraphId)
+                } + image)
+                repository.save(next)
+                _library.value = next
+                true
+            }
+        } })
+    val illustrationActivity: StateFlow<IllustrationActivity> = illustrationController.state
+    fun acknowledgeIllustrationRemoteStatus() = illustrationController.acknowledgeRemoteStatus()
+
+    fun regenerateIllustration(sessionId: String, messageId: String): Boolean {
+        if (!storageReady || _busy.value || _library.value.selectedSessionId != sessionId) return false
+        return illustrationController.regenerate(sessionId, messageId)
+    }
+
+    fun bizyAirConfigured(): Boolean = runCatching { credentials.get(illustrationCredential).isNotBlank() }.getOrDefault(false)
+
+    fun setBizyAirCredential(secret: String): List<Issue> = try {
+        val value = secret.trim()
+        require(value.length <= 16384 && value.none { it == '\r' || it == '\n' || it == '\u0000' })
+        if (value.isEmpty()) credentials.remove(illustrationCredential) else credentials.put(illustrationCredential, value)
+        emptyList()
+    } catch (_: Exception) { listOf(Issue("illustration.credential", "BizyAir 密钥保存失败")) }
+
+    suspend fun saveIllustration(config: IllustrationConfig): List<Issue> = mutex.withLock {
+        if (!storageReady) return@withLock listOf(Issue("illustration", "资源库尚未就绪"))
+        val issues = IllustrationCore.validate(config)
+        if (issues.any { it.error }) return@withLock issues
+        if (config.enabled && ModelCatalog.resolveProfile(_library.value,
+                config.modelProfileId ?: config.generation.profileId.orEmpty()) == null)
+            return@withLock listOf(Issue("illustration.modelProfileId", "插图规划模型不存在，请重新选择"))
+        try {
+            val next = _library.value.copy(illustration = config)
+            repository.save(next)
+            _library.value = next
+            emptyList()
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { listOf(Issue("illustration", "插图设置保存失败，原设置仍保留")) }
+    }
 
     fun generateAutomaticOptions() {
         val requested = automaticOptions.value
@@ -255,18 +326,14 @@ class AppController internal constructor(
             if (stopAffected) stopAndJoin()
             return mutex.withLock {
                 val current = _library.value
-                val prepared = if (enabled) current else current.copy(sessions = current.sessions.map { session ->
-                    val pending = session.pendingRun ?: return@map session
-                    if (expected.id !in PluginParticipation.executionOwners(pending.frozenResources, pending.initialSession)) session
-                    else session.copy(pendingRun = null,
-                        unavailableResultKeys = if (pending.regenerating) session.unavailableResultKeys else pending.unavailableKeys)
-                })
-                val result = ExtensionCommands.setEnabled(prepared, expected, enabled)
-                val next = result.library ?: return@withLock result.issues
+                val result = ExtensionCommands.setEnabled(current, expected, enabled)
+                val proposed = result.library ?: return@withLock result.issues
+                val next = LibraryEditPreparation.prepareRecoveryEdits(current, proposed)
                 val issues = ConfigurationAdmission.validate(next).filter { it.error }
                 if (issues.isNotEmpty()) return@withLock issues
                 try {
                     repository.save(next)
+                    revision++
                     _library.value = next
                     if (stopAffected) lastRetry = null
                     emptyList()
@@ -288,9 +355,10 @@ class AppController internal constructor(
                 val result = try { command(_library.value) }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { return@withLock listOf(Issue("memoryConfig", "记忆设置保存失败，原设置仍保留")) }
-                val next = result.library
-                if (next == null || result.issues.any { it.error })
+                val proposed = result.library
+                if (proposed == null || result.issues.any { it.error })
                     return@withLock reportConfigurationIssues(result.issues.ifEmpty { listOf(Issue("memoryConfig", "记忆配置修改未应用")) })
+                val next = LibraryEditPreparation.prepareRecoveryEdits(_library.value, proposed)
                 val issues = ConfigurationAdmission.validate(next).filter { it.error }
                 if (issues.isNotEmpty()) return@withLock reportConfigurationIssues(issues)
                 saveConfiguration(next, result.issues)
@@ -316,17 +384,9 @@ class AppController internal constructor(
                 val current = _library.value
                 if (current.memoryConfig != expected)
                     return@withLock listOf(Issue("memoryConfig", "记忆设置已改变，请刷新后切换"))
-                val prepared = if (enabled) current else current.copy(sessions = current.sessions.map { session ->
-                    val pending = session.pendingRun ?: return@map session
-                    val frozen = pending.frozenResources
-                    val main = frozen.mainCalls.firstOrNull { it.id == pending.initialSession.mainCallId }
-                    val binding = main?.let { MemoryPlugins.binding(frozen, pending.initialSession, it, pending.executionVersion) }
-                    val hasMemory = binding != null && (binding.extensionId != null || binding.processor.workflow.enabled)
-                    if (!hasMemory) session else session.copy(pendingRun = null,
-                        unavailableResultKeys = if (!pending.regenerating) pending.unavailableKeys else session.unavailableResultKeys)
-                })
-                val result = GlobalMemory.setEnabled(prepared, expected, enabled)
-                val next = result.library ?: return@withLock result.issues
+                val result = GlobalMemory.setEnabled(current, expected, enabled)
+                val proposed = result.library ?: return@withLock result.issues
+                val next = LibraryEditPreparation.prepareRecoveryEdits(current, proposed)
                 val issues = ConfigurationAdmission.validate(next).filter { it.error }
                 if (issues.isNotEmpty()) return@withLock issues
                 val saved = saveConfiguration(next, result.issues)
@@ -406,8 +466,6 @@ class AppController internal constructor(
                 ConfigurationCommands.apply(plan, current, ConfigurationAdmission::validateNative)
             }
             val changed = applied.library ?: return@liveLock WorkspaceOperationResult(workspace, "CONFLICT_OR_INVALID", applied.issues)
-            val boundaryIssues = memoryPolicyChangeIssues(current, changed)
-            if (boundaryIssues.isNotEmpty()) return@liveLock WorkspaceOperationResult(workspace, "INVALID", boundaryIssues)
             val next = applied.receipt?.let { receipt -> changed.copy(
                 configurationEdits = ConfigurationReceiptHistory.append(current.configurationEdits, receipt)) } ?: changed
             val issues = saveConfiguration(next, applied.issues)
@@ -454,6 +512,7 @@ class AppController internal constructor(
             if (!storageReady) return@withLock listOf(Issue("library", "资源库尚未就绪；不会覆盖原数据"))
             val before = _library.value
             val proposal = try { prepare(before) } catch (_: Exception) {
+                AppEventLog.record("配置", "编辑操作失败", AppLogLevel.ERROR)
                 return@withLock listOf(Issue("library", "编辑操作失败"))
             }
             val edited = proposal.library?.let { candidate ->
@@ -464,15 +523,12 @@ class AppController internal constructor(
                 val failures = proposal.issues.ifEmpty { listOf(Issue("library", "配置修改未应用")) }
                 return@withLock reportConfigurationIssues(failures)
             }
-            val memoryBoundaryIssues = memoryPolicyChangeIssues(before, edited)
-            if (memoryBoundaryIssues.isNotEmpty()) return@withLock memoryBoundaryIssues
-            if (LibraryEditPreparation.changesFrozenSession(before, edited))
-                return@withLock listOf(Issue("recovery", "这一轮仍有断点；请先恢复或跳过，再修改会话环境"))
-            val rawIssues = ConfigurationAdmission.validate(edited).filter { it.error }
+            val preparedEdit = LibraryEditPreparation.prepareRecoveryEdits(before, edited)
+            val rawIssues = ConfigurationAdmission.validate(preparedEdit).filter { it.error }
             if (rawIssues.isNotEmpty()) {
                 return@withLock reportConfigurationIssues(rawIssues)
             }
-            val next = LibraryEditPreparation.normalize(before, edited)
+            val next = LibraryEditPreparation.normalize(before, preparedEdit)
             val issues = LibraryValidator.validate(next).filter { it.error } + LibraryEditPreparation.removalIssues(before, next)
             if (issues.isNotEmpty()) {
                 return@withLock reportConfigurationIssues(issues)
@@ -491,6 +547,7 @@ class AppController internal constructor(
                 _state.value = _state.value.copy(issues = emptyList(), error = null, traces = emptyList(), streaming = "", pendingOutputs = emptyList())
                 _error.value = null
                 _streaming.value = ""
+                AppEventLog.record("配置", "配置已保存")
                 val removedConnections = before.connections.map { it.id }.toSet() - next.connections.map { it.id }.toSet()
                 val removedLegacy = before.profiles.filter { it.apiConnectionId == null && next.profiles.none { other -> other.id == it.id } }.map { it.id }
                 val removedOverrides = before.profiles.filter { previous ->
@@ -508,6 +565,7 @@ class AppController internal constructor(
                     proposal.issues + warning
                 } else proposal.issues
             } catch (_: Exception) {
+                AppEventLog.record("配置", "配置保存失败", AppLogLevel.ERROR)
                 val failure = listOf(Issue("library", "保存失败；原数据仍保留"))
                 _state.value = _state.value.copy(issues = failure)
                 failure
@@ -562,13 +620,10 @@ class AppController internal constructor(
         updateMessage(sessionId) { MessageOperations.selectOpeningRevision(it, messageId, revisionId) }
 
     suspend fun deleteMessage(sessionId: String, messageId: String): List<Issue> =
-        updateMessage(sessionId, pendingDeleteId = messageId) {
-            if (it.pendingRun != null) MessageOperations.rollbackPendingUserTurn(it, messageId)
-            else MessageOperations.deleteMessage(it, messageId)
-        }
+        updateMessage(sessionId) { MessageOperations.deleteMessage(it, messageId) }
 
     suspend fun rollbackPendingUserTurn(sessionId: String, runId: String, messageId: String): List<Issue> =
-        updateMessage(sessionId, pendingDeleteId = messageId, expectedPendingRunId = runId) {
+        updateMessage(sessionId, expectedPendingRunId = runId) {
             MessageOperations.rollbackPendingUserTurn(it, messageId)
         }
 
@@ -600,7 +655,7 @@ class AppController internal constructor(
     suspend fun forkMessage(sessionId: String, messageId: String): List<Issue> =
         updateMessage(sessionId, fork = true) { MessageOperations.forkAt(it, messageId) }
 
-    private suspend fun updateMessage(sessionId: String, fork: Boolean = false, pendingDeleteId: String? = null,
+    private suspend fun updateMessage(sessionId: String, fork: Boolean = false,
         expectedPendingRunId: String? = null,
         operation: (Session) -> MessageOperationResult): List<Issue> = mutex.withLock {
         if (!storageReady) return@withLock listOf(Issue("session", "资源库尚未就绪"))
@@ -612,15 +667,17 @@ class AppController internal constructor(
             ?: return@withLock listOf(Issue("session", "会话不存在"))
         if (expectedPendingRunId != null && session.pendingRun?.id != expectedPendingRunId)
             return@withLock listOf(Issue("recovery", "断点已改变，请重新打开恢复选项"))
-        if (session.pendingRun != null && pendingDeleteId != session.pendingRun?.turnId)
-            return@withLock listOf(Issue("recovery", "这一轮仍有断点；只能删除触发本轮的用户消息"))
         val result = operation(session)
         val candidate = result.session ?: return@withLock result.issues
         val world = candidate.executableWorld
-        val mustReplay = session.pendingRun == null && world != null && (world != session.executableWorld ||
+        val checkpointRollback = session.pendingRun?.let { pending ->
+            !pending.regenerating && candidate.messages.none { it.id == pending.turnId }
+        } == true
+        val mustReplay = !checkpointRollback && world != null && (world != session.executableWorld ||
             world.recipes.any { recipe -> recipe.targets.any { it.key in candidate.unavailableResultKeys } })
         val rebuilt = if (mustReplay) withContext(Dispatchers.Default) { BranchReplay.rebuild(candidate, QuickJsPluginExecutor()) } else result
         var changed = rebuilt.session ?: return@withLock rebuilt.issues
+        if (changed != session) changed = MessageOperations.discardRecovery(changed)
         if (fork) {
             val prefix = "${session.title} 分支"
             var number = 1
@@ -641,6 +698,7 @@ class AppController internal constructor(
         } catch (_: Exception) { listOf(Issue("session", "保存失败；原数据仍保留")) }
     }
     suspend fun saveChat(sessionId: String, folderId: String): List<Issue> = updateLibrary { ChatArchive.save(it, sessionId, folderId) }
+    suspend fun saveCurrentChatCopy(sessionId: String): List<Issue> = updateLibrary { ChatArchive.saveCurrentCopy(it, sessionId) }
     suspend fun restoreSavedChat(id: String): List<Issue> = updateLibrary { ChatArchive.restore(it, id) }
 
     suspend fun refreshUsage(days: Int = 7) {
@@ -694,6 +752,82 @@ class AppController internal constructor(
         return PromptCompiler().preview(snapshot, draft, node, input)
     }
 
+    /** A read-only Agent view. "recent" observes this process's real gateway calls; "preview" estimates a next call. */
+    suspend fun agentPromptPreview(args: JsonObject): JsonObject {
+        fun string(key: String): String? = (args[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        fun failure(status: String, message: String) = buildJsonObject {
+            put("status", status); put("retryable", false); put("message", message)
+        }
+        val mode = string("mode") ?: "preview"
+        if (mode == "recent") {
+            val sessionId = string("sessionId")
+            if ("sessionId" in args && sessionId == null) return failure("INVALID", "sessionId 须为字符串")
+            val limit = if ("limit" in args) {
+                (args["limit"] as? JsonPrimitive)?.intOrNull
+                    ?: return failure("INVALID", "limit 须为 1 到 10")
+            } else 5
+            if (limit !in 1..10) return failure("INVALID", "limit 须为 1 到 10")
+            return buildJsonObject { put("status", "OK"); put("data", agentPromptRecorder.recent(sessionId, limit)) }
+        }
+        if (mode != "preview") return failure("INVALID", "mode 只能是 preview 或 recent")
+        val sessionId = string("sessionId")?.takeIf { it.isNotBlank() }
+            ?: return failure("INVALID", "预览需要 sessionId")
+        for (key in listOf("input", "workflowId", "nodeId", "workspaceId"))
+            if (key in args && string(key) == null) return failure("INVALID", "$key 须为字符串")
+        val input = string("input").orEmpty()
+        val workspaceId = string("workspaceId")
+        val live = library.value
+        val session = live.sessions.firstOrNull { it.id == sessionId }
+            ?: return failure("NOT_FOUND", "会话不存在")
+        val working = if (workspaceId == null) live else {
+            val workspace = configurationWorkspaces.value.firstOrNull { it.id == workspaceId }
+                ?: return failure("NOT_FOUND", "工作区不存在")
+            if (workspace.status != ConfigurationWorkspaceStatus.OPEN)
+                return failure("CLOSED", "工作区已关闭")
+            val draft = ConfigurationCommands.previewEdit(workspace.base, workspace.draft, workspace.label,
+                ConfigurationAdmission::validateNative)
+            val plan = draft.plan ?: return failure("INVALID", draft.issues.firstOrNull()?.message ?: "草稿无法预览")
+            val applied = ConfigurationCommands.apply(plan, live, ConfigurationAdmission::validateNative)
+            applied.library ?: return failure("CONFLICT_OR_INVALID", applied.issues.firstOrNull()?.message ?: "草稿与当前资源冲突")
+        }
+        val resources = try { CompletedWorlds.executionLibrary(working, session) }
+            catch (_: Exception) { return failure("INVALID", "会话冻结资源不可用") }
+        val main = resources.mainCalls.firstOrNull { it.id == session.mainCallId }
+            ?: return failure("NOT_FOUND", "会话主调用不可用")
+        val primary = main.workflows.firstOrNull { it.id == main.primaryWorkflowId }
+        val workflows = (listOfNotNull(primary) + main.workflows.filter { it.id != primary?.id } +
+            resources.loadedCallGroups(session).flatMap { it.workflows }).filter { it.enabled }
+        val workflowId = string("workflowId")
+        val nodeId = string("nodeId")
+        val candidates = workflows.flatMap { workflow -> workflow.nodes.filter { it.enabled }
+            .map { workflow to it } }.filter { (workflow, node) ->
+                (workflowId == null || workflow.id == workflowId) && (nodeId == null || node.id == nodeId)
+            }
+        if (nodeId != null && workflowId == null && candidates.size > 1)
+            return failure("AMBIGUOUS", "节点 ID 对应多个工作流，请指定 workflowId")
+        val chosen = candidates.firstOrNull { it.second.actionId == "model.generate" } ?: candidates.firstOrNull()
+            ?: return failure("NOT_FOUND", "未找到可预览的已启用节点")
+        val draftSession = if (input.isNotBlank()) session.copy(messages = session.messages + ChatMessage(
+            role = Role.USER, text = input, speakerName = resources.userName(session))) else session
+        val version = session.executableWorld?.executionVersion ?: ExecutionSemantics.CURRENT
+        val preview = PromptCompiler().preview(resources, draftSession, chosen.second, input, executionVersion = version)
+        return buildJsonObject {
+            put("status", "OK")
+            put("data", buildJsonObject {
+                put("mode", "preview")
+                put("scope", "按当前快照估算下一次调用；不代表已发送请求或运行时每阶段的输入处理")
+                put("sessionId", sessionId)
+                put("workflowId", chosen.first.id)
+                put("nodeId", chosen.second.id)
+                put("resourceWorld", if (session.executableWorld != null) "frozen" else if (workspaceId != null) "workspace" else "live")
+                put("messages", buildJsonArray { preview.messages.forEach { message -> add(buildJsonObject {
+                    put("role", message.role.name); put("text", message.text)
+                }) } })
+                put("issues", LibraryFormat.json.encodeToJsonElement(preview.issues))
+            })
+        }
+    }
+
     suspend fun send(text: String, expectedSessionId: String? = null): Boolean {
         val accepted = CompletableDeferred<Boolean>()
         val targetSessionId = expectedSessionId ?: library.value.selectedSessionId
@@ -702,8 +836,8 @@ class AppController internal constructor(
     }
     suspend fun retry() {
         val current = library.value.sessions.firstOrNull { it.id == library.value.selectedSessionId }
-        current?.pendingRun?.failures?.firstOrNull()?.let {
-            recover(current.id, RecoveryDecision(RecoveryDecisionKind.RETRY, it.nodeKey))
+        current?.pendingRun?.let {
+            continueRecovery(current.id, it.id)
             return
         }
         val (sessionId, input) = lastRetry ?: return
@@ -713,16 +847,40 @@ class AppController internal constructor(
     suspend fun recover(sessionId: String, decision: RecoveryDecision): Boolean {
         val pending = library.value.sessions.firstOrNull { it.id == sessionId }?.pendingRun ?: return false
         return viewModelScope.async {
-            run(pending.input, appendUser = false, expectedSessionId = sessionId, recoveryDecision = decision)
+            run(pending.input, appendUser = false, expectedSessionId = sessionId,
+                recoveryDecision = decision, expectedRecoveryRunId = pending.id)
         }.await()
+    }
+
+    /** A single click resumes by the exact journal observed by UI; true means it is fully cleared. */
+    suspend fun continueRecovery(sessionId: String, runId: String): Boolean {
+        val pending = library.value.sessions.firstOrNull { it.id == sessionId }?.pendingRun
+            ?.takeIf { it.id == runId } ?: return false
+        val initialTargets = pending.failures.map { it.nodeKey }
+        if (initialTargets.isEmpty()) {
+            viewModelScope.async {
+                run(pending.input, appendUser = false, expectedSessionId = sessionId,
+                    expectedRecoveryRunId = runId, continueInterrupted = true)
+            }.await()
+        } else for (key in initialTargets) {
+            val current = library.value.sessions.firstOrNull { it.id == sessionId }?.pendingRun
+                ?.takeIf { it.id == runId } ?: break
+            if (current.failures.none { it.nodeKey == key }) continue
+            if (!current.failures.first { it.nodeKey == key }.retryable) break
+            val advanced = viewModelScope.async {
+                run(current.input, appendUser = false, expectedSessionId = sessionId,
+                    recoveryDecision = RecoveryDecision(RecoveryDecisionKind.RETRY, key), expectedRecoveryRunId = runId)
+            }.await()
+            if (!advanced) break
+        }
+        return library.value.sessions.firstOrNull { it.id == sessionId }?.pendingRun == null
     }
 
     suspend fun finishRecovery(sessionId: String, runId: String): Boolean {
         val issues = updateSessionMetadata(sessionId) { session ->
             if (_busy.value || runCompletion?.isCompleted == false || editingCount > 0) return@updateSessionMetadata session
-            val pending = session.pendingRun?.takeIf { it.id == runId } ?: return@updateSessionMetadata session
-            session.copy(pendingRun = null, unavailableResultKeys = if (pending.regenerating)
-                session.unavailableResultKeys else pending.unavailableKeys)
+            session.pendingRun?.takeIf { it.id == runId } ?: return@updateSessionMetadata session
+            MessageOperations.discardRecovery(session)
         }
         val finished = issues.none { it.error } && library.value.sessions.firstOrNull { it.id == sessionId }?.pendingRun == null
         if (finished && lastRetry?.first == sessionId) lastRetry = null
@@ -803,13 +961,23 @@ class AppController internal constructor(
     suspend fun regenerateMessage(sessionId: String, messageId: String): Boolean {
         val accepted = CompletableDeferred<Boolean>()
         viewModelScope.launch {
-            run("", appendUser = false, accepted = accepted, expectedSessionId = sessionId, regenerationMessageId = messageId)
+            try {
+                run("", appendUser = false, accepted = accepted, expectedSessionId = sessionId, regenerationMessageId = messageId)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                // Admission/replay precedes run's execution guard. A malformed restore boundary
+                // must report a failed reroll rather than escape viewModelScope and kill the app.
+                setError("重新生成准备失败（${failure.javaClass.simpleName}），原候选仍保留")
+            } finally {
+                if (!accepted.isCompleted) accepted.complete(false)
+            }
         }
         return accepted.await()
     }
 
-    private suspend fun run(input: String, appendUser: Boolean, accepted: CompletableDeferred<Boolean>? = null, expectedSessionId: String? = null, regenerationMessageId: String? = null, editedUserMessageId: String? = null, recoveryDecision: RecoveryDecision? = null): Boolean = supervisorScope {
-        if (regenerationMessageId == null && input.isBlank()) { accepted?.complete(false); return@supervisorScope false }
+    private suspend fun run(input: String, appendUser: Boolean, accepted: CompletableDeferred<Boolean>? = null, expectedSessionId: String? = null, regenerationMessageId: String? = null, editedUserMessageId: String? = null, recoveryDecision: RecoveryDecision? = null, expectedRecoveryRunId: String? = null, continueInterrupted: Boolean = false): Boolean = supervisorScope {
+        if (regenerationMessageId == null && input.isBlank() && !continueInterrupted) { accepted?.complete(false); return@supervisorScope false }
         val prepared = mutex.withLock {
             if (!storageReady) { setError("资源库尚未就绪"); return@withLock null }
             if (editingCount > 0) { setError("配置正在保存，请稍后再试"); return@withLock null }
@@ -818,14 +986,13 @@ class AppController internal constructor(
             if (old.selectedSessionId != expectedSessionId) return@withLock null
             val session = old.sessions.firstOrNull { it.id == old.selectedSessionId }
             if (session == null) { setError("请先选择会话"); return@withLock null }
-            if (session.pendingRun != null && recoveryDecision == null) {
-                setError("这一轮仍有断点；请先重试或跳过失败路径")
-                return@withLock null
-            }
-            val recovery = if (recoveryDecision != null) session.pendingRun ?: return@withLock null else null
+            val recovery = if (recoveryDecision != null || continueInterrupted)
+                session.pendingRun?.takeIf { expectedRecoveryRunId == null || it.id == expectedRecoveryRunId }
+                    ?: return@withLock null else null
+            if (continueInterrupted && recovery?.failures?.isNotEmpty() != false) return@withLock null
             if (session.characterId.isBlank() || session.mainCallId.isBlank()) { setError("请先选择角色卡和主调用"); return@withLock null }
             val regenerationBase = recovery?.regenerationBase ?: if (regenerationMessageId != null) {
-                val operation = MessageOperations.regenerationBase(session, regenerationMessageId)
+                val operation = MessageOperations.regenerationBase(MessageOperations.discardRecovery(session), regenerationMessageId)
                 operation.session ?: run {
                     setError(operation.issues.firstOrNull()?.message ?: "当前消息不能重新生成")
                     return@withLock null
@@ -843,7 +1010,7 @@ class AppController internal constructor(
                     setError(operation.issues.firstOrNull()?.message ?: "用户消息无法编辑发送")
                     return@withLock null
                 }
-            } else session
+            } else if (recovery == null) MessageOperations.discardRecovery(session) else session
             val replayed = if (preparedCandidate.executableWorld != null) withContext(Dispatchers.Default) {
                 BranchReplay.rebuild(preparedCandidate, QuickJsPluginExecutor())
             } else MessageOperationResult(preparedCandidate)
@@ -894,12 +1061,15 @@ class AppController internal constructor(
             if (recovery == null && !appendUser && staged.messages.lastOrNull()?.let { !it.deleted && it.role == Role.USER && it.text == runInput } != true) {
                 setError("当前会话没有可重试的消息"); return@withLock null
             }
-            val next = if (staged.id == session.id) old.copy(sessions = old.sessions.map { if (it.id == session.id) staged else it })
+            val next = if (regenerationMessageId != null && recovery == null)
+                old.copy(sessions = old.sessions.map { if (it.id == session.id) MessageOperations.discardRecovery(it) else it })
+                else if (staged.id == session.id) old.copy(sessions = old.sessions.map { if (it.id == session.id) staged else it })
                 else old.copy(sessions = old.sessions + staged, selectedSessionId = staged.id)
-            try { if (appendUser || editedUserMessageId != null) repository.save(next) } catch (_: Exception) { setError("消息保存失败"); return@withLock null }
+            try { if (recovery == null && (appendUser || editedUserMessageId != null || regenerationMessageId != null || staged != session)) repository.save(next) } catch (_: Exception) { setError("消息保存失败"); return@withLock null }
             revision++
-            if (regenerationMessageId == null && recovery == null) _library.value = next
+            if (recovery == null) _library.value = next
             _busy.value = true
+            stopAfterCheckpoint = false
             _streaming.value = ""
             _error.value = null
             _state.value = _state.value.copy(busy = true, streaming = "", traces = emptyList(), error = null, issues = emptyList(), pendingOutputs = emptyList(), generationPreview = staged.takeIf { regenerationBase != null })
@@ -908,20 +1078,27 @@ class AppController internal constructor(
             runCompletion = completion
             runningExtensionIds = PluginParticipation.executionOwners(executionLibrary, staged)
             PreparedTurn(next, staged, revision, secrets, runInput, regenerationBase,
-                if (appendUser && recovery == null && regenerationBase == null && editedUserMessageId == null) session else null,
+                if (appendUser && recovery == null && regenerationBase == null && editedUserMessageId == null)
+                    MessageOperations.discardRecovery(session) else null,
                 session.id, recovery, recoveryDecision, completion, regenerationAdmission = regenerationAdmission)
         }
         if (prepared == null) { accepted?.complete(false); return@supervisorScope false }
         accepted?.complete(true)
+        AppEventLog.record("主聊天", when {
+            recoveryDecision != null -> "恢复执行开始"
+            continueInterrupted -> "中断后继续开始"
+            regenerationMessageId != null -> "重新生成开始"
+            else -> "生成开始"
+        })
         val (snapshot, session, runRevision, secrets, runInput, regenerationBase, beforeUserSession, sourceSessionId, recovery, decision) = prepared
         val completion = prepared.completion
         var launchedJob: Job? = null
         var recoveryAccepted = false
         try {
             val executionLibrary = recovery?.frozenResources ?: CompletedWorlds.executionLibrary(snapshot, session)
-            val gateway = gatewayFactory(credentialSnapshot(secrets), session.id,
+            val gateway = agentPromptRecorder.wrap(session.id, gatewayFactory(credentialSnapshot(secrets), session.id,
                 ExecutionResources.views(executionLibrary).flatMap { it.connections }
-                    .associate { it.id to it.maxConcurrentRequests }, ::recordUsage)
+                    .associate { it.id to it.maxConcurrentRequests }, ::recordUsage))
             val outputOrder = (executionLibrary.mainCalls.firstOrNull { it.id == session.mainCallId }?.workflows.orEmpty() +
                 executionLibrary.loadedCallGroups(session).flatMap { it.workflows })
                 .flatMap { flow -> flow.nodes.map { flow.id to it.id } }.withIndex().associate { it.value to it.index }
@@ -931,10 +1108,16 @@ class AppController internal constructor(
                 val onUpdate: suspend (RunUpdate) -> Unit = onUpdate@{ update ->
                     update.progress?.let {
                         publisher.persist(it)
+                        if (stopAfterCheckpoint) {
+                            stopAfterCheckpoint = false
+                            runJob?.cancel()
+                        }
                         // Only historical recovery may still replace BODY through a retired display template.
                         val main = executionLibrary.mainCalls.firstOrNull { main -> main.id == session.mainCallId }
-                        if (regenerationBase == null && (!ExecutionSemantics(recovery?.executionVersion ?: session.executableWorld?.executionVersion ?: ExecutionSemantics.CURRENT).legacyTiles || main?.bodySourceTileId == null))
+                        if (regenerationBase == null && (!ExecutionSemantics(recovery?.executionVersion ?: session.executableWorld?.executionVersion ?: ExecutionSemantics.CURRENT).legacyTiles || main?.bodySourceTileId == null)) {
                             optionsController.bodyCommitted(session.id, it)
+                            illustrationController.bodyCommitted(session.id, it)
+                        }
                     }
                     if (runRevision != revision) return@onUpdate
                     if (update.replace) {
@@ -952,18 +1135,30 @@ class AppController internal constructor(
                         _streaming.value = ordered.filter { it.outputSlot == OutputSlot.BODY }.joinToString("\n\n") { it.text }
                         _state.value = _state.value.copy(streaming = _streaming.value, pendingOutputs = ordered)
                     }
-                    update.trace?.let { trace -> _state.value = _state.value.copy(traces = _state.value.traces + trace) }
+                    update.trace?.let { trace ->
+                        _state.value = _state.value.copy(traces = _state.value.traces + trace)
+                        val detail = trace.detail.takeIf { trace.status == "error" && it.length <= 160 &&
+                            '\n' !in it && !it.trimStart().startsWith("{") && !it.trimStart().startsWith("[") }
+                            ?.let { " · $it" }.orEmpty()
+                        AppEventLog.record("主聊天", "工作流 ${trace.workflowId} / 节点 ${trace.nodeId} ${trace.title}：${trace.status}$detail",
+                            if (trace.status == "error") AppLogLevel.WARNING else AppLogLevel.INFO)
+                    }
                 }
                 if (recovery != null && decision != null)
                     WorkflowEngine(actions).resume(snapshot, _library.value.sessions.first { it.id == sourceSessionId }, gateway, recovery, decision, onUpdate)
+                else if (recovery != null)
+                    WorkflowEngine(actions).continueInterrupted(snapshot, _library.value.sessions.first { it.id == sourceSessionId }, gateway, recovery, onUpdate)
                 else WorkflowEngine(actions).run(snapshot, session, runInput, gateway, onUpdate)
             }
             launchedJob = job
             runJob = job
-            if (runRevision != revision) job.cancel() else job.start()
+            if (runRevision != revision && !stopAfterCheckpoint) job.cancel() else job.start()
             val result = job.await()
+            AppEventLog.record("主聊天", "生成结束：${result.status.name}",
+                if (result.status == RunStatus.FAILED) AppLogLevel.WARNING else AppLogLevel.INFO)
             publisher.persist(result)
             optionsController.bodyCommitted(session.id, result)
+            illustrationController.bodyCommitted(session.id, result)
             val resultRecovery = result.recovery
             recoveryAccepted = result.status == RunStatus.SUCCESS ||
                 (decision != null && resultRecovery != null && resultRecovery.failures.none { it.nodeKey == decision.nodeKey })
@@ -980,6 +1175,7 @@ class AppController internal constructor(
             }
         } catch (_: CancellationException) {
             // Accepted node checkpoints have already been persisted; provisional candidates are discarded.
+            AppEventLog.record("主聊天", "生成已停止", AppLogLevel.WARNING)
         } catch (failure: GatewayFailure) {
             setError(failure.message ?: "模型服务请求失败")
         } catch (_: Exception) {
@@ -993,6 +1189,7 @@ class AppController internal constructor(
                         _state.value = _state.value.copy(busy = false, streaming = "", pendingOutputs = emptyList(), generationPreview = null)
                     }
                     if (runJob === launchedJob) runJob = null
+                    stopAfterCheckpoint = false
                 }
                 completion.complete(Unit)
                 if (runCompletion === completion) {
@@ -1006,8 +1203,12 @@ class AppController internal constructor(
 
     fun stop() {
         if (_busy.value) {
+            AppEventLog.record("主聊天", "请求停止生成", AppLogLevel.WARNING)
+            val needsCheckpoint = _library.value.sessions.firstOrNull { it.id == _library.value.selectedSessionId }
+                ?.pendingRun == null
+            stopAfterCheckpoint = needsCheckpoint
             revision++
-            runJob?.cancel()
+            if (!needsCheckpoint) runJob?.cancel()
             _busy.value = false
             _streaming.value = ""
             _state.value = _state.value.copy(busy = false, streaming = "", pendingOutputs = emptyList(), generationPreview = null)
@@ -1022,6 +1223,35 @@ class AppController internal constructor(
 
     fun getApiKey(connectionId: String): String = try { credentials.get(connectionId) } catch (_: Exception) { "" }
     fun getCredential(slot: CredentialSlot): String = try { credentials.get(slot) } catch (_: Exception) { "" }
+
+    /** Read-only metadata for the native permission panel and configuration discovery tools. */
+    fun pluginAccessStatus(extension: ConfigurationExtension): PluginAccessStatus = pluginAccess.status(extension)
+
+    fun grantPluginAccess(extension: ConfigurationExtension): List<Issue> = pluginAccessChange(extension) {
+        pluginAccess.grant(extension)
+    }
+
+    fun revokePluginAccess(pluginId: String): List<Issue> = try {
+        pluginAccess.revoke(pluginId)
+        emptyList()
+    } catch (_: Exception) {
+        listOf(Issue("plugin.access", "撤销权限未能保存，请重试。"))
+    }
+
+    fun setPluginCredential(extension: ConfigurationExtension, alias: String, secret: String): List<Issue> =
+        pluginAccessChange(extension) { pluginAccess.setCredential(extension, alias, secret) }
+
+    /** These operations are intentionally not exposed by ConfigurationToolGateway. */
+    private fun pluginAccessChange(extension: ConfigurationExtension, change: () -> Unit): List<Issue> {
+        if (!storageReady || _library.value.extensions.firstOrNull { it.id == extension.id } != extension)
+            return listOf(Issue("plugin.access", "扩展已改变或尚未载入，请重新打开设置。"))
+        return try {
+            change()
+            emptyList()
+        } catch (_: Exception) {
+            listOf(Issue("plugin.access", "操作未能保存，请检查权限声明、凭据格式后重试。"))
+        }
+    }
 
     private fun credentialSnapshot(values: Map<CredentialSlot, String>): CredentialStore = object : CredentialStore {
         override fun get(profileId: String): String = get(CredentialSlot(profileId))
@@ -1118,8 +1348,6 @@ class AppController internal constructor(
             ConfigurationImportPreparer.apply(draft, current)
         }
         val changed = result.library ?: return@withLock result.issues
-        val memoryBoundaryIssues = memoryPolicyChangeIssues(current, changed)
-        if (memoryBoundaryIssues.isNotEmpty()) return@withLock memoryBoundaryIssues
         val receipt = result.receipt
         val next = if (receipt == null) changed else changed.copy(
             configurationEdits = ConfigurationReceiptHistory.append(current.configurationEdits, receipt))
@@ -1139,39 +1367,34 @@ class AppController internal constructor(
             ConfigurationCommands.undo(receipt, current, ConfigurationAdmission::validateNative)
         }
         val changed = result.library ?: return@withLock result.issues
-        val memoryBoundaryIssues = memoryPolicyChangeIssues(current, changed)
-        if (memoryBoundaryIssues.isNotEmpty()) return@withLock memoryBoundaryIssues
         saveConfiguration(changed.copy(configurationEdits = current.configurationEdits.filterNot { it.id == receiptId }), result.issues)
     }
 
     private fun reportConfigurationIssues(issues: List<Issue>): List<Issue> {
+        if (issues.any { it.error }) AppEventLog.record("配置", "配置校验未通过", AppLogLevel.ERROR)
         _state.value = _state.value.copy(issues = issues)
         return issues
-    }
-
-    private fun memoryPolicyChangeIssues(before: Library, next: Library): List<Issue> {
-        val old = before.memoryConfig
-        val changed = next.memoryConfig
-        val participationChanged = old?.enabled != changed?.enabled || old?.extensionId != changed?.extensionId
-        return if (participationChanged && before.sessions.any { it.pendingRun != null })
-            listOf(Issue("memoryConfig", "仍有未完成回合；请通过插件页记忆开关结束相关断点，或先恢复后再导入此设置"))
-        else emptyList()
     }
 
     /** Caller holds the admission mutex; configuration and its undo receipt share one transaction. */
     private suspend fun saveConfiguration(next: Library, issues: List<Issue>): List<Issue> {
         return try {
             withContext(NonCancellable) {
-                repository.save(next)
+                val prepared = LibraryEditPreparation.prepareRecoveryEdits(_library.value, next)
+                repository.save(prepared)
                 revision++
-                _library.value = next
+                _library.value = prepared
                 _state.value = _state.value.copy(issues = issues, error = null)
                 _error.value = null
+                AppEventLog.record("配置", "配置已应用")
             }
             // Keep encrypted connection credentials so a configuration-only undo can restore access.
             issues
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { listOf(Issue("import", "保存失败；原数据仍保留")) }
+        catch (_: Exception) {
+            AppEventLog.record("配置", "配置应用失败", AppLogLevel.ERROR)
+            listOf(Issue("import", "保存失败；原数据仍保留"))
+        }
     }
 
     /** Debug/automation ingestion uses the same validated plan, without opening a UI sheet. */
@@ -1183,6 +1406,7 @@ class AppController internal constructor(
     }
 
     private fun setError(message: String) {
+        AppEventLog.record("主聊天", message, AppLogLevel.ERROR)
         _error.value = message
         _state.value = _state.value.copy(error = message)
     }
@@ -1190,6 +1414,13 @@ class AppController internal constructor(
     override fun onCleared() { stop(); super.onCleared() }
 
     companion object {
+        private fun defaultPluginActions(context: Context): ActionRegistry {
+            val access = PluginAccessStore(context.applicationContext)
+            return ActionRegistry.defaults(QuickJsPluginExecutor(hostRuntimeFactory = { captured ->
+                PluginHostRuntime(captured, access)
+            }))
+        }
+
         fun factory(context: Context): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T = AppController(context.applicationContext) as T

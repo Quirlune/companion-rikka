@@ -79,7 +79,6 @@ internal fun ModelsScreen(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("API 连接", style = MaterialTheme.typography.titleLarge)
-                    Text("凭据由本机凭据存储管理；导出的 JSON 不包含 API Key。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Button(onClick = { onEdit(Editing(EditorKind.CONNECTION, newId())) }) { Text("新建连接") }
             }
@@ -87,7 +86,7 @@ internal fun ModelsScreen(
         if (visibleConnections.isEmpty()) {
             item {
                 EmptyModelSectionText(
-                    if (library.connections.isEmpty()) "还没有 API 连接。创建连接后，模型可以共用它。" else "没有找到匹配的 API 连接。",
+                    if (library.connections.isEmpty()) "暂无 API 连接" else "没有找到匹配的 API 连接。",
                 )
             }
         } else {
@@ -122,7 +121,6 @@ internal fun ModelsScreen(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("模型", style = MaterialTheme.typography.titleLarge)
-                    Text("节点模型优先于调用模型；调用模型优先于全局默认。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Button(onClick = {
                     onEdit(Editing(EditorKind.PROFILE, newId()))
@@ -132,7 +130,7 @@ internal fun ModelsScreen(
         if (visibleProfiles.isEmpty()) {
             item {
                 EmptyModelSectionText(
-                    if (library.profiles.isEmpty()) "还没有模型。填写模型 ID，再选择对应的 API 连接。" else "没有找到匹配的模型。",
+                    if (library.profiles.isEmpty()) "暂无模型" else "没有找到匹配的模型。",
                 )
             }
         } else {

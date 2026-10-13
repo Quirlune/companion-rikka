@@ -1,6 +1,152 @@
 # velune 当前架构
 
-当前源代码：0.66-preview / code234，wire34，execution26，SQLite1。文档修订78，2026-10-12。此文件取代旧版逐层叠加的 revision 指令；历史保留于 `history/architecture-through-0.57.txt` 与 `ARCHITECTURE_HISTORY.md`。
+## Revision93：打包验收与外部AI作者包（2026-10-13，用户确认，含GitHub同步）
+
+- 交付0.75-preview/code243，保持wire37/execution28/SQLite1及原应用身份/签名，集成截至Revision92的源码。构建后在隔离模拟器验安装、启动和新增关键交互；已有定向单元测试结果复用，不重复扩大回归。失败按具体证据修复。
+- 外部AI作者包独立于APK与可导入扩展包：提供完整中文操作文案、真实字段参考、模板、标准库ZIP构建工具与能力边界。源码与真实导入器为事实来源；文档和JSON解析不能替代真实预览/应用校验。
+- root拥有版本/构建/集成测试/文档基线/Git发布；authoring93拥有docs/AI_IMPORT_GUIDE.txt勘误及工作目录的作者包。集中真实导入验证后交付，禁止夹带秘密、运行数据库或机器路径。完成后提交当前功能源码及相关文档到既有GitHub仓库，发布需以实际结果为准。
+
+- 本轮追加已确认：移除生图常驻进度横条；Companion输入默认半透明且移除底部整块实色背景，用户blur/glass配置保留，继续禁止WebView Haze采样。三点使用原Popup生命周期承载现有MENU CardRegionDisplay前端，保留收藏/日志，不新增插件schema或任意菜单动作API。
+- 正文排版：HTML宿主插图width100%/height:auto，无480px默认限高；原生插图同样取消固定限高。示例仅对非插图的正文直子元素施加88%文字宽度，外层100%且无水平padding；不强行突破用户旧模板的窄祖先，保留作者CSS覆盖权。
+- 知识源统一：新增AUTHORING_ARCHITECTURE.txt/APPEARANCE_GUIDE.txt，经构建同步成六份固定ID离线知识；外部作者包与单TXT使用相同文档及字段目录。新ID architecture-guide / appearance-guide，仍有限读取与搜索，不开放任意路径。
+
+## Revision92：历史纯文本发言方前缀（2026-10-13，已授权；不打包）
+
+- 历史引用编辑半屏栏在TEXT模式直接显示Assistant/User/System前缀输入；空白保持原有完整前缀，自定义值按字面替换完整前缀（标点/空格/换行由输入决定）。不编辑源消息，不改变外层API角色；切回MESSAGES保留设置但不使用。
+- HistorySelection.textPrefixes独立于format；prefixes字段使用带引号JSON保存映射，避免仅改标签就切换主调用历史格式继承。原始发言方由既有TEXT投影保留，PromptCompiler在拼接末端应用。旧引用默认输出不变；execution<=25与as字段一致拒绝prefixes，无wire/execution/版本提升。
+- 沿用当前ModalBottomSheet的半展开/上拉交互，不再开第二个设置窗。只做解析往返、空白默认、最终提示词角色与格式、Android编译定向检查；设备交互留待用户体验。
+
+## Revision91：收藏当前独立副本（2026-10-13，已授权；不打包）
+
+- 主聊天横向三点提供“收藏当前副本”，单击保存到“收藏”文件夹（不存在则创建），不移动、不替换源会话、不改变当前选择；同菜单可进入收藏夹。真正运行中继续使用现有BUSY保护。
+- 复用SavedChat和CompletedWorld：保存时赋予独立snapshot会话ID，断点主人及历史再生成候选按既有rebind规则复制；保留已接受消息、状态、宏历史、分支和冻结资源。已有插图按副本会话ID复制显示记录，共享不可变图片文件，不串联后续重绘记录。
+- 打开收藏仍创建新的可编辑会话ID并复制其插图记录，收藏本体保持不变。源会话改动/删除和新会话改动均不影响收藏。旧收藏格式继续可读，无wire/execution/应用版本变更；资源全局设置与凭据仍按既有应用策略。
+- 已完成：ChatArchiveTest四项通过，覆盖源删除、恢复后编辑、插图归属、暂停断点及历史候选重绑；Android Kotlin编译与diff检查通过。未打包/安装/设备交互验收。
+
+## Revision90：统一日志与导航图标（2026-10-13，用户已确认；不打包）
+
+- 输入栏不展示模型选择；模型配置保留设置入口。普通提示/错误不再自动弹Snackbar/Toast/纯告知框，写统一本机日志；需决策、修复或确认的交互框仍保留。右上角横向三点收到新错误短闪红色，禁止无限闪烁或重复组合触发。
+- 原“闪退诊断”改“日志”，展示主聊天、辅助调用、Agent与配置操作的事件/调用状态/错误，并纳入现有崩溃诊断。采用单一AppEventLog有界本机持久记录与StateFlow，不复制聊天数据库、提示词、模型完整响应或凭据。诊断脱敏，流式token不逐个记录；不声称记录系统所有底层事件。日志不影响执行成功/失败边界。
+- 公共接口由后端代理提供：dev.gray.companion.AppEventLog对象，entries:StateFlow<List<AppLogEntry>>，errorSerial:StateFlow<Long>；AppLogEntry(id:Long,timeMillis:Long,level:AppLogLevel,source:String,message:String)；level枚举INFO/WARNING/ERROR；record(source:String,message:String,level:AppLogLevel=INFO)、clear()、install(Context)。默认按时间先后，UI可倒序。错误序号单调增长，清空不倒退。调用方不提交秘密/整段请求响应。
+- 移除常驻提示词预览入口但保留有效工具/预览实现。当前对话配置是当前会话身份、主调用、额外包/组及状态的编辑器，保留，说明用途。导航图标按功能语义独立分配；同一动作（返回/保存/删除）跨页保留一致图标，不强行每处随机换图。
+- 文件归属：backend负责AppEventLog、新必要测试、AppController/辅助调用/Agent后端事件及Application/CrashHandler接线；chat UI负责CompanionChatPage、ChatInput、TopBar和CrashDiagnosticsDialog日志展示；icon代理新建CompanionIcons及CompanionNavigation等非host导航；root独占OriginalFrontendHost、其他Toast普通提示接线和文档。跨边界接口如需更改先协调。
+- 实施补充：共享LocalToaster使用UiToaster适配器，原页面无需逐处替换；普通通知统一入日志，带实际action的Toast保留。无可定位资源的纯告知错误不打开设置问题面板；可跳转修复的交互面板保留。日志最近256条、单条420字符，后台原子写入；UI注意序号只在聊天页RESUMED时消费，同一错误不跨导航重复闪。模型请求序号跨实例共享。
+- 集中最少日志脱敏/有界行为检查和Android编译；不调用真实模型、不打包/安装、不改wire/execution/版本、不Git发布。
+
+## Revision89：调用编辑与已有宏设计（2026-10-13，已确认；沿用不打包）
+
+- 查明并复用文本输出的结果宏、记录轨迹与正则处理契约；撤下Revision87调用组首页“从记录创建宏”，不再维护重复的高层创建入口。已有资源不能被静默删除或转换。模型默认记录变化、非模型默认不记录，按用户要求提供可调入口；旧冻结执行保持历史语义。
+- 每个模型调用的生成参数与思考解析合为自己的可半展开、上拉扩展的底部面板，复用默认扩展已有组件。面板按钮有独立识别样式；页面跳转与开关沿用既有样式。折叠区增加左侧层级引导线，不用空白间距冒充分组。
+- 输入模板、标签与历史插入先核对实际消费者；有效功能改用明确名称与合理层级，不凭观感删运行时字段。不扩展成统一编辑所有模型调用，不新增宏存储或隐式提示注入。
+- 契约决定：execution28新增modelTrajectoryControl；旧冻结版本<=27保留模型强制留档，新版本尊重已有recordTrajectory。wire37不变；不凭无法判定来源的旧false字段强制迁移。关闭后最新结果宏、可见正文原文、回执和trace保留，隐藏模型的逐版原文不再另存；不新增旁路存储。
+- 主代理负责契约判断、宏编辑路径和集成；ui_notes88只读调查旧设计；recovery88_ui负责ProcessingEditors/EditorPrimitives/EditorSheet的面板与层级样式；recovery88_backend仅完成上一修订必要断言修复。最少检查集中于收尾，保留此前dirty，不打包/安装/发布。
+
+- 最终验收：23个core定向用例及3个LibraryEditPreparation用例通过；Android Kotlin编译和diff检查通过，作者目录92类型/18行为已生成。未打包、安装或实机体验验收；实际重跑与限制见HANDOFF。
+
+## Revision88：可继续的完成态（2026-10-13，已确认；本轮不打包）
+
+- 用户明确：手动停止和断点中断均作为已完成、仍可继续的状态；不因pendingRun全局禁用roll/候选切换、USER三点、编辑删除撤回或正常输入。真正运行中的互斥、旧结果隔离、来源校验仍保持。
+- 只使用原发送键位置的一个按钮：输入为空、非编辑态且存在可继续断点时替换为三角形继续键；有输入则是发送键，运行中沿用停止键。平时不展示断点卡/恢复入口，不抢占焦点。点击继续先按已有回执续跑；仍失败或存在不能自动处理的问题时，才展示可关闭的处理对话框。
+- 断点是可选续跑资料，不是会话锁。修改聊天路径、roll或开始新一轮时，在同一事务中基于已接受结果执行既有操作，并使不再对应当前路径的断点失效；不能先丢断点再发现操作失败。暂停的普通轮次撤回其USER保留完整检查点回滚；暂停的重新生成保留旧候选，不发布未接受的新候选。
+- 保持单一core/AppController/SQLite边界与冻结执行、回执不重复执行契约。停在无失败节点的可恢复日志也必须有明确定义的继续路径；不得靠虚构失败或自动跳过来冒充续跑。候选/用户版本的真实数据限制与运行时BUSY保护仍有效，不能被UI解锁绕过。
+- 文件归属：恢复后端代理负责AppController、core消息/路径/恢复引擎及最少定向用例；UI代理负责CompanionChatPage、ChatInput、RecoveryUi及必要消息菜单显示层；root负责基线、其他入口审查、集成和最少验收。跨边界接口先同步。
+- 不提升应用版本，不assemble/package/install APK；集中做必要编译和针对新契约的测试。保持之前所有未提交成果，不Git发布。实机交互体验留待用户后续要求打包后验收。
+- 追加确认：自动选项默认收成小图标，点击弹出、失焦关闭；重新生成仅保留在消息三点菜单，移除右侧常驻按钮和说明。用户确认全局清理界面辅助说明/提示性长文，保留按钮名称、字段标签、实际值和错误；不删除用户内容、提示词正文或代码注释。ui_notes88负责其他界面的说明文案，恢复UI三文件仍由原UI代理独占。
+
+## Revision87：实机Lookahead闪退、选项入口与记录转宏（2026-10-13，已确认）
+
+- 用户确认0.73上下滚动已修复，保留Rev86的列表/HTML生命周期设计。新实机崩溃栈位于Compose LookaheadPassDelegate放置流程；移除当前聊天导航不再使用的SharedTransitionLayout祖先，保留导航及聊天自身动画。根因判断基于实机堆栈和源码，交付仍需同设备复验。
+- 自动选项同时修复触发与可发现性：完整BODY接受后，同一来源因上下文编译更新而取消的请求可按新上下文重新调度；切源、会话或配置撤销旧授权。聊天界面明确展示生成入口和选项位置，不要求用户猜测消息菜单。
+- 记录转宏复用现有macro.process和TextProcessStep，不新建解析器/状态存储或变更wire。调用组首页提供“从记录创建宏”：选取同组工作流节点输出，编辑正则提取/替换，预览样本文本，命名macro.*；生成依赖来源节点的SET行为。保留来源记录，宏可在现有引用编辑器中选择，不自动注入主提示词。保存后随后续来源执行更新；不暗中回填历史。
+- 用户提供的粉色正文与状态栏资源包仅作实际配置参考；不硬编码字段，不改变正文外观或默认提示词。重复宏目标拒绝，输出键保持库内唯一；复用原生编辑器后续修改。
+- 文件归属：lookahead87负责OriginalFrontendHost祖先布局；options87负责AutomaticOptionsController及其测试、CompanionChatPage选项入口；记录转宏代理负责MainCallEditor、新建向导及必要引用可发现性；root负责基线、集成、版本与交付。跨文件先协调。
+- 验收集中执行触发时序、生成宏契约和APK构建；隔离模拟器检查新入口与向导。实机Lookahead快速滑动/重生成由用户安装复验，不进行额外付费模型调用或Git发布。
+- 实际结果：自动选项时序用例1项和APK构建通过；模拟器确认按钮可见/错误可读、记录载入/正则预览/创建保存，持久化节点契约核对通过。完整主聊天触发宏和真实选项生成未实测；实机Lookahead问题待复验。隔离测试数据已恢复，细节见HANDOFF。
+
+## Revision86：快速跨轮阅读、HTML生命周期与重生成定位（2026-10-13，0.73体验版）
+
+- 用户确认0.72在真我GT8Pro仍闪退、卡顿、定位失败；生成中快速上滑跨轮会跳顶，缓慢滑动正常。Rev79的Haze线索与模拟器阴性结果仅作历史证据，不再把其候选修复视为实机通过。
+- 源码已确认：列表未配置相邻预载；HTML高度仅在行内remember，离屏后恢复120dp；复用WebView仍清空文档重载；标题测高回调未校验文档身份。这些必须作为同一生命周期契约修复，不能只增大占位高度或减慢用户手势。
+- 保持单一LazyColumn滚动所有者、稳定物理输出ID、原CSS/插图/渐隐及Haze退出采样。页面作用域保留有界高度资料，以实际宽度/字号/文档身份隔离；复用/重载期间保留有效高度，只有当前文档和当前片段的真实测量能更新。相邻预载使用Compose支持的有界窗口；预组合不等于WebView异步内容已就绪，不宣称固定三轮已经加载。
+- 自动跟随必须确认真正的列表末项；再生成按对应USER稳定身份，在目标投影到位后执行一次锚定，失败清理请求。避免把后续每次BODY更新变成强制定位。
+- 文件归属：root维护基线、集成、窗口配置及验收；scroll86_audit调查并负责经确认的定位/跟随修改；html86_design负责HTML生命周期设计及经确认后的渲染修改。共享文件先协调。core/wire/数据库/模型请求契约不变，不Git发布。
+- 验收针对真实行高恢复、旧测高回调、快速跨轮和定位路径；统一构建/必要定向检查。实体机效果和无堆栈闪退保持未证实，不扩大为全量回归或付费模型测试。
+- 实现选择：HTML缓存为页面级256项数值LRU，无WebView/Context/正文持有；BODY首次用文字宽度估高120..8000dp，真实测量80..16000dp可缩小；模板任意CSS使估算不可能精确。Compose窗口为前后各2视窗，不是保证3轮全部DOM完成加载。reset保留文档及本地图片权限，release才销毁；导航token/片段revision/宽度共同校验，空shell不发布高度。
+- 用户明确闪退为整个应用退出。发现现有CrashHandler未在CompanionApplication安装；接入只记录异常类型/代码栈的本地记录，并在设置提供系统进程退出原因与WebView退出信息的查看/复制。异常message、系统description、native trace及聊天/凭据均不记录、不上传。HTML渲染器退出先移除/销毁实例再显示手动重载，不默认让宿主终止；这不是对手机闪退根因的确认。
+- 实际验收：16项定向检查、APK构建/同签名覆盖安装通过；隔离模拟器12轮离线长正文跨轮快速滚动及诊断查看/复制完成。BODY生成中跨轮、真实重生成完成、实体机闪退/帧率与renderer死亡恢复尚未验收。详细证据和限制见HANDOFF。
+
+## Revision85：统一HTML显示、自动选项、阅读性能与离线Agent规范（2026-10-13，已确认）
+
+- 用户报告0.70状态栏卡片出现内部滚动条、自动选项不自动触发、快速滚动新消息卡顿；插图提示词仍是多个文本框，要求使用其他调用同样的提示词编辑器。以0.71源码修复，保留Agent功能与既有未提交工作，不Git发布。
+- 查共同边界：正文与状态卡HTML统一内容测高/滚动所有权策略，避免各入口补丁；保留超长内容可访问性、无脚本/远端资源及已有渐隐。性能先定位懒列表/HTML创建与测高，不预设所有消息常驻或大范围重写。
+- 自动选项保持独立辅助调用，只有完整BODY来源可触发，切换/取消/新源不发布旧结果；修复必须依真实控制器与发布时序，不添加隐式提示词、盲重试或改变冻结执行语义。
+- 插图提示词复用现有通用块编辑器/宏引用/角色与位置等契约；旧配置兼容，新增结构只有必要时改变wire，原字段不得丢失。明确数据契约再落地。
+- 文档基线由root维护：开发模型的规范保存在现有AGENTS/DEVELOPMENT；内置Agent通过打包本地资料与可发现只读工具获得资源、插件、提示词及限制说明，不依赖联网查产品契约，也不宣称离线模型推理。避免复制多份漂移。
+- 写入归属：显示代理负责HtmlMacroDisplay/CardSnapshotPanel等渲染和ChatList预加载；选项代理负责AutomaticOptionsController与AppController选项发布接线；插图代理负责IllustrationSettingsPage及必要core配置兼容。root负责Agent离线资料、文档、导航/版本、集成与交付。跨共享接口先协调。
+- 追加范围：同分支新候选的异常边界与 USER 锚点；消息菜单删除移至上排图标、下排注册可重生成扩展图标。图标/无障碍名称/可用条件/真实回调为宿主 UI 契约，当前接入自动选项与插图，不给第三方资源虚构未实现字段。插图手动重绘以批次首张成功替换整条旧图，同源互斥与不确定交付保护保持。
+- 验收仅针对故障边界集中执行；优先可安装体验版。HTML实际截图/滚动和触发状态可在隔离模拟器验收；无法证实的性能根因及实体设备效果如实标注，不用编译代替体验通过。
+
+- 实际交付：11项定向检查通过，0.72 APK同签名安装通过，消息图标菜单与完整插图提示词编辑器已在模拟器检查。HTML性能未作实体机帧率验收；候选闪退无可用堆栈、未稳定复现，只补准备阶段异常边界和USER定位，不声称根因已确认。HTTPS本地模型端到端因测试证书安装命令被自动审批拒绝而未完成；不绕过，隔离数据已恢复。
+
+
+## Revision84：独立资源 Agent（2026-10-13，0.71体验版）
+
+- 目标：应用内独立 Agent 对话、工具记录、模型/思考选择、可见可编辑工作指令；读写专属工作区文本文件，查询资源/schema/实际提示词/当前会话，复用配置工作台暂存、检查和应用，并可编写受限 JavaScript 插件。用户已确认范围；既有插图小幅上下渐变保持。
+- 禁止 Agent 访问应用核心源码、APK/原生库、数据库、凭据、任意设备路径及 shell；没有热改核心或自重启能力。资源配置与插件遵循现有核心校验和授权契约，不新建第二套 Library/执行引擎。core wire36/execution27 无需为了 Agent 本身升级。
+- 运行隔离：Agent 单独的协程 Job/网络调用/持久对话记录，不使用 AppController.send/stop 或聊天 busy 标志。切离 Agent 页面不会取消任务。Agent 文件/模型推理不持有聊天 mutex；配置草稿使用现有 workspaceMutex；正式应用仅走 commitConfigurationWorkspace，BUSY 时保留草稿，不停止运行、不自动重放副作用。当前后台指进程仍存活期间与其他页面并行；不承诺 Android 杀进程后自动续跑付费请求。
+- 登录：采用官方 SIWC 开源本地应用动态客户端 + PKCE/state/nonce + 127.0.0.1 临时 callback 的原生移植，系统浏览器授权。OAuth token 在独立 Keystore 槽保存，不读取现有 Codex 登录、不写资源或 Agent 文件。验 ID token 签名/issuer/audience/nonce/expiry，推理要求 chatgpt.tokens.use.direct；串行刷新与登出撤销。Android 浏览器回跳尚待设备验收。
+- 推理：原生 Responses HTTP/SSE https://api.openai.com/v1/responses，OAuth bearer，store=false/stream=true，使用 instructions + input 数组，完整本地历史，无 previous_response_id。仅 response.completed 完成；incomplete/failed/断流区别处理，不盲重试。按账号 /models 返回选项；本地 namespaced function tools，不开 hosted tools/shell。
+- 文件：每个 Agent 聊天一份私有 workspaces/<id>/files 根；相对路径、规范路径和符号链接边界、UTF-8/大小/总量限制，写/替换/移动/删除用内容 hash CAS，原子写入。状态/凭据不在可见文件根。文件不会自行安装为插件；通过工作台预览/提交才进资源库。
+- 工作台：复用 ConfigurationToolGateway 和资源 schema；Agent 仅访问自己创建/明确关联的草稿，不抢占用户其他草稿。调用与结果形成记录；会话、文件和可恢复草稿资料保存于独立 Agent 存储。提示词预览复用现有编译路径，区分下一次预览与已经发送的记录，不伪称读取不可获得的数据。
+- 文件归属：root 负责 AppController 最小接线、AgentController/Responses transport/持久记录、导航、版本、集成与文档；agent_auth84 负责新 agent/AgentAuth.kt 与 OAuth 校验辅助和定向测试；agent_tools84 后续负责新 agent/AgentFiles.kt、AgentToolHost.kt 及工具定向测试（待明确接口）；UI 代理后续负责新 ui/AgentPage.kt（接口冻结后再交接）。未经协调不编辑共享文件。
+- 最少验收：文件边界/CAS、OAuth校验与流终态、工具草稿BUSY且聊天不中断、APK构建；隔离模拟器检查 Agent UI/文件编辑/工作台与聊天并行。真实账号授权需要用户在系统浏览器完成，不能把构建/替身当套餐推理已验证。保留79–83所有未提交工作，不作Git发布。
+- 官方依据：developers.openai.com/siwc/token-sharing-open-source/{sign-in,profiles-and-sessions,models-and-inference,preview-limitations}；纯Android直连为移植选择，Codex app-server 子进程方案不作为手机依赖。
+
+- 实际集成：AgentAuth/Files/Responses/ToolHost 共9项定向测试通过，APK编译与模拟器安装通过。模拟器验证文件保存、跨重启保留、工作台stage→恢复→preview→commit及提交后清除恢复资料；系统浏览器打开OpenAI登录页。修复导航栏遮挡与恢复列表重复。真实账号授权/token刷新/套餐推理未完成；本地合成主聊天并行试验因测试端点网络失败未形成并发证据，不能当并行端到端通过。
+- 最终实现细节：Agent配置计算/文件/网络在后台调度器，任务状态独立；工作台正式应用仍拒绝主聊天busy。输入历史保留加密reasoning及function output，缺失工具结果在重启/取消时标INTERRUPTED，不自动重放；最多32次推理/轮、上下文1M字符后显式清空。草稿只存累计命令和资源基线hash，恢复再比对并重新preview；原生工作台编辑也跟踪保存。
+
+
+## Revision82：插件宿主能力基线（2026-10-13，已实现）
+
+- 用户已确认本轮先完善插件底座：联网、显式权限、凭据引用、Agent 可发现接口与结构化错误；BizyAir 插图随后接入。本轮不实现插图排版、常驻 Agent、任意文件/进程/数据库访问或付费服务测试。现有未提交 Revision79–81 保留。
+- 保持 core → AppController → SqliteLibraryRepository 的单一执行与持久化边界。plugin.run 仍是普通行为；JavaScript v1 继续纯文本执行。v2 使用 async execute(context, host) 和版本化 host.invoke(capability, args)；首批 network.http、runtime.sleep、capabilities.describe。宿主能力通过注册式分发与机器可读描述扩展，不向 JavaScript 暴露 Android 对象。
+- PluginCode.permissions 为声明，不是授权。网络声明按精确 HTTPS origin、HTTP 方法、凭据别名约束；无通配域名。设备上的授权独立保存，绑定 plugin ID 与完整代码/权限摘要，导入、Agent 配置提交及插件更新不能自行授予能力。修改代码/权限须重新授权；每次宿主请求重新核验，以支持撤销。内部权限管理用明确授权/撤销按钮，不增加第二个扩展启停开关。
+- 凭据使用插件专属 Keystore 命名空间，资源/导出/Agent 仅含别名及配置状态。host HTTP 按声明向指定 origin 的指定 header 注入凭据，不提供明文读取 API。HTTP 采用独立受控客户端，无自动重定向/重试、无请求/响应日志；拒绝内网/本机/保留地址、URL 凭据和越权 headers；限制请求次数、大小与时间，取消时取消底层请求。原应用代理/网络配置在可行时复用，不能借代理绕过目的地址检查。
+- HTTP 返回结构化状态、headers、文本 body；HTTP 非2xx也作为可检查的响应，网络错误区分未发送与结果不确定，不能把未知结果标成安全自动重试。提供可取消 sleep 供异步任务轮询。本轮无跨进程远端任务续跑/恰好一次承诺，插件作者须保留 request ID，不能盲重发有副作用的请求。
+- v2 外部能力结果不进入纯重算配方，接受结果沿用现有回执与快照保留；分支重建绝不再次执行 v2。v1 冻结语义保持。新增 wire35/execution27，对旧执行版本中的 v2 明确拒绝，不提升旧冻结版本。
+- Agent 可通过 ConfigurationToolGateway 查询插件能力、真实 schema、示例、错误与本机授权/凭据是否已配置；不能通过配置工具授权或读取密钥。UI 可编辑声明、查看实际权限并授权/撤销、填写别名对应凭据；保持原生资源编辑器。
+- 文件归属：core_contract82 负责 core 插件契约/描述/校验/重放版本及定向测试；host_runtime82 负责 QuickJsPluginExecutor、PluginHostRuntime/HTTP 和定向测试；plugin_ui82 负责 ExtensionPages 与新 PluginAccessPanel；root 负责 PluginAccessStore、AppController/OriginalFrontendHost/ConfigurationToolGateway 接线、文档、构建集成与交付。共享接口变更先回 root。
+- 最少验收集中一次：声明/越权/旧版兼容/重放结果保留，受控 HTTP 与异步 JS 桥（不访问付费服务），应用构建。只对观察到的失败追加检查；设备授权交互与实际 BizyAir 由后续使用验收，不以编译冒充已验证。
+- 实际集成：PluginCapabilitiesTest3、CompletedWorldReplayTest5、PluginHostRuntimeTest3、QuickJsPluginExecutorTest3 共14项通过；HTTP权限以离线替身验证，QuickJS异步桥实际运行。示例真实导入/预览/内存应用通过，89类型/18行为及宿主schema已生成；0.69 APK构建与原签名校验通过。未安装、未验证实机授权页、DNS/TLS实网或真实BizyAir。
+- 初版网络策略确定为独立直连客户端，不继承应用代理；每次请求固定已检查的DNS结果、无自动重定向/重试，取消覆盖响应读取阶段。后续代理或其他能力必须显式补充权限与传输契约，不能绕过当前策略。
+
+Revision82当时源代码：0.69-preview / code237，wire35，execution27，SQLite1。文档修订82，2026-10-13；插件宿主能力见上方基线，实际验收见 HANDOFF。此前回复过程与设置入口等展示层调整、静态正文闪烁候选保留，实机效果仍待用户验收。旧资料见 `history/architecture-through-0.57.txt` 与 `ARCHITECTURE_HISTORY.md`。
+
+## Revision81：回复过程与分层编辑入口（2026-10-12）
+
+- 用户已确认：三点及其轨道平面同时转动，较预览略快；采用思考期间隐藏头像、完成后折向角色头像的方案。等待阶段左侧显示真实行为；思考出现后等待指示消失。思考尽量占满可用宽度，正文的既有渲染身份和布局不因动画重建；完成/取消时保留查看思考的入口，无思考时正常显示头像与正文。
+- 编辑界面：角色关联提示词包/调用组使用底部半展开框；主调用生成参数和思考解析合为一个底部框；正则输出副本由开关直接展开，取消外层折叠；角色基础设定改独立子页面，七项各自可折叠。底部框使用统一的上提面板按钮，与右箭头页面跳转区分。
+- 底部框与基础设定子页只编辑所属外层资源草稿，关闭/返回保留草稿，外层保存才提交。保留来源定位、宏编辑、标签、参数未配置语义与外层未保存保护。新底部框沿用稳定顶部安全区策略，保留半→全拖动、键盘避让与固定标题/关闭入口；不改变数据或执行版本。
+- 文件归属：root负责共享 EditorSheet.kt、角色 Editors.kt/基础子页、架构/版本/集成；generation_sheet81负责 ProcessingEditors.kt/MainCallEditor.kt/CallEditor.kt 内参数合并与正则开关；dynamic_reply81负责 CompanionChatPage/Projection、ChatList、ChatMessage/Avatar及必要思考/加载组件。共享接口变更先回root，无core/数据库改动。
+- 验收集中于最终Kotlin编译和必要可安装体验版本；仅针对实际生命周期/布局风险检查，不叠加大回归或真实模型请求。此前revision79 Haze退出采样和revision80卡片候选修复必须保留，实机体验不冒充已验证。
+- 用户追加：暂停后提供直接结束运行的明确入口（保留已接受结果），补齐消息三点菜单删除；不能让普通删除悄悄变成撤回整轮。message_delete81负责RecoveryUi/CompanionMessageToolbar，dynamic_reply81连接已有onDelete回调；如需改变核心删除/结束契约须由root先审定。暂停运行正式结束前继续保护冻结执行状态，失败必须显式反馈。
+- 用户追加：去除状态栏卡片外层淡蓝基底。CardSnapshotPanel 是运行时各区域共用容器，统一将外层Surface和WebView默认背景设透明，保留模板自定义CSS、原布局间距、错误及折叠内容；菜单对话框和布局管理自己的底色不受影响。generation_sheet81负责该定向调整，无资源格式变化。
+
+## Revision80：历史引用卡片与回复过程预览（2026-10-12，设计已由Revision81承接）
+
+- 已授权：修复历史引用编辑卡片半展开可点击、全展开失效的问题，并推荐其他适合半→全交互的位置；替换回复等待阶段兔子图标为三点环绕与当前行为提示。头像使用角色卡，用户现要求先比较常驻与动态方案再决定。
+- 卡片候选：保留 Material3 半/全拖动和底部/键盘安全区；顶部 safeDrawing 改为内容内固定 padding，避免 offset 消耗顶部 inset 再改变测量高度/展开锚点。1.5.0-alpha28 源码支持该风险分析，但旧版 API36 模拟器未稳定复现点击故障，不能宣称根因已证实或实机已修复。
+- 历史设计阶段的静态头像候选（已被Revision81替代）：Companion 首个思考块左侧28dp角色头像，无思考时在正文上方；原生消息布局与正文宽度不变。动态方案仅交互预览：准备阶段三点+行为，思考时无头像并占满可用宽度，完成后收向头像位置，点击头像重开思考。未决定前不将动态候选作为正式行为。
+- 三点运动根据用户截图近似制作，不是 Claude 原始代码；正式等待文案必须来自实际执行阶段，不能模拟不存在的工作。数据/wire/execution/SQLite不变。
+- 推荐复用处：宏选择及来源定位、注入行为的来源/接收槽选择、导入与移除影响预览；本轮仅建议，不全面重写编辑器。
+
+## Revision79：静态 HTML 正文整块闪空（2026-10-12）
+
+- 用户真我 GT 8 Pro 录屏证实：快速滚动点停、回到顶部后，文字和 CSS 背景整块消失再出现，标题、输入框和选项按钮保留。此故障不同于 revision78 的生成完成交接跳动。
+- 当前 HTML 位于 ChatList 的 Haze source 内，顶部渐变模糊无条件采样该 source。Haze 上游 #99、#583、#745 记录 WebView 在 RenderNode/RenderEffect 重复绘制时持续闪空；与当前代码和录屏高度吻合，仍须本机 A/B 确认，不能仅凭机型归因于 GPU 驱动。
+- 决定：ChatList 增加默认开启的 captureForBlur；Companion 阅读列表关闭该采样，因为正文及卡片均可能嵌入 WebView。页面背景仍作为 Haze source，顶部与输入区保留背景效果，但不再模糊采样聊天文字。原生消息概览不含 WebView，保留原路径。
+- 保持 CSS、正文测高、流式呈现、滚动行为、数据及执行契约不变。不上超长 WebView 软件位图或全局关闭硬件加速，不同时叠加多个渲染补丁。root 负责本次实现与打包；只做构建、同签名和定向启动检查，最终闪烁效果由用户实机验收。
+- 上游证据：[Haze #99](https://github.com/chrisbanes/haze/issues/99)、[Haze #745](https://github.com/chrisbanes/haze/issues/745)。隔离 API36/WebView133 模拟器原样式未复现，DOM 观察期间无正文变化、内部滚动或持续测高；该阴性结果不代表手机没有问题。
 
 ## Revision78：闭环修复、真实界面与请求边界验收（2026-10-12）
 
@@ -198,3 +344,18 @@ execution23 的小／大摘要必须提取配置 XML 标签中的非空文本后
 
 ### Revision76 packaging follow-up (2026-10-12)
 User requested packaging after source acceptance. Built 0.64-preview/code232, wire33/execution26 with :app:assembleDebug successfully (revision76-package.log). Existing signature verified against delivered 0.63: SHA256 certificate 8501445aff7bae47a3b69a8576a289aadfcd56a38a0ea38c28d548af2a60ba43. Package dev.gray.companion, minSdk26, arm64-v8a/x86_64. Delivered outputs/velune-0.64-preview.apk (99,407,776 bytes), SHA256 a13e51428987e1e3b4360f1397b8520a7009045b2f5237c7d8b0110aec3ea51b. Reused 36 focused passing checks; no repeat tests, installation, device visual verification, database mutation or Git publication. This supersedes prior no-packaging statements for Revision76.
+
+## 2026-10-13 / Revision83 BizyAir illustration baseline
+- Authorized: implement post-accepted-BODY background illustration extension, real minimal Google/DeepSeek/BizyAir probes, deliver usable APK. Provider keys remain memory-only for probes, never repository/deliverable. BizyAir account max2 concurrent; configurable1..2, queue/running/congestion UI.
+- Config is global `Library.illustration: IllustrationConfig`, built-in extra extension analogous AutomaticOptions; only list switch. Config includes model, editable task/guidance/requirements and macro template, characterId→appearance map, app57992 input mapping/default parameters. No hidden prompt. Image plans use strict XML `<illustrations><image after="p1"><prompt>...</prompt></image></illustrations>`; only latest assistant BODY is marked, context last2 user/assistant turns. Positive prompt only without quality words; stable quality/negative presets separate.
+- Results `Library.illustrationImages: List<IllustrationImage>` are display annotations outside Session/world execution. Identity sessionId/messageId/sourceKey derived from exact BODY text + active text revision. Never rewrite BODY/history/accepted world. Project only exact current source; hide on global disable, retain completed images. Local image files in app-private storage; no secrets in Library. Wire36, execution27 unchanged.
+- Root owns AppController integration, SQLite metadata, UI root wiring, docs/build/live probes. core agent owns Illustration.kt + Models Library fields + LibraryFormat + focused core tests, defines deterministic slices/XML/request builder. runtime agent owns IllustrationController/BizyAirClient/image storage and focused checks only (not AppController). UI agent owns IllustrationSettingsPage, ExtensionPages, inline rendering/projection wiring; root owns OriginalFrontendHost shared integration unless agreed.
+- Runtime triggered by existing bodyCommitted sites after durable commit. Jobs never hold main generation lock; device total max2, configurable lower cap. GET polling may retry bounded; POST never blind retry. Cancellation/disable removes queued work and prevents stale publication, accepted files retained. Publish callback uses controller mutex, current config+source validation, merges latest Library without revision bump/session rewrites. No resume billing on process restart; persisted completed images available.
+- Integration checks only touched XML/anchors, queue limit & stale publication, final APK compile/signature. One synthetic planning request per text provider and up to2 real images if necessary; no production DB mutation/Git publish. Device subjective fades and touch remain user acceptance.
+- Integration decisions: submitted BizyAir jobs retain their queue slot across disable/config/source changes until terminal status; only their publication is discarded. An unknown POST/status result latches queue suspension until explicit user acknowledgement. This is in-process control, not a durable remote task ledger; process death and tasks submitted from elsewhere still require checking BizyAir. POST 4xx explicit rejection is distinguished from unknown transport/5xx; only GET polling retries.
+- Images remain local device files. Annotation references are serialized in the library but image binary portability/export is not implemented. Inline renderer must validate files under the app illustrations directory and map only these images into custom HTML; do not relax arbitrary file/network loading.
+
+- Actual verification: 17 distinct focused checks passed (core3, queue3, body10, image projection1), final APK build/signature verified. Desktop synthetic live Google/DeepSeek planning and one BizyAir image succeeded; first malformed DeepSeek XML was rejected and visible-protocol retry passed. No Android installation/end-to-end/device visual checks; see Revision83 HANDOFF.
+
+
+Revision83 Android runtime follow-up (2026-10-13): Built-in BizyAir API and storage hosts opt in to proxy Fake-IP 198.18/15 resolution; arbitrary plugin HTTP retains public-only DNS validation. Request-scoped socket cleanup runs on NonCancellable IO. Illustration status/error lives above chat input to remain visible. Actual Android emulator → DeepSeek → BizyAir → local PNG → native and custom BODY rendering verified; see HANDOFF Android supplement.

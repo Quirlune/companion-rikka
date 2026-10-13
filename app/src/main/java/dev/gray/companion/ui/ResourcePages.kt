@@ -154,7 +154,7 @@ internal fun ResourceScreen(
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
             if (selected == ResourceKind.PACKAGE && onManageTags != null) item {
-                EditorDestinationRow("提示词标签", "管理全局标签目录") { onManageTags?.invoke() }
+                EditorDestinationRow("提示词标签") { onManageTags?.invoke() }
             }
             item {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -171,10 +171,6 @@ internal fun ResourceScreen(
                     singleLine = true,
                     shape = MaterialTheme.shapes.large,
                 )
-            }
-            if (rows.isNotEmpty()) item {
-                Text(if (selectingMain) "轻点选择当前主调用，长按查看资源操作。" else "轻点编辑，长按查看复制、删除等操作。",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (filtered.isEmpty()) {
                 item {

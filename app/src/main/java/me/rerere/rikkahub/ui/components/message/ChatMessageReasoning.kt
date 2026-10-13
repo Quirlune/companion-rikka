@@ -66,8 +66,9 @@ enum class ReasoningCardState(val expanded: Boolean) {
 private class ReasoningState(
     val scrollState: ScrollState,
     initialDuration: Duration,
+    initiallyExpanded: Boolean,
 ) {
-    var expandState by mutableStateOf(ReasoningCardState.Collapsed)
+    var expandState by mutableStateOf(if (initiallyExpanded) ReasoningCardState.Expanded else ReasoningCardState.Collapsed)
     var duration by mutableStateOf(initialDuration)
 
     fun onExpandedChange(nextExpanded: Boolean, loading: Boolean) {
@@ -80,7 +81,7 @@ private class ReasoningState(
 }
 
 @Composable
-private fun rememberReasoningState(reasoning: UIMessagePart.Reasoning): Pair<ReasoningState, Boolean> {
+private fun rememberReasoningState(reasoning: UIMessagePart.Reasoning, companionExpanded: Boolean): Pair<ReasoningState, Boolean> {
     val settings = LocalSettings.current
     val loading = reasoning.finishedAt == null
     val scrollState = rememberScrollState()
@@ -89,12 +90,15 @@ private fun rememberReasoningState(reasoning: UIMessagePart.Reasoning): Pair<Rea
         ReasoningState(
             scrollState = scrollState,
             initialDuration = reasoning.finishedAt?.let { it - reasoning.createdAt }
-                ?: (Clock.System.now() - reasoning.createdAt)
+                ?: (Clock.System.now() - reasoning.createdAt),
+            initiallyExpanded = companionExpanded,
         )
     }
 
-    LaunchedEffect(reasoning.reasoning, loading) {
-        if (loading) {
+    LaunchedEffect(reasoning.reasoning, loading, companionExpanded) {
+        if (companionExpanded) {
+            if (loading) scrollState.animateScrollTo(scrollState.maxValue)
+        } else if (loading) {
             if (!state.expandState.expanded && settings.displaySetting.showThinkingContent)
                 state.expandState = ReasoningCardState.Preview
             scrollState.animateScrollTo(scrollState.maxValue)
@@ -197,8 +201,9 @@ fun ChainOfThoughtScope.ChatMessageReasoningStep(
     assistant: Assistant?,
     fadeHeight: Float = 64f,
     collapsedAdaptiveWidth: Boolean = false,
+    companionExpanded: Boolean = false,
 ) {
-    val (state, loading) = rememberReasoningState(reasoning)
+    val (state, loading) = rememberReasoningState(reasoning, companionExpanded)
     val thinkingTitle = reasoning.reasoning.extractThinkingTitle()
     val showThinkingTitle = loading && thinkingTitle != null
     val chatFontFamily = LocalTextStyle.current.fontFamily

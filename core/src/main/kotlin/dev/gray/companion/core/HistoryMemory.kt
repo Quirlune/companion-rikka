@@ -42,7 +42,8 @@ import kotlinx.serialization.Serializable
     /** Original speaker filter, before selecting the range. null keeps all BODY source roles. */
     val sourceRole: Role? = null,
     /** TEXT inserts labelled floors into the outer prompt block; MESSAGES emits structured API messages. */
-    val readMode: HistoryReadMode = HistoryReadMode.MESSAGES
+    val readMode: HistoryReadMode = HistoryReadMode.MESSAGES,
+    val textPrefixes: HistoryTextPrefixes = HistoryTextPrefixes()
 )
 data class HistoryProjection(
     val messages: List<ChatMessage>, val issues: List<Issue> = emptyList(),

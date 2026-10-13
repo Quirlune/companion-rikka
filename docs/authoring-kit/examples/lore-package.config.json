@@ -1,0 +1,24 @@
+{
+  "format": "companion.config.v1",
+  "label": "字面世界观词条示例",
+  "resources": {
+    "packages": [
+      {
+        "id": "example_lore_package",
+        "namespace": "example_lore",
+        "name": "示例世界观",
+        "entries": [
+          {
+            "id": "example_lore_entry",
+            "key": "setting",
+            "title": "世界设定",
+            "text": "夜雨之后，旧钟楼会亮起一盏蓝灯。{{这段文字保持字面}}",
+            "order": 0,
+            "enabled": true,
+            "isTemplate": false
+          }
+        ]
+      }
+    ]
+  }
+}

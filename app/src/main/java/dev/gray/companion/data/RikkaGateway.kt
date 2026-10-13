@@ -15,6 +15,8 @@ import dev.gray.companion.core.Protocol
 import dev.gray.companion.core.Role
 import dev.gray.companion.core.ModelUsageRecord
 import dev.gray.companion.NativeProviderCodec
+import dev.gray.companion.AppEventLog
+import dev.gray.companion.AppLogLevel
 import dev.gray.companion.core.UsageStatus
 import dev.gray.companion.core.boundedModelFinishReason
 import kotlinx.coroutines.flow.collect
@@ -45,6 +47,7 @@ import okhttp3.OkHttpClient
 import org.koin.core.context.GlobalContext
 import java.util.concurrent.ConcurrentHashMap
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicLong
 
 class GatewayFailure(message: String, cause: Throwable? = null, retryable: Boolean = true,
     serialFallback: Boolean = false) : ModelRequestFailure(message, retryable, serialFallback, cause)
@@ -120,12 +123,29 @@ class RikkaGateway(
             if (delta is ModelDelta.Text) onDelta(delta.text)
         }.text
 
-    override suspend fun generateResponseAttempt(profile: ModelProfile, messages: List<ChatMessage>, onDelta: suspend (ModelDelta) -> Unit): ModelResponse =
-        requestPermits.withPermit {
-            connectionPermits[ModelCatalog.credentialId(profile)]?.withPermit {
-                request(profile, messages, onDelta)
-            } ?: request(profile, messages, onDelta)
+    override suspend fun generateResponseAttempt(profile: ModelProfile, messages: List<ChatMessage>, onDelta: suspend (ModelDelta) -> Unit): ModelResponse {
+        val requestId = requestSerial.incrementAndGet()
+        val label = "请求 #$requestId · profile=${profile.id.take(64)} · model=${profile.model.take(80)}"
+        AppEventLog.record("模型调用", "$label · 开始")
+        return try {
+            val response = requestPermits.withPermit {
+                connectionPermits[ModelCatalog.credentialId(profile)]?.withPermit {
+                    request(profile, messages, onDelta)
+                } ?: request(profile, messages, onDelta)
+            }
+            AppEventLog.record("模型调用", "$label · 完成")
+            response
+        } catch (cancelled: CancellationException) {
+            AppEventLog.record("模型调用", "$label · 取消", AppLogLevel.WARNING)
+            throw cancelled
+        } catch (failure: Exception) {
+            val safeMessage = (failure as? GatewayFailure)?.message?.takeIf {
+                it.length <= 240 && '\n' !in it && !it.trimStart().startsWith("{") && !it.trimStart().startsWith("[")
+            }
+            AppEventLog.record("模型调用", "$label · 失败：${failure.javaClass.simpleName}${safeMessage?.let { " · $it" }.orEmpty()}", AppLogLevel.WARNING)
+            throw failure
         }
+    }
 
     private suspend fun request(profile: ModelProfile, messages: List<ChatMessage>, onDelta: suspend (ModelDelta) -> Unit): ModelResponse {
         lastFailureMessage = null
@@ -260,6 +280,7 @@ class RikkaGateway(
     companion object {
         // Shared across chat candidates and title generation; acquire only around actual requests.
         private val requestPermits = Semaphore(4)
+        private val requestSerial = AtomicLong()
         private data class ConnectionPool(val limit: Int, val permits: Semaphore)
         private val connectionPools = ConcurrentHashMap<String, ConnectionPool>()
     }

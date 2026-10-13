@@ -30,7 +30,6 @@ internal fun PromptPreviewPage(controller: AppController) {
         item {
             Column(Modifier.padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextFieldLine("本轮输入", input, { input = it }, minLines = 3)
-                Text("使用当前对话的主调用、角色卡和已加载资源。", style = MaterialTheme.typography.bodySmall)
                 Button(onClick = {
                     compiling = true
                     scope.launch { try { result = controller.preview(input) } finally { compiling = false } }

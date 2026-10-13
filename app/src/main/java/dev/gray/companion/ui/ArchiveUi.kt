@@ -21,13 +21,12 @@ internal fun SaveChatDialog(library: Library, sessionId: String, onSave: (String
     var selected by remember(sessionId, library.chatFolders) { mutableStateOf(library.chatFolders.firstOrNull()?.id) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("收藏这段对话") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("收藏会保存此刻的独立快照，后续聊天修改不会改变它。")
             if (library.chatFolders.isEmpty()) Text("还没有收藏文件夹，请先创建。")
             else ChoiceLine("保存到", selected, library.chatFolders.map { it.id to it.name }) { selected = it }
         }
     }, confirmButton = {
         if (selected == null) TextButton(onClick = { onDismiss(); onOpenFolders() }) { Text("创建文件夹") }
-        else TextButton(onClick = { onSave(sessionId, selected!!); onDismiss() }) { Text("保存快照") }
+        else TextButton(onClick = { onSave(sessionId, selected!!); onDismiss() }) { Text("保存独立副本") }
     }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
 }
 
@@ -42,7 +41,6 @@ internal fun ChatArchiveScreen(library: Library, onBack: () -> Unit, onUpdate: (
     Column(Modifier.fillMaxSize()) {
         SettingsHeader("收藏夹", onBack)
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("聊天快照独立保存；恢复会新建普通对话。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(folderName, { folderName = it }, label = { Text("新文件夹名称") }, modifier = Modifier.weight(1f), singleLine = true)
                 Button(onClick = {
@@ -67,8 +65,8 @@ internal fun ChatArchiveScreen(library: Library, onBack: () -> Unit, onUpdate: (
                     Text(saved.snapshot.title.ifBlank { "未命名对话" }, style = MaterialTheme.typography.titleMedium)
                     Text("${library.chatFolders.firstOrNull { it.id == saved.folderId }?.name ?: "文件夹已移除"} · ${displayTime(saved.savedAt)} · ${saved.snapshot.messages.size} 条消息", style = MaterialTheme.typography.bodySmall)
                     Row {
-                        TextButton(onClick = { selectedSaved = saved }) { Text("查看快照") }
-                        TextButton(onClick = { onRestore(saved.id) }) { Text("恢复为新对话") }
+                        TextButton(onClick = { selectedSaved = saved }) { Text("查看副本") }
+                        TextButton(onClick = { onRestore(saved.id) }) { Text("打开为新对话") }
                         TextButton(onClick = { deleteSaved = saved }) { Text("删除") }
                     }
                 } }
@@ -83,20 +81,20 @@ internal fun ChatArchiveScreen(library: Library, onBack: () -> Unit, onUpdate: (
     }
     deleteFolder?.let { folder ->
         val count = library.savedChats.count { it.folderId == folder.id }
-        AlertDialog(onDismissRequest = { deleteFolder = null }, title = { Text("删除「${folder.name}」？") }, text = { Text("将同时删除其中 $count 个收藏快照，普通聊天不受影响。") },
+        AlertDialog(onDismissRequest = { deleteFolder = null }, title = { Text("删除「${folder.name}」？") }, text = { Text("将同时删除其中 $count 个收藏副本，普通聊天不受影响。") },
             confirmButton = { TextButton(onClick = {
                 onUpdate { lib -> lib.copy(chatFolders = lib.chatFolders.filterNot { it.id == folder.id }, savedChats = lib.savedChats.filterNot { it.folderId == folder.id }) }
                 if (selectedFolder == folder.id) selectedFolder = null
                 deleteFolder = null
             }) { Text("删除") } }, dismissButton = { TextButton(onClick = { deleteFolder = null }) { Text("取消") } })
     }
-    deleteSaved?.let { saved -> AlertDialog(onDismissRequest = { deleteSaved = null }, title = { Text("删除收藏快照？") }, text = { Text("只删除此快照，普通聊天不受影响。") },
+    deleteSaved?.let { saved -> AlertDialog(onDismissRequest = { deleteSaved = null }, title = { Text("删除收藏副本？") }, text = { Text("只删除此副本，普通聊天不受影响。") },
         confirmButton = { TextButton(onClick = { onUpdate { lib -> lib.copy(savedChats = lib.savedChats.filterNot { it.id == saved.id }) }; deleteSaved = null }) { Text("删除") } },
         dismissButton = { TextButton(onClick = { deleteSaved = null }) { Text("取消") } }) }
-    selectedSaved?.let { saved -> AlertDialog(onDismissRequest = { selectedSaved = null }, title = { Text(saved.snapshot.title.ifBlank { "收藏快照" }) }, text = {
+    selectedSaved?.let { saved -> AlertDialog(onDismissRequest = { selectedSaved = null }, title = { Text(saved.snapshot.title.ifBlank { "收藏副本" }) }, text = {
         Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             saved.snapshot.messages.forEach { message -> Text("${if (message.role == dev.gray.companion.core.Role.USER) "你" else "助手"} · ${displayTime(message.createdAt)}\n${message.text}") }
-            if (saved.snapshot.messages.isEmpty()) Text("这段快照没有消息。")
+            if (saved.snapshot.messages.isEmpty()) Text("这个副本没有消息。")
         }
     }, confirmButton = { TextButton(onClick = { selectedSaved = null }) { Text("关闭") } }) }
 }

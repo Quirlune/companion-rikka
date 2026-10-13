@@ -17,14 +17,11 @@ internal fun TextProcessingEditor(
     var expanded by remember { mutableStateOf(steps.isNotEmpty()) }
     TextButton(onClick = { expanded = !expanded }) { Text("$title · ${steps.size} 步 ${if (expanded) "收起" else "展开"}") }
     if (!expanded) return
-    Text("按顺序处理内容；正则在这里作用于当前文本。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     steps.forEachIndexed { index, step ->
         key(index) {
             val titleText = processKindChoices.firstOrNull { it.first == step.kind }?.second ?: step.kind.name
-            EditorSection("${index + 1}. $titleText", "当前文本 → 下一步", initiallyExpanded = true) {
+            EditorSection("${index + 1}. $titleText", initiallyExpanded = true) {
                 if (step.kind !in allowedKinds) {
-                    Text("旧版处理步骤已保留；此页只编辑正则步骤。", style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                     TextButton(onClick = { onChange(steps.filterIndexed { i, _ -> i != index }) }) {
                         Text("移除这项旧版处理")
                     }
@@ -55,7 +52,6 @@ internal fun TextProcessingEditor(
                     TextProcessKind.TRIM -> Text("移除内容首尾空白。", style = MaterialTheme.typography.bodySmall)
                     TextProcessKind.APPEND, TextProcessKind.PREPEND, TextProcessKind.FORMAT -> {
                         PromptTemplateField(if (step.kind == TextProcessKind.FORMAT) "格式模板" else "添加文本", step.text, references, { update(step.copy(text = it)) }, minLines = 2)
-                        if (step.kind == TextProcessKind.FORMAT) Text("{value} 代表当前文本；也可插入全局宏。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     TextProcessKind.INCREASE -> TextFieldLine("增减量（可为负数）", step.amount, { update(step.copy(amount = it)) })
                     TextProcessKind.CLAMP -> {
@@ -69,7 +65,6 @@ internal fun TextProcessingEditor(
                             "macro(\"$address\")"
                         })
                         ConditionExpressions.validate(step.expression)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-                        Text("当前文本可作为表达式输入。键入 {{ 插入 macro(\"地址\")；只读且不执行任意代码。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -94,12 +89,16 @@ private val processKindChoices = listOf(
 
 @Composable
 internal fun NodeModelOptionsEditor(node: WorkflowNode, profiles: List<ModelProfile>, onChange: (WorkflowNode) -> Unit, references: List<PromptReferenceChoice>) {
-    PromptTemplateField("输入模板", node.inputTemplate, references, { onChange(node.copy(inputTemplate = it)) }, minLines = 2)
-    TextProcessingEditor("输入内容处理", node.inputProcessing, references) { onChange(node.copy(inputProcessing = it)) }
+    EditorSection("输入内容", initiallyExpanded = true) {
+        PromptTemplateField("发送给模型的内容", node.inputTemplate, references,
+            { onChange(node.copy(inputTemplate = it)) }, minLines = 2)
+        TextProcessingEditor("输入内容处理", node.inputProcessing, references) {
+            onChange(node.copy(inputProcessing = it))
+        }
+    }
     SharedModelGenerationEditor(node.generation, node.reasoningParsing, profiles) { generation, parsing ->
         onChange(node.copy(generation = generation, reasoningParsing = parsing))
     }
-    TextProcessingEditor("输出内容处理", node.outputProcessing, references) { onChange(node.copy(outputProcessing = it)) }
 }
 
 /** Model choice and native generation overrides shared by focused editors. */
@@ -114,9 +113,31 @@ internal fun SharedModelGenerationEditor(
         onChange(options.copy(profileId = it), reasoningParsing)
     }
     val parameterCount = listOf(options.temperature, options.topP, options.maxTokens, options.reasoning).count { it != null }
-    EditorSection("生成参数", "$parameterCount 项 · 未添加的参数不发送", initiallyExpanded = false) {
-        Text("只发送在此添加的参数。请按所用模型的支持范围选择；服务商必填的协议字段仍会提供。",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    var settingsOpen by remember { mutableStateOf(false) }
+    EditorSheetButton("生成参数与思考解析", "$parameterCount 项参数") { settingsOpen = true }
+    if (settingsOpen) EditorModalSheet(
+        title = "生成参数与思考解析",
+        minimumHeight = 560.dp,
+        onDismiss = { settingsOpen = false },
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("生成参数", style = MaterialTheme.typography.titleMedium)
+            GenerationParameterFields(options, reasoningParsing, onChange)
+            HorizontalDivider()
+            Text("思考解析", style = MaterialTheme.typography.titleMedium)
+            ReasoningParsingEditor(options, reasoningParsing, onChange)
+        }
+    }
+}
+
+@Composable
+private fun GenerationParameterFields(
+    options: ModelCallOptions,
+    reasoningParsing: ReasoningParsingConfig?,
+    onChange: (ModelCallOptions, ReasoningParsingConfig?) -> Unit,
+) {
+    val parameterCount = listOf(options.temperature, options.topP, options.maxTokens, options.reasoning).count { it != null }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         options.temperature?.let { value ->
             GenerationParameterRow("温度", { onChange(options.copy(temperature = null), reasoningParsing) }) {
                 GenerationFloatLine("温度", value, 0f..2f) { onChange(options.copy(temperature = it), reasoningParsing) }
@@ -140,8 +161,6 @@ internal fun SharedModelGenerationEditor(
                     else -> it.name
                 } }) { onChange(options.copy(reasoning = it), reasoningParsing) }
             }
-            Text("自动按接口采用自适应推理或请求思考摘要；各模型支持的档位不同。若不需要传递推理设置，请移除此项。",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         var adding by remember { mutableStateOf(false) }
         Box {
@@ -162,7 +181,15 @@ internal fun SharedModelGenerationEditor(
             }
         }
     }
-    EditorSection("思考解析", if (reasoningParsing == null) "使用全局解析设置" else "此行为单独设置") {
+}
+
+@Composable
+private fun ReasoningParsingEditor(
+    options: ModelCallOptions,
+    reasoningParsing: ReasoningParsingConfig?,
+    onChange: (ModelCallOptions, ReasoningParsingConfig?) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         ToggleLine("覆盖全局思考解析", reasoningParsing != null) { enabled ->
             onChange(options, if (enabled) ReasoningParsingConfig() else null)
         }
@@ -218,9 +245,8 @@ internal fun MacroProcessEditor(node: WorkflowNode, onChange: (WorkflowNode) -> 
         OutlinedButton(onClick = { creation = MacroProcessMode.SET }) { Text("新建宏") }
         OutlinedButton(onClick = { creation = MacroProcessMode.COPY }) { Text("制作副本") }
     }
-    EditorSection("高级目标地址", config.key.ifBlank { "macro. 或 state. 地址" }) {
+    EditorSection("高级目标地址", config.key.ifBlank { "未设置" }) {
         TextFieldLine("目标地址", config.key, { onChange(node.copy(macroProcess = config.copy(key = it))) })
-        Text("现有状态可以直接选取；新宏使用 macro. 地址。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     ChoiceLine("方式", config.mode, listOf(
         MacroProcessMode.SET to "设定内容", MacroProcessMode.UPDATE to "更新现有值",
@@ -231,7 +257,6 @@ internal fun MacroProcessEditor(node: WorkflowNode, onChange: (WorkflowNode) -> 
         MacroProcessMode.COPY -> {
             TextFieldLine("来源宏及版本", config.source, { onChange(node.copy(macroProcess = config.copy(source = it))) })
             PromptReferencePicker(sourceChoices, { onChange(node.copy(macroProcess = config.copy(source = it))) })
-            Text("复制选定版本当时的值，之后独立更新；指定版本缺失会报错。", style = MaterialTheme.typography.bodySmall)
         }
         MacroProcessMode.ENABLE, MacroProcessMode.DISABLE -> Text("只改变目标宏的可见状态。", style = MaterialTheme.typography.bodySmall)
         MacroProcessMode.SET -> {
@@ -246,7 +271,6 @@ internal fun MacroProcessEditor(node: WorkflowNode, onChange: (WorkflowNode) -> 
     if (config.mode !in setOf(MacroProcessMode.ENABLE, MacroProcessMode.DISABLE)) {
         TextProcessingEditor("处理目标内容", config.steps, references) { onChange(node.copy(macroProcess = config.copy(steps = it))) }
     }
-    if (node.arguments.isNotEmpty()) Text("旧类型参数仍保存在此行为；切换回原类型可继续编辑。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     if (creation != null) AlertDialog(onDismissRequest = { creation = null }, title = { Text(if (creation == MacroProcessMode.COPY) "制作宏副本" else "新建宏") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -277,7 +301,6 @@ internal fun PromptManagementEditor(node: WorkflowNode, nodes: List<WorkflowNode
             onChange(node.copy(arguments = node.arguments + ("id" to it)))
         }
         TextFieldLine("注入标识", id, { onChange(node.copy(arguments = node.arguments + ("id" to it))) })
-        Text("移除本所有者以此标识添加的注入；也可填写其他调用中使用的标识。", style = MaterialTheme.typography.bodySmall)
     }
     if (inject) {
         val navigation = LocalSourceNavigation.current
@@ -368,9 +391,7 @@ internal fun PromptManagementEditor(node: WorkflowNode, nodes: List<WorkflowNode
             val arguments = node.arguments + ("targetBlockId" to it)
             onChange(node.copy(arguments = if (it.isNotBlank() && "contextOrder" !in arguments) arguments + ("contextOrder" to "1") else arguments))
         }
-        if (main == null) Text("选择库中的主调用后，可查看模型行为和接收槽；不需要先打开聊天。", style = MaterialTheme.typography.bodySmall)
-        else if (targets.isEmpty()) Text("此主调用没有启用的模型行为，请先在主调用中添加或启用。原目标尚未改变。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-        Text("主调用用于定位模型行为；运行时目标仍须属于聊天实际使用的主调用。切换目标会清除失效接收槽，请重新选择。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (main != null && targets.isEmpty()) Text("此主调用没有启用的模型行为，请先在主调用中添加或启用。原目标尚未改变。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         if (blockId.isNotBlank()) {
             Text(slot?.let { "继承接收槽：${it.role.name} · 跟随槽的列表位置。槽停用或条件不满足时，内容不发送。" }
                 ?: "所选槽已删除、停用或不属于当前目标；运行会报告，不会改为普通注入。请明确重选槽或普通注入。",
@@ -388,8 +409,6 @@ internal fun PromptManagementEditor(node: WorkflowNode, nodes: List<WorkflowNode
                 if (value.toIntOrNull()?.let { it > 0 } == true) onChange(node.copy(arguments = node.arguments + ("contextOrder" to value)))
             }, label = { Text("自定义上下文顺序 · 正整数") }, modifier = Modifier.fillMaxWidth(), singleLine = true, isError = invalidOrder)
             if (invalidOrder) Text("请输入正整数；当前输入尚未应用。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-            Text("仅控制同一接收槽内提示内容的位置，数字小的在前；同号按固定定义顺序排列。与调用的排队级别、并行或排队执行无关。", style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
             ChoiceLine("角色", node.arguments["role"] ?: Role.SYSTEM.name, Role.entries.map { it.name to it.name }) { onChange(node.copy(arguments = node.arguments + ("role" to it))) }
             ChoiceLine("位置", node.arguments["position"] ?: PromptPosition.BEFORE_HISTORY.name, listOf(
@@ -397,16 +416,15 @@ internal fun PromptManagementEditor(node: WorkflowNode, nodes: List<WorkflowNode
             if (node.arguments["position"] == PromptPosition.IN_HISTORY.name) TextFieldLine("距历史末尾的消息数", node.arguments["depth"] ?: "0", { onChange(node.copy(arguments = node.arguments + ("depth" to it))) })
         }
         ChoiceLine("持续时间", node.arguments["scope"] ?: InjectionScope.TURN.name, listOf("TURN" to "仅当前轮", "SESSION" to "整个聊天", "CURRENT" to "仅当前轮（旧配置）").filter { it.first != "CURRENT" || node.arguments["scope"] == "CURRENT" }) { onChange(node.copy(arguments = node.arguments + ("scope" to it))) }
-        EditorSection("高级注入设置", "标识、空内容处理与文本处理") {
+        EditorSection("高级注入设置") {
             TextFieldLine("注入标识", id, { onChange(node.copy(arguments = node.arguments + ("id" to it))) })
             Text("同一所有者以此标识更新或移除注入。", style = MaterialTheme.typography.bodySmall)
             ChoiceLine("内容为空时", node.arguments["emptyBehavior"] ?: "ALLOW", listOf("ALLOW" to "仍插入空内容", "SKIP" to "跳过本次注入", "REMOVE" to "移除同标识注入")) { onChange(node.copy(arguments = node.arguments + ("emptyBehavior" to it))) }
             TextProcessingEditor("注入内容处理", node.inputProcessing, references) { onChange(node.copy(inputProcessing = it)) }
         }
-        Text("注入须在目标模型请求开始前完成；可在调用的时机设置中选择正文准备前。上下文顺序不改变触发时机或调用排队，选择接收槽也不会自动修改其他行为。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     val known = if (inject) setOf("id", "role", "position", "depth", "targetWorkflowId", "targetNodeId", "targetBlockId", "contextOrder", "scope", "emptyBehavior") else setOf("id")
-    if (node.arguments.keys.any { it !in known }) EditorSection("兼容参数", "保留的其他参数") {
+    if (node.arguments.keys.any { it !in known }) EditorSection("兼容参数") {
         ActionArgumentForm(node, null, onChange, references)
     }
 }

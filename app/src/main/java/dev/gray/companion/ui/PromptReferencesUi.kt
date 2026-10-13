@@ -301,7 +301,6 @@ internal fun PromptReferenceSheet(
                 OutlinedTextField(search, { search = it }, label = { Text("搜索资料、调用或分类") },
                     modifier = Modifier.fillMaxWidth(), singleLine = true, shape = MaterialTheme.shapes.large)
             }
-            item { Text("目录包含当前聊天、编辑配置与可绑定的提示词包；未加载的资料会标明，本轮结果需成功完成后才能引用。", style = MaterialTheme.typography.bodySmall) }
             if (choices.any { it.macro.startsWith("{{type:builtin.in:history.name:messages") || it.macro.startsWith("{{type:builtin.in:history.name:context") }) {
                 onConfigureHistory?.let { configure -> item {
                     TextButton(onClick = { configure(); onDismiss() }) { Text("历史上下文…") }
@@ -351,8 +350,6 @@ internal fun PromptReferenceSheet(
                 item { TextButton(onClick = { formatsExpanded = !formatsExpanded }) { Text(if (formatsExpanded) "收起其他宏格式" else "其他宏格式") } }
                 if (formatsExpanded) item {
                     MacroHelp { macro -> onInsert(macro); onDismiss() }
-                    Text("XML 词条可在版本之后添加 #tag/path，例如 {{pack.namespace.key@turn-1#profile/name}}。资料分类可用 {{category.name#tag}}。",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             item { TextButton(onClick = onDismiss) { Text("关闭") } }
@@ -392,15 +389,12 @@ private fun HistoryReferenceComposer(choices: List<PromptReferenceChoice>, onIns
     TextButton(onClick = { open = !open }) { Text(if (open) "收起历史范围选择" else "自选历史范围与副本") }
     if (!open) return
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("每条引用独立选择楼层；整块插入可保留消息角色。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         ChoiceLine("读取内容", processed, listOf(false to "原始楼层", true to "历史规则与摘要处理后")) { processed = it }
         ChoiceLine("正文来源", source, listOf("display" to "最终展示正文", "model" to "模型初始原文")) {
             source = it; viewId = null; fixedRevision = false
         }
         if (source == "model") Text("早期楼层若没有归档模型原文，会明确提示缺失。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         ChoiceLine("来源发言方", sourceRole, historySourceRoleChoices) { sourceRole = it }
-        if (sourceRole != null) Text("先筛原发言方，再在匹配楼层中计算范围；不指定范围时读取全部匹配来源。发送 API 角色在当前引用的历史设置中另行调整。",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             SuggestionChip(onClick = { range = true; fromAnchor = "start"; fromNumber = "1"; throughAnchor = "start"; throughNumber = "3" }, label = { Text("最早三层") })
             SuggestionChip(onClick = { range = true; fromAnchor = "end"; fromNumber = "3"; throughAnchor = "end"; throughNumber = "1" }, label = { Text("最近三层") })
@@ -489,7 +483,6 @@ internal fun CallScheduleOverview(workflows: List<Workflow>, primaryId: String?,
                 Text("自定义事件触发", style = MaterialTheme.typography.titleSmall)
                 custom.forEach { call -> ScheduleCallRow(call, primaryId, selectedId, onSelect) }
             }
-            Text("同一事件内，较小排队级别先完成；同级独立调用并行。普通调用参与级别 0，节点依赖仍须完成。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

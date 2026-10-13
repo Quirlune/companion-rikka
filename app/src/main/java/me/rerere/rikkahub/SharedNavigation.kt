@@ -27,6 +27,8 @@ sealed interface Screen : NavKey {
     @Serializable data object CompanionConfigurationWorkspace : Screen
     @Serializable data object CompanionBodyColors : Screen
     @Serializable data object CompanionAutomaticOptions : Screen
+    @Serializable data object CompanionAgent : Screen
+    @Serializable data object CompanionIllustration : Screen
     @Serializable data class CompanionMemory(val visitId: String = "", val focus: dev.gray.companion.core.ResourceLocation? = null) : Screen
     @Serializable data object CompanionReasoning : Screen
     @Serializable data object CompanionImportHistory : Screen

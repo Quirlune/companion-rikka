@@ -72,8 +72,10 @@ internal class OutcomePublisher(
         for (address in (values.keys + activations.keys).distinct()) {
             val copy = ref.node.regexOutputCopy
             val modelOwnResult = semantics.retainModelResults && address == ownAddress && ref.action?.descriptor?.usesModel == true
-            val record = !semantics.currentOnlyMacros || modelOwnResult || if (copy.enabled && address == "result.${copy.outputKey}")
-                copy.recordTrajectory else ref.node.recordTrajectory
+            val record = !semantics.currentOnlyMacros ||
+                (modelOwnResult && !semantics.modelTrajectoryControl) ||
+                (if (copy.enabled && address == "result.${copy.outputKey}")
+                    copy.recordTrajectory else ref.node.recordTrajectory)
             val head = heads[address]
             if (record && head == null && address !in history && address.startsWith("result.")) {
                 val key = address.substringAfter("result.")

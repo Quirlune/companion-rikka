@@ -7,6 +7,26 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class BodyAppearanceMarkupTest {
+    @Test fun illustrationAnchorFollowsWholeSourceParagraphNotHtmlChildIndex() {
+        val root = java.io.File("illustrations")
+        val image = IllustrationBodyImage("p1", java.io.File(root, "one.png"),
+            "https://companion.invalid/illustration/abcd-1234/0", root)
+        val source = "# Heading\nFirst paragraph.\n\nSecond paragraph."
+        val html = BodyAppearanceMarkup.renderWithIllustrations("<article>{{正文}}</article>", source, listOf(image))
+        val doc = Jsoup.parseBodyFragment(html)
+        val picture = doc.selectFirst(".companion-generated-illustration")!!
+        assertEquals("First paragraph.", picture.previousElementSibling()?.text())
+        assertEquals("Second paragraph.", picture.nextElementSibling()?.text())
+        assertEquals(image.requestUrl, picture.selectFirst("img")?.attr("src"))
+        assertEquals(1, doc.select("img").size)
+        val separated = Jsoup.parseBodyFragment(BodyAppearanceMarkup.renderWithIllustrations(bodyAppearanceExample, source, listOf(image)))
+        val textNodes = separated.select(".body-note .companion-markdown > :not(.companion-generated-illustration)")
+        assertTrue(textNodes.isNotEmpty())
+        assertTrue(textNodes.none { it.select("img").isNotEmpty() })
+        assertEquals(1, separated.select(".body-note > .companion-markdown > .companion-generated-illustration img").size)
+        assertTrue(separated.select("style").joinToString { it.data() }.contains("width:100%;height:auto;max-width:100%;max-height:none"))
+    }
+
     @Test fun nativeColorsPreserveTextAndExcludeInlineCode() {
         val source = androidx.compose.ui.text.AnnotatedString.Builder("bold “quote” \"code\"").apply {
             addStyle(androidx.compose.ui.text.SpanStyle(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold), 0, 4)

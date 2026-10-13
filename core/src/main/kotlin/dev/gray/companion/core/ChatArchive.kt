@@ -7,6 +7,14 @@ import kotlinx.serialization.Serializable
 @Serializable data class UserIdentity(val name: String = "用户", val avatar: AvatarImage? = null)
 
 object ChatArchive {
+    /** One-click collection; never move, link or replace the source conversation. */
+    fun saveCurrentCopy(library: Library, sessionId: String): Library {
+        val folder = library.chatFolders.firstOrNull { it.name == "收藏" } ?: ChatFolder(name = "收藏")
+        val prepared = if (library.chatFolders.any { it.id == folder.id }) library
+            else library.copy(chatFolders = library.chatFolders + folder)
+        return save(prepared, sessionId, folder.id)
+    }
+
     fun save(library: Library, sessionId: String, folderId: String): Library {
         require(library.chatFolders.any { it.id == folderId }) { "收藏文件夹不存在" }
         val session = requireNotNull(library.sessions.firstOrNull { it.id == sessionId }) { "对话不存在" }
@@ -15,8 +23,12 @@ object ChatArchive {
         val version = session.pendingRun?.executionVersion ?: session.executableWorld?.executionVersion
             ?: ExecutionSemantics.CURRENT
         val world = CompletedWorlds.capture(resources, session, "", version)
-        val snapshot = session.copy(executableWorld = world)
-        return library.copy(savedChats = library.savedChats + SavedChat(folderId = folderId, snapshot = snapshot))
+        val snapshotId = newId()
+        val snapshot = session.copy(id = snapshotId, executableWorld = world,
+            pendingRun = session.pendingRun?.rebindForRestore(session.id, snapshotId))
+        return library.copy(savedChats = library.savedChats + SavedChat(folderId = folderId, snapshot = snapshot),
+            illustrationImages = library.illustrationImages + library.illustrationImages
+                .filter { it.sessionId == session.id }.map { it.copy(sessionId = snapshotId) })
     }
 
     /** Copy all conversation state; only the owner identity and displayed name change. */
@@ -35,7 +47,9 @@ object ChatArchive {
             folderId = saved.snapshot.folderId?.takeIf { id -> library.chatFolders.any { it.id == id } },
             pendingRun = saved.snapshot.pendingRun?.rebindForRestore(saved.snapshot.id, restoredId),
             updatedAt = System.currentTimeMillis())
-        return library.copy(sessions = listOf(chat) + library.sessions, selectedSessionId = chat.id)
+        return library.copy(sessions = listOf(chat) + library.sessions, selectedSessionId = chat.id,
+            illustrationImages = library.illustrationImages + library.illustrationImages
+                .filter { it.sessionId == saved.snapshot.id }.map { it.copy(sessionId = restoredId) })
     }
 
     private fun RunRecovery.rebindForRestore(sourceId: String, restoredId: String): RunRecovery {

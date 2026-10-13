@@ -36,6 +36,38 @@ class RecoveryTest {
         kind = MacroTileKind.STATUS, fields = listOf(MacroStatusField("love", "Love",
             MacroTileKind.PROGRESS, 0.0, 100.0)))
 
+    @Test fun stopBeforeFirstNodePublishesAnEmptyResumableJournal() = runBlocking {
+        val before = session()
+        val resources = library(before, listOf(Workflow(id = "flow", nodes = listOf(
+            WorkflowNode(id = "slow", outputKey = "reply", visible = true,
+                blocks = listOf(PromptBlock(template = "slow")))))))
+        val checkpointSaved = CompletableDeferred<Unit>()
+        var saved = before
+        val waiting = object : ModelGateway {
+            override suspend fun generate(profile: ModelProfile, messages: List<ChatMessage>,
+                onDelta: suspend (String) -> Unit): String = awaitCancellation()
+        }
+        val job = launch {
+            WorkflowEngine().run(resources, before, "hello", waiting) { update ->
+                update.progress?.let { progress ->
+                    saved = if (saved.pendingRun == null) MessageOperations.recordPartialTurn(saved, progress).session!!
+                        else MessageOperations.continuePartialTurn(saved, progress).session!!
+                    checkpointSaved.complete(Unit)
+                }
+            }
+        }
+        withTimeout(5_000) { checkpointSaved.await() }
+        job.cancelAndJoin()
+        assertTrue(saved.pendingRun!!.accepted.isEmpty())
+        assertTrue(saved.pendingRun!!.failures.isEmpty())
+        val resumed = WorkflowEngine().continueInterrupted(resources, saved, object : ModelGateway {
+            override suspend fun generate(profile: ModelProfile, messages: List<ChatMessage>,
+                onDelta: suspend (String) -> Unit): String = "continued"
+        }, saved.pendingRun!!)
+        assertEquals(RunStatus.SUCCESS, resumed.status)
+        assertEquals("continued", resumed.results["reply"])
+    }
+
     @Test fun unknownJournalVersionsKeepAcceptedDataWithoutExecution() = runBlocking {
         val before = session()
         val base = library(before, listOf(Workflow(id = "flow", nodes = listOf(WorkflowNode(id = "failed")))))
@@ -52,7 +84,8 @@ class RecoveryTest {
             override suspend fun generate(profile: ModelProfile, messages: List<ChatMessage>,
                 onDelta: suspend (String) -> Unit): String { calls++; error("Unknown journals must not execute") }
         }
-        for (unknown in listOf(journal.copy(formatVersion = 2), journal.copy(executionVersion = 9))) {
+        for (unknown in listOf(journal.copy(formatVersion = 2),
+            journal.copy(executionVersion = ExecutionSemantics.CURRENT + 1))) {
             val current = before.copy(pendingRun = unknown)
             val result = WorkflowEngine().resume(base, current, gateway, unknown,
                 RecoveryDecision(RecoveryDecisionKind.RETRY, "flow/failed"))
@@ -118,11 +151,16 @@ class RecoveryTest {
         }, mainCalls = listOf(base.mainCalls.single().copy(slug = "renamed_main", avatar = null,
             workflows = listOf(flow.copy(slug = "renamed_call", nodes = listOf(renamedGood, changed))))), sessions = listOf(restored))
         val changedRuntimeName = edited.copy(characters = edited.characters.map { it.copy(name = "Changed") })
-        val conflict = engine.resume(changedRuntimeName, restored, gateway, restored.pendingRun!!,
+        val frozenAttempt = engine.resume(changedRuntimeName, restored, gateway, restored.pendingRun!!,
             RecoveryDecision(RecoveryDecisionKind.RETRY, "flow/bad"))
-        assertEquals(RecoveryFailureKind.CONFLICT, conflict.recovery!!.failures.first().kind)
-        var resuming = restored
-        val final = engine.resume(edited, restored, gateway, restored.pendingRun!!,
+        assertEquals(RecoveryFailureKind.OUTPUT_FORMAT, frozenAttempt.recovery!!.failures.first().kind)
+        assertEquals("kept", frozenAttempt.results["good"])
+        // Recovery edits validate against the captured catalogue, not tags created in live resources.
+        val repaired = RecoveryPromptEdits.apply(restored.pendingRun!!, "flow/bad",
+            changed.blocks.map { it.copy(tagIds = emptyList()) })
+        val repairedSession = restored.copy(pendingRun = repaired)
+        var resuming = repairedSession
+        val final = engine.resume(edited, repairedSession, gateway, repaired,
             RecoveryDecision(RecoveryDecisionKind.RETRY, "flow/bad")) { update ->
                 update.progress?.let {
                     assertEquals(avatar, it.recovery!!.frozenResources.mainCalls.single().avatar)
@@ -159,6 +197,26 @@ class RecoveryTest {
         job.cancelAndJoin()
         assertEquals("kept", interrupted.results["good"])
         assertNotNull(interrupted.pendingRun)
+        val interruptedFailures = interrupted.pendingRun!!.failures
+        assertTrue(interruptedFailures.isNotEmpty())
+        assertTrue(interruptedFailures.all { it.provisional && it.nodeKey != "flow/good" })
+        var resumedSaved = interrupted
+        var replayedGoodCalls = 0
+        val resumedGateway = object : ModelGateway {
+            override suspend fun generate(profile: ModelProfile, messages: List<ChatMessage>,
+                onDelta: suspend (String) -> Unit): String = if (messages.any { it.text == "good" }) {
+                replayedGoodCalls++
+                "unexpected"
+            } else "<ok>continued</ok>"
+        }
+        val completedInterrupted = engine.resume(base, interrupted, resumedGateway,
+            interrupted.pendingRun!!, RecoveryDecision(RecoveryDecisionKind.RETRY, "flow/bad")) { update ->
+            update.progress?.let { resumedSaved = MessageOperations.continuePartialTurn(resumedSaved, it).session!! }
+        }
+        assertEquals(RunStatus.SUCCESS, completedInterrupted.status)
+        assertEquals(0, replayedGoodCalls)
+        assertEquals("kept", completedInterrupted.results["good"])
+        assertEquals(null, MessageOperations.continuePartialTurn(resumedSaved, completedInterrupted).session!!.pendingRun)
 
         val slow = WorkflowNode(id = "slow", outputKey = "slow", visible = true,
             blocks = listOf(PromptBlock(template = "slow")))

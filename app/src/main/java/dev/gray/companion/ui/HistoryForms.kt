@@ -44,7 +44,6 @@ internal fun HistoryConfigEditor(
     history: HistoryConfig, library: Library?, references: List<PromptReferenceChoice>, editedMainId: String? = null,
     onChange: (HistoryConfig) -> Unit,
 ) {
-    Text("这里设置主调用的默认历史范围。每处历史引用可单独选择原始发言方、正文来源、范围与发送角色；原聊天记录始终保留。发送前自动合并连续相同的 API 角色。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     HistoryPointForm("范围起点", history.range.from) { onChange(history.copy(range = history.range.copy(from = it))) }
     HistoryPointForm("范围终点（包含）", history.range.through) { onChange(history.copy(range = history.range.copy(through = it))) }
     val hasAdvanced = history.apiRole != null || history.mergeMessages || history.prefix.isNotEmpty() ||
@@ -53,18 +52,15 @@ internal fun HistoryConfigEditor(
     Text(if (hasAdvanced) "已有高级默认规则继续生效；未独立设置的历史引用会沿用它们。"
         else "默认保留各楼发言角色与格式；连续相同的发送角色会在最终请求中自动合并。", style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant)
-    EditorSection("兼容高级规则", if (hasAdvanced) "已有配置 · 角色、包装、消息规则与插入项" else "按需展开 · 不改动现有聊天") {
+    EditorSection("兼容高级规则", if (hasAdvanced) "已配置" else null) {
         ChoiceLine("整个历史的 API 角色", history.apiRole, globalRoleChoices) { onChange(history.copy(apiRole = it)) }
         if (history.mergeMessages) {
-            Text("这份旧配置会把整段历史合成一条，覆盖逐楼发送角色。停用后保留各楼投影，发送前仍会自动合并连续相同的 API 角色。",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             OutlinedButton(onClick = { onChange(history.copy(mergeMessages = false)) }) { Text("停用旧的整段合并") }
         }
         TextFieldLine("整个历史前缀（原样文本）", history.prefix, { onChange(history.copy(prefix = it)) }, minLines = 2)
         TextFieldLine("整个历史后缀（原样文本）", history.suffix, { onChange(history.copy(suffix = it)) }, minLines = 2)
         TextFieldLine("每层 BODY 消息前缀", history.floorPrefix, { onChange(history.copy(floorPrefix = it)) })
         TextFieldLine("每层 BODY 消息后缀", history.floorSuffix, { onChange(history.copy(floorSuffix = it)) })
-        Text("楼层包装可用局部标签 {{speaker}}、{{speaker.name}} 与 {{floor}}；一层对应一条 BODY 消息。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
         Text("按说话方覆盖", style = MaterialTheme.typography.titleMedium)
         Role.entries.forEach { role ->
@@ -140,8 +136,6 @@ internal fun HistoryMemoryInspector(session: Session?, main: MainCall? = null) {
     } }
     EditorSection("已保存的会话记忆", if (session == null) "尚未选择聊天" else
         "${state?.segments?.size ?: 0} 段来源记忆" + if (legacy != null) " · 1 项旧版摘要" else "") {
-        Text("这里查看当前聊天保存的摘要与来源。全局开关关闭后，摘要和原始楼层仍保留。", style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (session == null) {
             Text("选择一段聊天后，可查看摘要与原楼层的对应关系。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             return@EditorSection

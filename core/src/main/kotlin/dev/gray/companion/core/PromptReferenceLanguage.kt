@@ -99,7 +99,7 @@ object PromptReferenceLanguage {
     private enum class Field(val keyword: String) {
         TYPE("type"), IN("in"), CALL("call"), FOLDER("folder"), UNDER("under"), NAME("name"),
         TAG("tag"), ANY("any"), NOT("not"), AT("at"), XML("xml"),
-        FROM("from"), THROUGH("through"), VIEW("view"), REVISION("revision"), SOURCE("source"), FORMAT("format"), SPEAKER("speaker"), AS("as")
+        FROM("from"), THROUGH("through"), VIEW("view"), REVISION("revision"), SOURCE("source"), FORMAT("format"), SPEAKER("speaker"), AS("as"), PREFIXES("prefixes")
     }
     private data class Value(val text: String, val span: SourceSpan, val quoted: Boolean)
     private data class ParsedField(val name: String, val span: SourceSpan, val values: List<Value>) {
@@ -127,10 +127,10 @@ object PromptReferenceLanguage {
             previous += item
             if (field != Field.ANY && field != Field.NOT && item.values.size != 1)
                 issue(Code.INVALID_VALUE, "字段 ${item.name} 只接受一个值", item)
-            if (field !in setOf(Field.XML, Field.FORMAT) && item.values.any { it.quoted })
-                issue(Code.INVALID_VALUE, "仅 xml、format 字段允许双引号值", item)
-            if (field == Field.FORMAT && item.values.any { !it.quoted })
-                issue(Code.INVALID_VALUE, "format 须为双引号包裹的 JSON", item)
+            if (field !in setOf(Field.XML, Field.FORMAT, Field.PREFIXES) && item.values.any { it.quoted })
+                issue(Code.INVALID_VALUE, "仅 xml、format、prefixes 字段允许双引号值", item)
+            if (field in setOf(Field.FORMAT, Field.PREFIXES) && item.values.any { !it.quoted })
+                issue(Code.INVALID_VALUE, "${field.keyword} 须为双引号包裹的 JSON", item)
         }
         for (required in listOf(Field.TYPE, Field.IN)) if (required !in fields)
             diagnostics += Diagnostic(Code.MISSING_FIELD, "缺少 ${required.keyword} 字段", bodySpan, required.keyword)
@@ -200,7 +200,7 @@ object PromptReferenceLanguage {
             issue(Code.UNSUPPORTED_FIELD, "${singleOnly.keyword} 仅用于有 name 的单取引用", it)
         }
         val isHistory = sourceType == SourceType.BUILTIN && source == SourceScope.Named("history") && name in setOf("messages", "context")
-        val historyFields = listOf(Field.FROM, Field.THROUGH, Field.VIEW, Field.REVISION, Field.SOURCE, Field.FORMAT, Field.SPEAKER, Field.AS)
+        val historyFields = listOf(Field.FROM, Field.THROUGH, Field.VIEW, Field.REVISION, Field.SOURCE, Field.FORMAT, Field.SPEAKER, Field.AS, Field.PREFIXES)
         if (!isHistory) historyFields.forEach { key -> field(key)?.let {
             issue(Code.UNSUPPORTED_FIELD, "${key.keyword} 仅支持 builtin history messages", it)
         } }
@@ -252,10 +252,17 @@ object PromptReferenceLanguage {
                     null
                 }
             }
+            val prefixes = text(Field.PREFIXES)?.let { raw ->
+                try { HistoryReferences.decodeTextPrefixes(raw) }
+                catch (failure: IllegalArgumentException) {
+                    invalid(Field.PREFIXES, "History 文本前缀无效：${failure.message.orEmpty()}")
+                    null
+                }
+            } ?: HistoryTextPrefixes()
             HistorySelection(viewId, revision, HistoryRange(point(Field.FROM, HistoryPoint()),
                 point(Field.THROUGH, HistoryPoint(HistoryAnchor.END, 1.0))), compressed = name == "context", sourceKind = sourceKind,
                 format = format, rangeExplicit = Field.FROM in fields || Field.THROUGH in fields,
-                sourceRole = sourceRole, readMode = readMode)
+                sourceRole = sourceRole, readMode = readMode, textPrefixes = prefixes)
         } else null
         if (diagnostics.isNotEmpty()) return CompileResult(null, diagnostics, locations)
         return CompileResult(QueryPlan(requireNotNull(sourceType), requireNotNull(source), call, folder, name,

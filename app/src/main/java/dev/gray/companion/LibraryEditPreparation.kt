@@ -10,17 +10,29 @@ internal object LibraryEditPreparation {
             add(Issue("extensions", "请通过集合编辑或配置导入修改集合定义"))
     }
 
-    fun changesFrozenSession(before: Library, edited: Library): Boolean = before.sessions.any { previous ->
-        if (previous.pendingRun == null) false else edited.sessions.firstOrNull { it.id == previous.id }?.let { next ->
-            next.pendingRun != null && (next.messages != previous.messages || next.turnRecords != previous.turnRecords ||
-                next.characterId != previous.characterId || next.mainCallId != previous.mainCallId ||
-                next.packageIds != previous.packageIds || next.groupIds != previous.groupIds || next.personaId != previous.personaId ||
-                next.runtimeSnapshot() != previous.runtimeSnapshot() || next.macroHistory != previous.macroHistory)
-        } == true
+    private fun changesRecoveryContext(previous: Session, next: Session): Boolean =
+        next.messages != previous.messages || next.turnRecords != previous.turnRecords ||
+            next.characterId != previous.characterId || next.mainCallId != previous.mainCallId ||
+            next.packageIds != previous.packageIds || next.groupIds != previous.groupIds ||
+            next.personaId != previous.personaId || next.enabledExtensionIds != previous.enabledExtensionIds ||
+            next.runtimeSnapshot() != previous.runtimeSnapshot() || next.macroHistory != previous.macroHistory
+
+    /** A recovery journal is optional continuation data, not an edit lock. */
+    fun prepareRecoveryEdits(before: Library, edited: Library): Library {
+        val oldSessions = before.sessions.associateBy { it.id }
+        val memoryPolicyChanged = before.memoryConfig?.enabled != edited.memoryConfig?.enabled ||
+            before.memoryConfig?.extensionId != edited.memoryConfig?.extensionId
+        return edited.copy(sessions = edited.sessions.map { next ->
+            val previous = oldSessions[next.id]
+            if (previous?.pendingRun != null && next.pendingRun != null &&
+                (memoryPolicyChanged || changesRecoveryContext(previous, next)))
+                MessageOperations.discardRecovery(next)
+            else next
+        })
     }
 
     fun normalize(before: Library, edited: Library): Library =
-        LibraryFormat.upgrade(edited.withStandardCharacterFields()).let { normalized ->
+        LibraryFormat.upgrade(prepareRecoveryEdits(before, edited).withStandardCharacterFields()).let { normalized ->
             val oldSessions = before.sessions.associateBy { it.id }
             normalized.copy(sessions = normalized.sessions.map { session ->
                 val previous = oldSessions[session.id]

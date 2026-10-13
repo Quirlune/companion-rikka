@@ -70,8 +70,6 @@ internal fun MemorySettingsPage(
         navigationContent = { EditorSectionTabs(listOf("模型", "小摘要", "大摘要", "已保存"), section) { section = it } }) {
         when (section) {
         0 -> {
-        Text("这一套设置用于所有角色和聊天。摘要及其来源映射仍分别保存在各自聊天中。",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text("共用模型与参数", style = MaterialTheme.typography.titleMedium)
         SharedModelGenerationEditor(draft.generation, draft.reasoningParsing, library.profiles,
             modelLabel = "小摘要与大摘要共用模型") { generation, parsing ->
@@ -130,12 +128,8 @@ private fun MemoryStageSection(
         onRules(protect, trigger, retain, if (enabled) (cap ?: trigger) else null)
     }
     cap?.let { NumberLine("每批最多楼层", it, 1) { next -> onRules(protect, trigger, retain, next) } }
-    EditorDestinationRow("提示词", "完整编辑内容、角色、顺序及历史来源与楼层范围") { onPrompts() }
-    Text("提示词中的历史引用可再缩小本批范围；只标记实际纳入摘要的楼层。",
-        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    EditorDestinationRow("提示词") { onPrompts() }
     Text("验证", style = MaterialTheme.typography.titleMedium)
     OutlinedTextField(value = xmlTag, onValueChange = onTag, label = { Text("必需的 XML 标签") },
         singleLine = true, isError = !SummaryXml.validTag(xmlTag))
-    Text("标签名以文字或下划线开头，可含数字及连字符，最多 64 字符。只保存标签内的非空正文。缺失、重复、嵌套或非法 XML 会报错，不保存摘要。新摘要不再使用旧输出正则。标签提供给提示词中的 {{state.memory_summary_xml_tag}}，输出协议可在提示词中编辑。",
-        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }

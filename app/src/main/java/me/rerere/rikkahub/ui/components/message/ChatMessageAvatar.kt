@@ -58,10 +58,11 @@ fun ChatMessageAssistantAvatar(
     model: Model?,
     assistant: Assistant?,
     modifier: Modifier = Modifier,
+    showCharacterAvatar: Boolean = false,
 ) {
     val settings = LocalSettings.current
     val showIcon = settings.displaySetting.showModelIcon
-    val useAssistantAvatar = assistant?.useAssistantAvatar == true
+    val useAssistantAvatar = assistant != null && (assistant.useAssistantAvatar || showCharacterAvatar)
     if (message.role == MessageRole.ASSISTANT && (model != null || useAssistantAvatar)) {
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -69,7 +70,7 @@ fun ChatMessageAssistantAvatar(
             modifier = modifier
         ) {
             if (useAssistantAvatar) {
-                if (showIcon) {
+                if (showIcon || showCharacterAvatar) {
                     UIAvatar(
                         name = assistant.name,
                         modifier = Modifier.size(28.dp),
@@ -114,5 +115,23 @@ fun ChatMessageAssistantAvatar(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun ChatMessageCompanionAvatar(
+    assistant: Assistant?,
+    loading: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+) {
+    if (assistant != null) {
+        UIAvatar(
+            name = assistant.name,
+            modifier = modifier.size(28.dp),
+            value = assistant.avatar,
+            loading = loading,
+            onClick = onClick,
+        )
     }
 }

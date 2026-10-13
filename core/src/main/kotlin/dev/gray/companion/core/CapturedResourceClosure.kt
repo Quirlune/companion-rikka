@@ -156,6 +156,7 @@ internal object CapturedResourceClosure {
             extensions = extensions.toList(), sessions = emptyList(), selectedSessionId = null,
             chatFolders = emptyList(), savedChats = emptyList(), configurationEdits = emptyList(),
             automaticOptions = AutomaticOptionsConfig(),
+            illustration = IllustrationConfig(), illustrationImages = emptyList(),
             titleConfig = ChatTitleConfig(),
             memoryExecutionView = library.memoryExecutionView?.let { view -> view.copy(library = view.library.copy(
                 profiles = view.library.profiles.map { it.copy(resolvedHeaders = emptyList(), resolvedProvider = null) })) }

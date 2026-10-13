@@ -1,0 +1,24 @@
+{
+  "format": "companion.config.v1",
+  "label": "文本附件词条示例",
+  "resources": {
+    "packages": [
+      {
+        "id": "example_attachment_lore_package",
+        "namespace": "example_attachment_lore",
+        "name": "附件世界观",
+        "entries": [
+          {
+            "id": "example_attachment_lore_entry",
+            "key": "setting",
+            "title": "世界设定",
+            "text": {"$text": "prompts/setting.txt"},
+            "order": 0,
+            "enabled": true,
+            "isTemplate": false
+          }
+        ]
+      }
+    ]
+  }
+}

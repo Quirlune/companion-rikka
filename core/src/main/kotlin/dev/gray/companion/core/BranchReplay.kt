@@ -52,6 +52,7 @@ object BranchReplay {
                             PureReplayKind.PLUGIN_TEXT -> {
                                 require(node.actionId == "plugin.run")
                                 val plugin = requireNotNull(recipe.pluginContext) { "分支缺少捕获的插件代码与输入" }
+                                require(plugin.code.version == 1) { "宿主能力插件不能纯重算" }
                                 val original = resources.extensions.firstOrNull { it.id == plugin.pluginId }?.code
                                 require(original == plugin.code && plugin.input == recipe.canonicalInput) { "分支插件代码或输入不一致" }
                                 PluginCodes.requireContext(plugin)

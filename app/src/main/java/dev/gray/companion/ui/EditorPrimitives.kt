@@ -25,6 +25,8 @@ import me.rerere.hugeicons.stroke.ArrowUp01
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.rikkahub.ui.components.ui.Select
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.style.TextOverflow
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.ui.components.ui.UIAvatar
@@ -82,6 +84,7 @@ internal fun EditorSection(
 ) {
     var expanded by rememberSaveable { mutableStateOf(initiallyExpanded) }
     val focus = LocalFocusManager.current
+    val hierarchyColor = MaterialTheme.colorScheme.outlineVariant
     Column(Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth()
@@ -106,7 +109,14 @@ internal fun EditorSection(
             )
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        if (expanded) Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
+        if (expanded) Column(
+            Modifier.fillMaxWidth().drawBehind {
+                val x = 5.dp.toPx()
+                drawLine(hierarchyColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.dp.toPx())
+            }.padding(start = 16.dp, top = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            content = content,
+        )
     }
 }
 
@@ -133,7 +143,6 @@ internal fun ConditionForm(condition: Condition?, onChange: (Condition?) -> Unit
             OutlinedTextField(condition.expression, { onChange(condition.copy(expression = it)) }, label = { Text("条件表达式") },
                 isError = expressionError != null, modifier = Modifier.fillMaxWidth(), minLines = 2)
             if (expressionError != null) Text(expressionError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-            Text("可组合 state / result / input 与 &&、||、!、exists()。仅计算本地状态。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (condition.expression.isNotBlank()) TextButton(onClick = { onChange(condition.copy(expression = "")) }) { Text("清空表达式，改用简单比较") }
         }
     }
@@ -150,7 +159,6 @@ internal fun MacroHelp(onInsert: (String) -> Unit) {
             SuggestionChip(onClick = { onInsert(macro) }, label = { Text(macro, style = MaterialTheme.typography.labelSmall) })
         } }
     }
-    Text("可选历史引用：@turn-1、@update-1、@version-12，写在 #XML 路径之前；update 只计算已记录的轨迹点。例：{{macro.mood@turn-1}}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 @Composable

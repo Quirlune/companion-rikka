@@ -1,0 +1,6172 @@
+velune 外部 AI 内容包制作包（0.75-preview / code243；源码 revision93）
+============================================================
+
+你可以把 VELUNE_EXTERNAL_AI_ONE_FILE.txt 单独上传给任何能读取 TXT 的 AI，然后另附自己的原始资料与目标；它已经含本文件、当前完整架构地图、资源作者指南、美化语法指南、插件 API、内置 Agent 工作手册、真实示例、打包脚本及完整机器字段目录。若平台支持多文件上传，也可把本目录整个交给它；同名分文件便于搜索。机器字段目录只列序列化字段、枚举与动作，不是完整 JSON Schema；作者指南与最终 velune 导入预览共同决定有效性。
+
+本包的两个协议标记固定为 companion.config.v1 与 companion.bundle.v1；应用可见名称是 velune。原生 Library 备份的 schemaVersion=37，执行语义版本=28，SQLite 表版本=1；普通内容包的 config 根和 ZIP manifest 根均不能放 schemaVersion。请先核对接收设备确实装了对应版本：较旧安装包可能不接受新字段。资源包不安装应用、不创建聊天、不保存连接密钥，也不替用户打开扩展总开关。
+
+本包附带的五个示例 ZIP 已在 2026-10-13 使用 0.75-preview/code243、源码 revision93 的真实 ResourceArchiveImport → ConfigurationCommands.preview → apply 路径验证通过，包含内部 LibraryValidator 检查。这个结果只覆盖五个原样示例的资源导入；没有进行真实服务 API 请求、用户设备交互或所有扩展组合验证。修改示例内容或目标应用版本后，应重新做导入预览。
+
+先选内容类型
+------------
+1. 角色/世界观/词条：优先 character、package；原文不是模板时设 isTemplate=false。普通资料不意味着需要联网、模型调用或 JavaScript。
+2. 状态卡、规则显示或模型工作流：使用 group + 默认关闭的 extension。卡片放 CallGroup.cards，模型调用放 workflows；读完整作者指南的卡片、提示词、宏、触发时机小节。
+3. 自定义 JS 逻辑：在 extension.code 声明版本，并用 group 节点 plugin.run 调用。v1 是同步纯文本；v2 才能用有限的 host.invoke。必须先读插件 API；网络声明不是设备授权，密钥只能由用户在原生界面填写。
+4. 内置记忆、自动选项和插图有各自配置/启停，不要以普通第三方扩展冒充。没有实现的宿主能力（任意网页、文件、Shell、消息级图标动作、任意宿主模型接口）不能靠发明 JSON 字段取得。
+插件 API 所说的“图片附件能力留待后续”指通用第三方 JavaScript 宿主接口；内置 BizyAir 插图是另一条已有功能路径。
+
+卡片入口与输入栏：当前输入栏为漂浮半透明样式。重要、需要主动打开的扩展前端可以沿用 CallGroup.cards 的 CardResource，在 CardDefinition 中选支持 MENU 的 presentation 并设 defaultRegion="MENU"；用户从聊天右上角省略号选中后，卡片在当前页的悬浮层打开。普通状态或低重要性进度别占常驻横条或遮盖输入。生图进度横条已移除，也没有被自动登记到三点菜单；有真正重要的前端需求时才设计 MENU 卡片。CardRegion.INPUT 和 CardPresentation.STRIP 仍是协议中的兼容选项，不能称为已删除；不要加 importance/overlay/menuAction 等想象字段。附带的静态状态卡使用 MENU 是演示该合同，并非建议所有状态都放进菜单。
+
+推荐给外部 AI 的完整任务提示（复制后填写方括号）
+------------------------------------------------
+请仅依据附带的《velune 外部 AI 内容包制作包》为 velune 0.75-preview/code243 制作可导入 ZIP。先读 AUTHORING_ARCHITECTURE 了解系统，再按任务读 AI_IMPORT_GUIDE、APPEARANCE_GUIDE、PLUGIN_API 与机器字段目录；内置 AGENT_GUIDE 的工作台权限只适用于应用内 Agent，不意味着你这个外部平台也有这些工具。我的目标：[具体功能、触发条件、内容、期望展示位置]。输入资料：[逐项列文件/文本及保留要求]。允许的外部服务：[无；或 HTTPS origin、方法、所需凭据别名，由我在设备上填写真实密钥]。请先确认任务是角色/词条、原生工作流、卡片还是 JS 插件；无法由现有宿主能力完成的部分要明确指出，不自造字段。
+
+输出要求：
+- 若你能创建文件并提供附件，请交付一个真实 .zip，ZIP 根有 manifest.json，配置文件遵守 companion.config.v1，所有正文 UTF-8，附件明确列在 manifest 且被资源引用。另给简短目录清单、资源 ID/名称、启用后的预期行为、需要我在设备上填的内容、导入预览与使用步骤。
+- 若你只能回复文本，按文件名分别给出 manifest.json、配置 JSON、引用的每个附件的完整内容，再给出可运行的 Python 标准库打包命令/脚本。不要把 Markdown 代码围栏写进真实 JSON 文件，不声称已生成 ZIP 或已通过导入。
+- 保留用户资料的字句与顺序；如需改写/新增提示词，逐项标出。保持资源 ID 稳定，扩展默认 enabled=false，不使用真实密钥、私人路径、会话记录或生产数据库。未获授权不要改全局 selectedProfileId/automaticOptions/memoryConfig 等设置。
+- 检查 JSON 语法、ZIP 路径、manifest、附件引用、ID/宏引用和配置边界。只有具备本项目当前真实导入器时才可声称通过资源解码、preview、apply；否则写明“待 velune 导入预览验证”。任何运行时效果、模型输出格式和手机布局也要区分已验证与待体验。
+
+如果需求信息不足，优先提出会改变产物类型的少量问题；可合理推断的文案、颜色、ID 等细节自行处理，附上推断。不要把外部平台自己的插件/工具格式直接塞进 velune。
+
+阅读顺序与交付内容
+------------------
+先读《当前系统与作者架构地图》，再读《当前作者指南》1–6节选定资源种类和一个示例；需要动态行为再读7–11节，美化读《卡片与正文外观作者指南》，需要联网再读《插件宿主 API v2》。机器字段目录按类型检索，不能把 optional=true 当“省略后一定合法”。示例共五个：角色与绑定身份、原生 XML 状态卡、字面世界观词条、外部文本附件词条、v2 HTTP 插件。四个直接配置示例能先改 JSON 再打 ZIP；附件示例只能经 ZIP 打包使用，因为 $text 在装配时才展开。
+
+最小 ZIP 的目录是：
+  manifest.json
+  payload.config.json
+其中 manifest 内容为：
+  {"format":"companion.bundle.v1","label":"我的内容包","files":[{"path":"payload.config.json","kind":"config"}]}
+payload.config.json 根为：
+  {"format":"companion.config.v1","label":"我的内容包","resources":{"groups":[],"extensions":[]}}
+这是骨架，不表示空内容包具有有用功能。manifest.files 的 kind=config 表示该文件本身是配置根；group 等单资源 kind 的文件则直接是资源对象。manifest 与 config 的可用键彼此不同，勿混用。路径使用 ZIP 根相对的正斜杠；manifest.json 必须就在 ZIP 根，不能多包一层目录。
+
+本包 build_bundle.py 用 Python 3.10+ 标准库打包，示例命令：
+  python build_bundle.py examples/static-status.config.json static-status.bundle.zip
+  python build_bundle.py examples/character-persona.config.json character-persona.bundle.zip
+  python build_bundle.py examples/lore-package.config.json lore.bundle.zip
+  python build_bundle.py examples/lore-attachment.config.json lore-attachment.bundle.zip
+  python build_bundle.py examples/plugin-v2-http.config.json plugin-http.bundle.zip
+它拒绝覆盖已有 ZIP，检查文件路径、重复键、附件存在、文本编码和有限格式/尺寸。它不运行 velune 的 Kotlin 解码、LibraryValidator 或设备配置预览；输出里的“已检查”只指 ZIP 运输结构。`plugin-v2-http` 使用示例域名且默认关闭；仅制作或导入 ZIP 不会触发请求。用户启用扩展、授权并触发对应工作流后才可能联网，因此实际使用前必须换成自己控制的服务地址并核对权限。修改来源、权限和任务逻辑后，用户还需在扩展详情授权并填写凭据别名对应的秘密。
+
+没有 Python 的平台也可使用任意可信 ZIP 工具：必须使 manifest.json 直接处于压缩包根；用 UTF-8 保存每个文件；解压查看目录并检查路径、大小写冲突与漏掉的附件。平台若没有文件创建/下载工具，就只能提供文本供用户打包。直接导入 companion.config.v1 JSON 只适合没有 $text/$avatar 标记的情况。
+
+导入前检查与错误处理
+--------------------
+- 所有资源及引用到的 workflow/node/block/card/entry 使用稳定、互不冲突的 ID；显示名不是 ID。重复导入同 ID 可能更新现有资源，先看预览差异，不对用户已有配置做猜测性覆盖。
+- 自定义文本中的 {{...}} 要区分字面文字和合法模板。普通资料词条 isTemplate=false；模板引用必须有真实来源，不把宏语法当 JS/JSONPath。
+- 扩展默认关闭，用户预览/应用后在扩展列表打开。新扩展可能只对新聊天的冻结世界可见；已接受历史不被自动重写。调用模型/联网/收费动作须由用户自己决定启用与授权。
+- 卡片 XML 的 xmlSample、fields、elements 与实际 sourceTemplate 对应；导入器不会根据样例替作者自动生成字段。XML 不带属性、DTD、外部实体；CSS 仅是受限静态样式。
+- v2 HTTP 的权限 origin、方法、别名须与请求相符；服务返回 status、body 要在 JS 中校验。对可能已送达的副作用请求，不能因本地超时盲目重发。
+- “JSON 解析成功”只证明语法。最终请在 velune 原生导入预览里核对 issues、变更清单与目标现有资源，再应用；运行时模型格式、网络授权、显示布局需在实际使用时确认。
+- 预览报“未知字段”时删除臆造键并查机器目录；报“引用不存在”时查 ID/绑定；报“未引用文件”时删掉文件或从资源真实引用；报“版本不支持”时核对设备 APK 和资源类型，不能随意降低备份 schemaVersion；报“格式错误”时先核对 config/manifest/原生备份三种根结构。
+
+下面附完整规范和可复用的实际文件内容。即使只上传本包的一份 VELUNE_EXTERNAL_AI_ONE_FILE.txt，也可以让外部 AI 复制对应代码块为真实文件来打包；TXT 内的“示例”不等于已在用户设备导入。
+
+
+============================================================================
+附录 A · 当前系统与作者架构地图（源码 docs/AUTHORING_ARCHITECTURE.txt）
+============================================================================
+
+velune 当前系统与作者架构地图
+0.75-preview / code243 · 源码修订93 · 资源 wire37 · 执行 execution28 · SQLite1
+
+这是一份给应用内 Agent 和外部作者的当前结构地图，不是可导入配置，也不覆盖机器字段目录或实际导入校验。重点是资源从哪里来、何时参与聊天、结果存在哪里。作者不需要阅读历史修订才能理解当前边界。
+
+1. 一条工作流贯穿什么
+
+原生编辑器／配置导入／Agent 工作台草稿
+  → 唯一 Library 活资源库与配置预览、校验、应用
+  → 新聊天或当前聊天捕获的资源与 executionVersion
+  → 主 MainCall、绑定 CallGroup、已启用扩展的工作流
+  → 提示块编译与 BODY-only 历史 → 模型网关或原生行为／受限插件
+  → 输出格式校验、结果接受、回执、来源与分支
+  → 主 BODY、输出宏、状态、卡片、记忆和辅助显示
+
+应用内 core 负责资源、执行计划、宏、历史、接受回执、恢复和分支；Android 宿主负责 SQLite 保存、模型传输、权限、原生编辑器和展示。主聊天显示复用前端，但原 ChatService/Room 聊天存储不是第二个资源或会话权威。
+
+2. 资源、会话、来源
+
+- Library 是唯一当前资源库。CharacterCard 提供角色资料、开场和绑定；UserPersona 提供用户身份；PromptPackage 提供可引用词条；MainCall 定义主回复与 bodyAppearanceTemplate；CallGroup 提供可复用 workflows、stateDefaults、packages 与 cards；ConfigurationExtension 关联原生资源、全局启停，可带受限 JavaScript；ApiConnection 与 ModelProfile 分别管理连接和模型定义。内置记忆、自动选项和插图由各自专用配置管理。
+- Session 保存某个聊天的消息、已接受 state/results、宏历史、记忆、候选、来源和暂停恢复点。SavedChat 是独立收藏快照；不能以 ZIP 资源包伪造会话、回执或分支。聊天在开始或恢复时使用捕获的资源世界与执行版本；修改今天的 live 资源不追溯改写旧回复。全新扩展在旧冻结聊天中不一定可见，通常从新聊天验证。
+- 主回复的 BODY 才进入普通对话历史。附加节点、卡片、状态、记忆或插图不能悄悄混进 BODY。USER 修改是该用户消息的版本；AI 重新生成保留相应候选和来源，不把已接受效果扁平化。暂停可继续，也不锁死普通编辑；真正运行中仍有互斥。外部副作用不能因分支重建而盲目重放。
+- ID 是引用与更新身份，显示名、title 和 slug 各有用途。资源及 workflow/node/block/card/entry 要用稳定、互不冲突的 ID。重导入同 ID 可能更新既有资源，须审查预览差异。一个资源包的所有引用必须闭合，不靠“名字看起来相同”猜目标。
+
+3. 提示词、行为与结果
+
+- Workflow 是调用，WorkflowNode 是行为。主调用负责用户轮次的主模型响应；CallGroup 可按 turn.prepare、reply.completed、workflow 依赖或自定义事件运行附加流程。dependsOn 是同一 workflow 内节点依赖；afterWorkflowId 是跨 workflow 顺序。queued/priority 影响调度，不表示提示词上下文顺序。
+- 模型行为使用可见 PromptBlock 保存角色、位置、模板、条件、来源引用和合并规则。编译器把当前 input、角色／用户／package、state/results、选定历史与注入块组合成实际消息。普通原文默认字面；只有明确的模板才展开 {{...}}。结构化历史与 .as:text 历史的 API 消息语义不同，不能自行把文本前缀当 API role。不要暗加系统提示、历史或修复指令。
+- 模型生成参数属于每个模型行为，省略不等于明确 OFF/AUTO。输出本身可以通过 result.<outputKey> 引用；recordTrajectory 决定是否保留变化轨迹，execution28 的新模型行为也尊重它。macro.process、文本处理和 state 等行为通过既有接受路径发布，失败与过期来源不能发布假成功。高风险外部结果须核对状态与幂等性。
+- 有效输出经过验证、发布并产生回执。回执和捕获世界支持恢复、候选切换与历史解释；v2 宿主联网结果不可改造成纯文本重算配方。旧 execution 与兼容字段保留旧语义，不能因当前作者偏好批量迁移历史。
+
+4. 展示、摘要与辅助能力
+
+- 新扩展卡片定义于 CallGroup.cards，CardResource.sourceTemplate 从现有宏或字面数据读取，CardDefinition 用 MANUAL/XML 字段、elements、sections 和静态 CSS 展示。一个字段可被多个元素显示。卡片来源与被接受的楼层／候选关联；CHAT、SIDEBAR、INPUT、MENU 与 CARD/SIDE_PANEL/STRIP 是既有兼容枚举。重要且需主动打开的扩展前端可设支持 MENU 的 presentation 和 defaultRegion=MENU，三点选择后在当前页打开悬浮卡片层。普通状态和低重要性进度不占常驻横条或遮住漂浮半透明输入栏；生图进度横条移除不意味着自动进菜单。
+- MainCall.bodyAppearanceTemplate 只美化主助手正文。唯一 {{正文}} 被替换为经处理的 Markdown 内容；这不是项目宏。宿主生成的插图 wrapper 可在正文流中，不能用父容器的固定窄宽与 padding 无意压缩图片。卡片 CSS 与正文 HTML/CSS 是两套不同合同，具体规则见 appearance-guide。
+- 内置全局记忆对每个聊天保存独立摘要，按真实 BODY 楼层来源记录。小／大摘要必须通过各自配置的严格 XML 内容标签后才能发布。自动选项是基于最近完整 BODY 的独立辅助生成，按可见 XML 协议解析，结果临时显示并填入草稿，不写会话或自动发送。卡片 XML、摘要 XML、选项 XML 的解析合同各不相同。
+- 内置 BizyAir 插图以模型规划 XML 和正文段落锚点关联当前准确的 BODY 来源，完成图片保存在应用私有位置并按来源显示；不改写 BODY、历史或已接受世界。图片可排队并受并发上限控制；收费提交结果不确定时不能盲重发。它不是通用第三方 JavaScript 插件的图片附件 API。
+
+5. Agent、插件和权限
+
+- 应用内 Agent 在独立聊天和 UTF-8 文本工作区工作；推理与主聊天、卡片和辅助调用分离。它可用 knowledge.list/read/search 读取 APK 内的离线资料，也可用共享配置工作台读取资源、起草、预览。Agent 文件不是已安装资源；提交仍要走同一配置预览、当前活库验证和事务，忙时保留草稿。是否自动提交受用户设置约束。Agent 不能访问任意设备文件、源码、数据库、密钥或 shell。
+- ConfigurationExtension.code 的 JavaScript v1 是受限同步纯函数文本执行；v2 使用 async execute(context, host)，通过已实现的 host.invoke 请求 network.http、runtime.sleep、capabilities.describe。无任意 DOM、设备文件、数据库或宿主模型 API。网络必须声明精确 HTTPS origin／方法／凭据别名，并取得设备授权；声明和导入不授予权限。真实密钥在原生权限/凭据界面保存，不进 ZIP、提示词或 JS 源码。代码或权限变化后须重新授权。
+- 插件 v2 HTTP 仅访问许可的公共 HTTPS 目标，未实现自动重定向或自动重试。一个成功的 HTTP 响应不等于服务业务成功，需自行检查状态与内容。未知是否送达的 POST 不可盲目重发。第三方插件也没有任意消息级图标动作注册或自定义页面 API；重要前端使用现有 MENU 卡片，不凭空编造字段。
+
+6. 导入、知识和诊断入口
+
+- 推荐的单配置根是 companion.config.v1，含 format/label/resources/commands；ZIP 根必须有 manifest.json，格式 companion.bundle.v1，逐项声明主文件和被引用附件。Library 原生备份的 schemaVersion37 属另一用途；SQLite1 与 execution28 是另外两种版本。config/ZIP 不能混写根字段、运行记录或凭据。资源预览走真实解码、ConfigurationCommands.preview/apply 和 LibraryValidator；JSON 语法通过不是导入通过。
+- 应用内 Agent 先用 knowledge.list 获取固定 ID：agent-guide（工作步骤）、architecture-guide（本结构）、resource-guide（资源和 ZIP）、appearance-guide（美化）、plugin-api（JS 权限）、schema-reference（字段/枚举/行为目录）。knowledge.read 分段读，knowledge.search 用具体关键词定位；config 的 describe/schema/actions/pluginCapabilities 和当前资源结果是运行时权威，文档不代替当前实值。外部 AI 可用独立作者包的单 TXT 或分文件取得同样规范，仍须由实际应用预览验证成品。
+- 普通提示、错误与调用状态写有界本机日志；它不是完整模型请求/响应或凭据存档。可定位的错误看当前 issue 路径和日志，修复配置后重预览。UI 渲染、真实模型格式、网络服务与手机手感属于各自实际使用验收，不能从资源解析推断全部通过。
+
+
+============================================================================
+附录 B · 当前作者指南（源码 docs/AI_IMPORT_GUIDE.txt）
+============================================================================
+
+velune 扩展与资源作者指南
+适用：0.75-preview / code243源码，revision93，wire37/execution28，SQLite1。内置Agent离线知识见AGENT_GUIDE.txt；实际验证以最新HANDOFF为准。
+
+这是给首次接触项目的 AI 与作者的当前指南，不是导入文件。产品名称是 velune；companion.* 格式标记、dev.gray.companion.core 命名空间和应用身份保留以兼容更新，不要擅自改名。
+本指南替换旧 revision56 的叠加补丁式说明。旧备份、已接受回复与冻结执行环境依然按原版本解释；“当前写法”不表示可以删除旧字段、迁移历史或重新执行副作用。
+
+1. 先选择正确产物
+
+资源转换：角色资料 -> characters；共享词条 -> packages。原文有提示词，不等于授权新增模型请求、模型连接、聊天、记忆或全局开关。保留用户原文、顺序和含义；普通词条 isTemplate=false，避免原文中的 {{...}} 意外展开。
+原生扩展：ConfigurationExtension 引用普通资源，常见为一个 GROUP；CallGroup 持有 workflows、stateDefaults、cards 和绑定的提示词包。宿主已有编辑器、调度器、宏与卡片渲染器负责运行。
+代码扩展：同一 ConfigurationExtension 可增加 code，工作流通过 plugin.run 执行。JavaScript v1 保持纯文本；v2 支持异步宿主能力，首批为受权限约束的 HTTPS 请求和可取消等待。它不是浏览器页面插件，没有任意 DOM、文件、宿主模型或数据库访问。详细接口见 PLUGIN_API.md 与机器可读 pluginCapabilities。
+内置记忆和自动选项：各有原生设置与全局权威开关，不要另造普通插件来假扮内置功能。
+
+读取路径：先 AUTHORING_ARCHITECTURE.txt 了解当前系统边界，再读本文件；美化任务读 APPEARANCE_GUIDE.txt，JavaScript 联网任务读 PLUGIN_API.md；按需查 AI_IMPORT_API_REFERENCE.json 中的类型与 actions。应用内 Agent 使用 knowledge.list 中的 architecture-guide/resource-guide/appearance-guide/plugin-api/schema-reference 及分段 read/search；外部 AI 没有仓库时可使用独立作者包的一份完整 TXT 或对应分文件，不推测未提供的源码。改宿主代码前再读仓库 AGENTS.md、docs/ARCHITECTURE.md、docs/DEVELOPMENT.md 与相关源码。API JSON 是 serializer 字段/枚举/默认值和 ActionRegistry 目录，不是 JSON Schema，也不是完整语义校验器。optional=true 只表示可以省略，不保证其默认值构成有效资源。typedDefaults 中的自动 ID 占位文字必须换成真实稳定 ID。
+
+2. 三种文档不能混用
+
+A. 推荐 config JSON：根仅 format、label、resources、commands。
+{"format":"companion.config.v1","label":"我的扩展","resources":{"groups":[],"extensions":[]}}
+resources 是对象，其中每种资源是数组；commands 是可选命令数组。不要添加根 version、schemaVersion、settings、automaticOptions、metadata 或自定义字段。
+
+资源数组 / manifest 或 command kind：
+characters / character；mainCalls / mainCall；packages / package；groups / group；personas / persona；tags / tag；profiles / profile；connections / connection；extensions / extension。
+注意 config 的 tags 对应原生 Library.promptTags；MAIN/GROUP 等大写仅用于 ExtensionResourceRef.kind。
+
+B. ZIP：根目录 manifest.json。最小清单：
+{"format":"companion.bundle.v1","label":"示例","files":[{"path":"status.config.json","kind":"config"}]}
+manifest 根仅 format、label、files；files 每项仅 path、kind、可选 id。kind 可为上述单资源种类，或 config、native、character-card、text、avatar、documentation。id 只适用于独立资源/角色卡，且必须与文件中的 id 一致。
+config 文件内放配置根；kind=group 等文件内直接放该资源对象，不再套 resources。
+
+包内路径以 ZIP 根为准，用相对正斜杠路径；禁止绝对路径、父级跳转、大小写冲突及重复路径。manifest 须在根目录，不能多包一层文件夹。所有成员均须有明确用途；仅标 text 并不能免除未引用文件错误。
+字符串附件写为 {"$text":"prompts/rules.txt"}，头像字段可用 {"$avatar":"images/avatar.png"}。标记对象只能有一个键；manifest 为附件分别声明 text/avatar，且必须由资源真实引用。只在 ZIP 装配阶段解析；单独导入 config JSON 时对应字段须为实际字符串/头像对象。文本采用 UTF-8。README 标 documentation，只供阅读、不创建资源；“说明文档未导入”是非错误提示。
+原生备份不能和其他配置主文档混装。不要将无关脚本、库、图片或操作系统文件打进 ZIP。
+
+C. 完整 Library 原生备份含 schemaVersion 和会话等字段，属于备份/恢复用途；当前资源 wire/schemaVersion 为37（与 SQLite 表版本1、执行版本28相互独立）。不要用它伪造运行记录或承载一个普通扩展。外国角色卡 JSON/PNG/CHARX 只有真实导入器识别的格式可转换；外国供应商设置、脚本和自定义前端字段不因此变成本项目字段。
+
+3. ID、引用与配置命令
+
+显式给资源及被引用的 workflow/node/block/card/entry 稳定 ID；重导入相同 ID 表示更新目标，不要每次随机换 ID。id、slug、name/title 含义不同。slug 是查询标识，非空时用小写字母开头及小写字母/数字/_/-；name/title 是显示文字。character/package namespace 共享唯一域；保留原有引用，不凭显示名称猜 ID。
+所有引用须闭合，完整候选图通过 LibraryValidator 才能应用。配置预览和应用是独立阶段；先查 issues 中 error=true，不能以“JSON 能解析”替代验证。
+
+commands 的真实 op：
+- put：{"op":"put","kind":"group","value":{"id":"my_group","name":"我的组","workflows":[]}}
+- mergePatch：{"op":"mergePatch","kind":"group","id":"my_group","patch":{"name":"新名称"}}
+- remove：{"op":"remove","kind":"group","id":"my_group"}
+- bind：{"op":"bind","kind":"character","id":"角色真实ID","packages":["包ID"],"groups":["组ID"]}
+- select：{"op":"select","key":"automaticOptions","value":{"enabled":false,"count":4}}
+mergePatch/remove/bind 用 id 或唯一 slug 二选一，不能同时给出；并非所有资源都有 slug。mergePatch 递归合并对象、整体替换数组，null 删除键，最终仍须通过 serializer 和图校验；不可修改 id。bind 列表是替换，不是追加；group 只能绑定 packages，character/mainCall 可绑定 packages/groups。
+select 仅支持 selectedProfileId、selectedPersonaId、reasoningParsing、titleConfig、automaticOptions、memoryConfig。没有 op=config.set；内部记录名称不能当导入指令。普通资源包不改本机全局设置，只有用户明确要求时才使用 select。不要导入 API 密钥、会话记录或自动发消息。
+
+4. 扩展所有权和启停
+
+当前最小声明：
+{"id":"my_extension","name":"我的扩展","enabled":false,"resources":[{"kind":"GROUP","id":"my_group"}]}
+ConfigurationExtension 真实字段：id、name、resources、parameters、code、memory、enabled、mainScopeId。name 必填；resources 成员只含 kind/id，kind 为 CHARACTER、MAIN、PACKAGE、GROUP。enabled 是可空兼容字段，新包明确 false，用户在扩展列表卡片内打开全局开关。新扩展通常不填 mainScopeId；它主要用于旧 MainCall 卡片迁移后保留原主调用范围。
+原生扩展由资源链接进入已有编辑器；不是一套可编写自定义插件页面的 UI API。parameters 是旧字段映射，编辑的是成员资源本身而非独立参数值；新作者优先直接编辑原生资源。parameters 的真实形状及白名单见 ExtensionModels/ExtensionFieldRegistry。
+
+启用的新原生/代码扩展可跨主调用使用，无需给每个主调用安装；关闭阻止新执行与注入并立即隐藏所属卡片，但不会抹除已接受回复、状态、宏历史或分支。一个组被多个扩展拥有时，至少一个可用 owner 开启即可使用；被关闭扩展拥有的组不会因手动绑定而绕过开关。无扩展所有权的独立手动资源仍可用。
+内置记忆以 Library.memoryConfig.enabled 为权威，自动选项以 Library.automaticOptions.enabled 为权威。不要用一般 extension.enabled 代替这两个开关。
+null enabled、Session.enabledExtensionIds、MainCall.extensionBindings/Origins 是旧数据兼容合同，不是新包启用指南。迁移只作用于 live 定义，旧冻结 worlds 不重写。旧聊天冻结世界未包含全新扩展时，需要新建聊天；不能承诺导入后立刻出现在所有旧分支。进行中的运行按捕获合同处理，关闭不能被宣传为回滚已接受输出。
+
+5. 卡片归属、数据、CSS 和 MENU
+
+新数据卡片放 CallGroup.cards；扩展引用 GROUP 一次。MainCall 的新编辑入口只负责正文 bodyAppearanceTemplate，不能把 cards、正文模板或旧 tiles 混为一个系统。MainCall.cards 仍可解码以迁移旧 live 卡片；不要写新主调用卡片。旧 card.define 节点仍支持，与资源卡共用字段、布局和快照规则。
+CardResource：id、enabled、sourceTemplate、definition。sourceTemplate 可为完整 XML 字面量或现有宏模板；运行时在实际聊天/分支上下文解析，不发起模型请求。definition 的核心字段见示例及 API。
+
+XML 模式必须显式 dataMode="XML"，xmlRoot="status"，xmlSample 为完整标准样例。序列化缺省仍为 MANUAL，只有新建 UI 默认选择 XML。不要省略 dataMode 后期待自动推断。
+编辑器“生成字段与显示元素”使用 XmlCardData.infer；导入器不会替作者补齐 fields/elements。直接构造 JSON 时必须把标准样例对应的字段与元素也写入。样例改动后字段不匹配会拒绝保存/显示，需重新生成。
+叶路径相对根，<status><mood>...</mood><notes><item>...</item></notes></status> 对应 mood、notes.item。字段 key 必须等于 xmlPath；样例中重复叶路径或重复祖先推断为 LIST。缺少运行值显示为空，额外路径忽略，标量字段意外重复报错。要让只有一个值的运行列表稳定工作，在标准样例中展示两个重复项。
+字段类型 TEXT/NUMBER/PROGRESS/LIST；数字必须有限，PROGRESS maximum>minimum。字段1–32个，标题1–128字符，路径≤256字符，各简单标签≤64字符；不支持属性、命名空间、混合正文与子元素、DTD/外部实体。支持简单嵌套、重复、CDATA 和 XML 转义。完整输入≤1,048,576字符、节点≤8192、深度≤32、每叶文本≤16384字符、列表≤256项。
+卡片解析器可从周围说明/围栏中定位唯一完整根，但建议模型只输出干净 XML。多个同名根、损坏标签不静默修补。不在流式半截响应上解析。
+
+fields 每个 key/title 必填；XML 用 xmlPath，MANUAL 可用 source/pattern/captureGroup。elements 为显示引用：{"id":"mood","fieldKey":"mood"}；同一个字段可多次显示，只需不同 element.id，不产生新宏。id 使用 ASCII 字母或下划线开头，后续字母数字/_/-，≤128字符且唯一。默认英文路径 notes.item 生成 notes__item；其他路径可能生成哈希 ID，冲突加后缀。使用实际 elements 中的 ID，不能凭中文字段名猜 CSS。
+sections：{"id":"details","title":"详细状态","initiallyExpanded":false}；element.sectionId 指该分区，无 sectionId 的元素在外层。分区与元素 ID 不冲突，最多32分区/128元素。
+CSS 选择器：.card、.card-title、.card-element、.field-title、.field-value、.field-list、.field-progress、.field-more、.card-section、.card-section-title、.card-section-content，以及 #实际元素或分区ID。
+例如 .card{padding:16px} #mood .field-value{font-size:20px}。
+生成的字段文本会 HTML 转义。CSS 不进行字段/宏插值，不允许 JS、外部资源、url()/@import/@font-face、反斜杠转义或标签；最大65536字符。可写静态样式，不是任意 HTML/网页引擎。
+
+presentation=CARD 可放 CHAT/SIDEBAR/INPUT/MENU；SIDE_PANEL 可放 SIDEBAR/MENU；STRIP 可放 CHAT/INPUT/MENU。这些是现有兼容枚举与合法组合，INPUT/STRIP 并未从协议删除。defaultRegion 指默认位置；MENU 是聊天右上角省略号中的卡片列表，选择后在当前聊天页面打开悬浮卡片层，不跳转新页面，也不是新增菜单动作 API。该菜单默认没有作者未定义的内容。
+当前界面恢复漂浮半透明输入栏，作者不能靠卡片在输入区常驻占位或遮住输入。只有用户需要主动打开的重要扩展前端才建议使用已有 CardResource 的 defaultRegion="MENU"（并选择支持 MENU 的 presentation）；普通状态和低重要性进度不应占据常驻横条或输入区。移除的生图进度横条不意味着自动把低重要性进度登记到右上角菜单；确有重要前端需求才按上述 MENU 卡片合同设计。不要为“重要性”、悬浮层或菜单动作臆造扩展字段。
+userAdjustable 控制用户能否调整布局，autoAdapt 为窄宽适应，minimumWidthDp 是120–1200dp的紧凑断点，不是固定宽度；floorScope=LATEST/EACH，hideWhenEmpty=true 可隐藏空内容，condition 控制可见性。用户覆盖位置在 Session.cardPlacements，扩展导入不要编造 Session。
+CHAT 楼层卡遵守正文修订与分支来源；旧数据不能冒充新楼状态。已接受 card.define 快照随回执保留，不能靠改 live 模板重写旧结果。不同区域和资源卡应交给 CardDisplays 统一解析。
+card.define 需要 cardDefinition，visible=false、outputProcessing=[]、regexOutputCopy.enabled=false。只是需要可编辑状态展示时优先使用 CallGroup.cards，避免增加无必要的执行节点。
+
+6. 可直接导入的完整最小示例
+
+同目录 examples/native-xml-status.config.json 是完整配置，含2个资源：一个无工作流的调用组与一个默认关闭的原生扩展。组有 XML 状态卡、两个字段、列表、可折叠分区、CSS，defaultRegion=MENU，借此演示菜单卡片结构；实际作者应按上段重要性选择位置，不把普通状态都搬到 MENU。无 JS、模型、连接、主调用、聊天或 select 设置。
+直接导入 JSON；在扩展列表打开“XML 状态卡示例”，进入包含它的新聊天，点击右上角省略号可见“状态”。它显示固定演示 XML；不会自动从角色或历史推测状态。实际使用时在原生卡片编辑器修改来源，或添加下面的显式模型流程。
+生成同等 ZIP：
+python docs/examples/pack_native_xml_status.py /可写目录/native-xml-status.bundle.zip
+打包脚本只使用 Python 标准库，拒绝覆盖已存在文件。JSON 示例才是事实来源；ZIP 只增加 manifest，不改资源。
+
+7. 从静态卡片扩展到原生后台状态流程
+
+最小关系：扩展 -> GROUP -> workflow(model.generate -> macro.process)；组中 CardResource.sourceTemplate="{{state.my_status}}"。将 my_status 的初始完整 XML 放 group.stateDefaults。用户填写规则和模型后再启用流程。初始 XML 应与卡片 xmlSample 同一结构。
+Workflow.trigger="reply.completed" 表示主调用默认调用成功并接受正文之后触发，不等待无关并行调用；普通附加可见输出不会冒充主回复完成。需要另一个调用完成后再运行时用 afterWorkflowId，它优先于 trigger，等价 workflow.completed:<workflowId>。
+节点依赖使用 dependsOn 中同一 workflow 的 node ID；跨 workflow 用 afterWorkflowId，不把 workflow ID 塞进 dependsOn。model.generate 输出设唯一 outputKey="my_status_generated"，visible=false；下一 macro.process 节点依赖它，inputTemplate="{{result.my_status_generated}}"，macroProcess={"key":"state.my_status","mode":"SET"}，另设唯一 outputKey。arguments 的值必须是字符串，即使 descriptor 类型为 NUMBER/BOOLEAN。
+注意资源卡解析失败只表示显示错误，不替宏写入提供事务性 XML 校验。如果要求“坏 XML 不覆盖上一状态”，在保存 macro.process 前加入 card.define 校验节点，依赖链为生成 -> card.define -> 保存；其 cardDefinition 使用同一有效 XML 结构，visible=false。card.define 会产生自己的已接受卡片，不是纯无显示校验；这类流程应以该动作卡为显示来源，避免同时布置资源卡造成重复。不要在验证前写入上一状态。
+模型节点 blocks 显式提供任务、输出协议、History 与上一状态，includeHistory=false 避免重复自动历史。输出协议如“仅输出唯一 <status>，含 mood 和 notes/item，不带属性，文本作 XML 转义”。保留用户任务原文，不暗中补写角色策略。
+
+queued=false 是并行路径，各依赖链独立推进；queued=true 按 priority 从小到大分级，同级可并行，该级完成才到下一等级。priority 不决定上下文顺序。模型连接的并发限额仍有效。声明/实际写冲突会拒绝，不能靠多个无依赖节点写同一个 state/result 抢最终值。
+turn.prepare 用于主模型编译前所需注入；prompt.inject 必须定位真实模型节点/槽，必要依赖完成后模型才编译。reply.completed 不适合注入本轮已发送的主模型请求。event.emit 只能发自定义事件，不能伪造 turn.prepare、user.message、reply.completed、history.process 或 workflow.completed: 保留事件。
+
+8. 提示块与宏
+
+WorkflowNode 常用：id、actionId、dependsOn、blocks、inputTemplate、outputKey、visible、includeHistory、enabled、arguments、generation。generation 的 profileId 为空可继承 workflow/全局模型；execution24 起 temperature/topP/maxTokens/reasoning 只使用行为显式配置，省略或 null 表示不发送，不继承提供商模型的旧默认值。reasoning 的 OFF/AUTO 都是明确选择；不要用 OFF 代替省略。供应商必填的协议字段仍由适配层提供。不要在普通扩展中硬编码用户凭据或替换全局选中模型。
+PromptBlock 常用：id、title、template、role=SYSTEM/USER/ASSISTANT、enabled、position=BEFORE_HISTORY/IN_HISTORY/AFTER_HISTORY、depth、processing、condition/recognition。mergeAdjacentMessages 默认true；关闭后该块消息不与前后合并。所有注入与历史投影完成后，当前 execution 合并两侧均允许合并的相邻相同最终 API role，中间一个换行，省略纯空白消息；原始历史角色与楼层不变。不要开启旧 history.mergeMessages 来模拟此行为。
+
+常用文本引用：{{input}}、{{user.name}}、{{user.prompt}}、{{character.name}}、{{character.profile}}、{{pack.namespace.key}}、{{state.my_status}}、{{result.my_status_generated}}。静态词条分类 {{category.category}} 与运行结果分类 {{results.category}} 不同。
+完整 typed 宏语法及允许字段以 PromptReferenceLanguage/MacroReferences 为准；不要把点分路径当 JS 属性或任意 JSONPath。// 只是编辑器插入助手入口，不是运行时语法。
+历史例子（以下为模板文本，放进 JSON 字符串时再 JSON 转义）：
+{{type:builtin.in:history.name:messages.source:display}}
+{{type:builtin.in:history.name:messages.source:display.from:end-3.through:end-1}}
+{{type:builtin.in:history.name:messages.speaker:assistant.from:end-3.through:end-1}}
+{{type:builtin.in:history.name:messages.speaker:user.from:start-2.through:start-4}}
+{{type:builtin.in:history.name:messages.speaker:user.format:"{\"apiRole\":\"ASSISTANT\"}"}}
+speaker 只用于 builtin history messages/context，取 user/assistant/system。先按原 speaker 过滤，再从匹配池选 from/through，最后投影最终 API role；source:display/model 独立选择文本版本，model 不等于 assistant。{{floor}} 保留原 BODY 楼层编号。未指定范围但指定 speaker 时读取全部匹配来源，不继承主历史范围。结构化 History 独占普通块，不混字面说明；需要普通字符串可加 .as:text，范围/来源/包装不变；例如 {{type:builtin.in:history.name:messages.from:end-3.through:end-1.as:text}}。输出 Assistant: 内容、User: 内容等换行文本，整个结果使用所在提示块的外层role，不拆为API消息；文字标签保留原说话人，不受API角色覆盖/历史合并影响。{{history.text}} 与 {{history.raw}} 也是TEXT（前者使用压缩上下文，后者原始楼层）。省略as或.as:messages为消息历史。旧execution<=25不接受as，旧文本来源按原语义回放（text不加标签、raw使用小写标签）。
+
+普通 PromptEntry 默认 isTemplate=false；true 才把文本当模板递归处理。不要为了引用已有词条而批量把用户词条改为模板。历史已发布版本是字面快照。版本选择不能凭空制造未记录或 current-only 来源的旧版本。
+接收槽是 PromptBlock(injectionSlot=true,template="",processing=[],slotReferences=[完整单个宏引用...])；不是一个含 {{slot}} 的普通字符串。slotReferences 不混字面文字或结构化 History。prompt.inject 的 targetBlockId 用真实 block.id，contextOrder 为正整数，决定槽内上下文顺序，与 queued/priority 无关。注入内容已解析为字面值，不再递归展开。
+
+正则使用 RE2J，不支持 PCRE/JS lookbehind、反向引用等完整语法。JSON 中反斜杠须再次转义。TextProcessStep 的 REGEX_EXTRACT 可用 requireMatch=true 拒绝未匹配；输出正则副本/text.extract 有自己的严格规则，不能互相类推。
+Condition.expression 是受限只读 DSL，不是 JS；复杂字段和动作参数必须查 API descriptor 与对应 validator，不能把动作名当成通用远程 API。
+
+9. JavaScript 扩展的真实边界
+
+扩展 code={"runtime":"javascript","version":1,"source":"function execute(context) { return context.input.trim(); }"}。
+通过节点 actionId="plugin.run"、arguments={"pluginId":"扩展ID"} 调用。扩展须参与当前执行上下文。v1 使用全局同步 execute(context)，不要 export default、ES module、async/Promise；v2 使用 async execute(context, host)。不要把 v2 代码塞入 version=1。
+context 有 pluginId、input、state、results、messages；messages 为最多32条 BODY，含 role/text/speakerName，state/results 是字符串映射。输入是节点 inputTemplate 及 inputProcessing 后的值，不保证自动等于用户输入。返回字符串或 {text:"..."}，不会返回宿主 state patch、页面、模型调用或文件写入。
+源代码≤64KiB、序列化捕获上下文≤256KiB（内部含 code）、state/results 各≤256项、输出≤128KiB；Android 每次新 QuickJS，16MiB内存、256KiB栈。v1 默认1000ms。传入 JS 的上下文深冻结，code 对象移除，Date/Math.random 禁用。v2 只通过 host.invoke 访问已实现能力，总时长最多180秒，HTTP最多64次，单次等待最多10秒；具体限制以 pluginCapabilities 为准。
+v2 code.permissions 声明精确 HTTPS origin、方法、凭据别名；声明不等于本机授权。用户在扩展详情中授权当前代码与权限，改动后须重新授权。密钥只在原生凭据栏填写，不写资源、源码、上下文或请求模板；宿主按别名注入请求头，JS 无明文读取接口。授权和密钥不随导入导出迁移。
+v2 已接受结果保存在既有回执/快照中，不进入纯结果重算配方。分支重建不能再次请求外部服务。未知提交结果不能自动重发 POST；本轮运行中可轮询，但跨进程远端任务恢复仍需后续任务能力。错误返回稳定 code、retryable 和 delivery；取消不表示远端任务已撤销。
+需要写状态、注入或调用模型时组合普通原生 workflow actions。卡片 CSS/正文外观模板也不能替代码扩展突破沙盒。导入仅保存，不能视为执行成功。
+
+10. 内置摘要与自动选项的 XML 合同
+
+记忆：全局唯一 memoryConfig 引用 ConfigurationExtension.memory；实际小/大摘要 workflows 在其 GROUP 中，生成摘要仍保存各 Session.historyMemory，不跨聊天共用。规则按原 BODY 楼层计数，用户和助手各一层；小摘要保留尾部和保护最早楼层，大摘要聚合完整小摘要且不能拆开来源。不要手写 HistorySourceRef/指纹来伪造来源。
+GlobalMemoryConfig.smallSummaryXmlTag / largeSummaryXmlTag 默认 summary；execution23 的实际摘要生产模型必须输出唯一完整且非空的该标签，如 <summary>摘要正文</summary>。标签内部只支持纯文本、XML 转义/CDATA，不允许属性、嵌套、DTD/外部实体；输入≤1,048,576字符。允许周围文本不意味着允许第二份同名摘要。缺失/重复/空/非法标签导致 OUTPUT_FORMAT，不保存该摘要。
+可见的摘要提示词协议引用 {{state.memory_summary_xml_tag}}。编辑标签时同步检查提示块，不能依赖隐藏系统提示修补输出。当前摘要先做 XML 校验提取，旧正则副本不应先剥掉根；execution≤22 冻结流程保留旧行为。xmlValidationVersion 是 live 协议迁移标记，不是关闭验证按钮。不要为新包设置凭据别名/旧工作流迁移字段。
+
+自动选项是全局辅助 UI，结果临时存在内存，不写会话/宏/ZIP，也不自动发送。count 1–12，historyTurns 1–50对已完成用户/主助手 DISPLAY BODY，默认5。blocks 非null时发送实际保存的提示块与输入，不暗补删掉的 History 或 SYSTEM。新默认模板在历史之后含可编辑USER生成请求，以兼容不支持Assistant预填充的模型；既有自定义模板不会被暗补，需要自行添加末尾USER请求或改为纯文本历史。generation/reasoningParsing/inputTemplate/inputProcessing/outputProcessing 使用原生模型编辑字段；旧 prompt/modelProfileId 在 blocks=null 保留原兼容方式。
+当前字段：titlesEnabled、items=[{contentTag,titleTag},...]、layout=ABOVE_HORIZONTAL/LEFT_VERTICAL。count 是数量权威；不足 items 使用默认 option/title，缩减数量时可保留未使用的后续配置。不同标签按名称匹配，同名按出现顺序分配，各标签出现次数必须精确；有标题时按每项 title 再 content 消耗同名值。
+输出是并列元素，不套额外根：<title>询问近况</title><option>今天过得怎样？</option>。配置独立名字时使用实际 contentTag/titleTag。不能带属性、嵌套、说明、代码围栏、注释、DTD/外部实体或处理指令；文本中的 &、<、> 作 XML 转义。完整UTF-8回复≤64KiB，单项内容≤2000字符，标题≤120字符且都非空；不显示半成功选项。
+items=[] 且 titlesEnabled=false 保留旧重复 <option> 的兼容解析，不要把新的自定义 XML 能力投射到旧解析器。无标题显示内容，有标题显示完整标题，点击展开内容再填入草稿；横排在输入上方，竖排在左侧。已有草稿仍走替换/追加确认。
+提示协议用可见 {{state.automatic_options_protocol}}，数量可用 {{state.automatic_options_count}}；协议更新按钮只更新指定格式块，不替用户清空任务/风格。删改协议后输出不匹配应报错，不能描述成模型无条件遵守新标签。
+
+11. 正文外观与历史兼容
+
+MainCall.bodyAppearanceTemplate 默认字面 {{正文}}，空白/默认使用原生 Markdown。自定义单框 HTML/<style> 模板通过受限 inert renderer，把实际正文插入合法文本节点，占位不等于任意全局宏。它只改变助手正文外观，不接管原生思考、消息动作、用户消息、卡片 CSS 或普通附加输出。不要宣称自定义模式支持任意脚本、外链资源、原生数学/交互图/引用跳转的全部能力。
+具体标签/CSS 安全边界及“文字宽88%、插图宽100%”完整可粘贴模板见 APPEARANCE_GUIDE.txt。文字收窄只改 .companion-markdown 的非插图直子元素；旧模板外层若已限宽或留大 padding，插图不会自动越过祖先。原生 Markdown 显示不读取自定义正文 CSS。
+旧 tiles/bodySourceTileId/bodyTextTemplate、ExtensionBinding、旧摘要与自动选项兼容字段可能仍在 serializer 目录；“可以读”不等于当前新资源应该写。回放必须遵守捕获 executionVersion，不把新模板、开关资源或解析规则追溯套到历史。
+
+12. 最少验证与维护入口
+
+先静态确认：引用闭合、enabled=false、无模型/密钥/聊天意外新增、fields 与 xmlSample 一致、ZIP 所有附件被引用。再用真实导入器预览/应用到内存默认库，最终由用户检查实际 UI。不要重复跑全量模型或设备测试来验证纯资源包。
+仓库自带可复现的离线 Java 工具，需项目 Java21/Gradle/core 依赖环境：
+bash ./gradlew --no-configuration-cache -I docs/examples/authoring-tools.init.gradle :core:authoringCatalog
+bash ./gradlew --no-configuration-cache -I docs/examples/authoring-tools.init.gradle :core:validateExtension -PextensionFile=docs/examples/native-xml-status.config.json
+Windows 对应 gradlew.bat。打包后将 extensionFile 换为 ZIP 路径，可同时验证传输层。authoringCatalog 从当前实际 serializers/ActionRegistry 重生成目录；validateExtension 只在临时目录和内存默认库调用 ResourceArchiveImport.read -> ConfigurationCommands.preview -> apply，不读生产库、不发模型请求。这个轻量工具故意拒绝头像；含头像包应走支持头像的现有真实导入测试/应用。工具不会证明模型遵守输出协议、设备布局或运行时分支效果。
+
+源码定位（core 路径为 core/src/main/kotlin/dev/gray/companion/core）：
+- 导入/命令/严格字段：ResourceArchiveImport.kt、ResourceArchiveIo.kt、ConfigurationCommands.kt、ResourceKindCatalog.kt、LibraryValidator.kt。
+- 数据类型：Models.kt、ExtensionModels.kt、CardModels.kt；版本 LibraryFormat.kt、ExecutionSemantics.kt。
+- 扩展启停/迁移：PluginParticipation.kt、ExtensionLiveMigration.kt、ExtensionCommands.kt、CompletedWorlds.kt。
+- 卡片：XmlCardData.kt、CardDisplays.kt、CardMarkup.kt、CardLayoutCommands.kt；测试 XmlCardDataTest、CardResourceIntegrationTest、CardSectionsTest、GlobalExtensionSwitchTest。
+- 调用/提示词：Actions.kt、RuntimeEvents.kt、PromptCompiler.kt、PromptReferenceLanguage.kt、MacroReferences.kt；实际 actions 字段以 API JSON 为准。
+- 摘要/选项：GlobalMemory.kt、SummaryXml.kt、OutcomeValidation.kt、AutomaticOptions.kt、AutomaticOptionsXml.kt；测试 SummaryXmlTest、AutomaticOptionsXmlTest。
+- 代码扩展：PluginCodeExecutor.kt 与 app 内 QuickJsPluginExecutor；UI 从 app/src/main/java/dev/gray/companion/ui 的 ExtensionPages/CardResourcesEditor/CardDefinitionEditor/MemorySettingsPage/AutomaticOptionsSettingsPage 追踪。
+新功能先遵守 docs/ARCHITECTURE.md 和 docs/DEVELOPMENT.md 的边界：原生资源权威、接受回执、分支来源、冻结执行语义。修改字段时同步 serializer 目录与示例；修改语义时检查版本隔离。未经用户授权不迁移生产数据、调用付费模型、提交 Git 或扩大到新的插件协议。
+
+
+13. 角色默认用户身份（0.58 / wire31）
+
+CharacterCard.boundPersonaId 可为空，非空必须指向同库或同批导入的 personas。新聊天优先角色绑定身份，其次全局 selectedPersonaId，再回退当前聊天的身份。已有聊天继续使用保存的 Session.personaId，打开聊天不会重新应用角色绑定。UserPersona 的 name、prompt、avatar 分别为名称、字面身份设定和头像；当前身份通过 {{user.name}}、{{user.prompt}} 引用。身份 prompt 不递归展开宏。删除仍被角色、当前聊天、收藏或可恢复分支选择引用的身份会被拒绝。
+
+14. 提示词块命名（0.59）
+模型调用中的 PromptBlock 只设置 title，不为新块生成 slug；旧 slug 只保留兼容元数据，不是整段提示词的宏地址。提示词包条目和调用结果的既有宏保持可用。
+
+15. 用户输入宏（revision75）
+
+WorkflowNode.actionId="user.macro.create"，userMacro={"shortcut":"/抽天气","value":{"kind":"RANDOM_REFERENCE","references":["{{state.sunny}}","{{state.rainy}}"]}}。
+该行为运行且接受回执后，才在当前聊天登记；只保存调用配置不会立即登记。TEXT 使用非空字面 text；REFERENCE 使用恰好一个完整标量引用；RANDOM_REFERENCE 从不重复的完整引用列表取一项，候选均须存在。可引用已有角色/身份、提示词条目、结果、宏、状态等标量，不能引用当前尚未发送的 input 或整个历史。
+输入已登记快捷词并紧接 ASCII 空格，界面显示待执行标签；删除该空格还原快捷词。底层草稿始终为普通文本，没有隐藏执行标记。只有新USER消息准入时展开，同一条消息中同名快捷词只求值一次；预览/打字不抽取，历史编辑/重试/重新生成不再次展开。发送后历史与模型输入只保存展开文本。缺失引用则拒绝发送，保留输入草稿。定义随会话快照/分支/断点恢复，不是全局宏，也无一次性消费或权重。
+
+16. 运行内配置工作台（revision75）
+
+设置→配置工作台：新建隔离草稿，可直接编辑原生字段或暂存 companion.config.v1 JSON，再检查累计变更并应用。支持多个草稿；无效批次不会部分生效，暂存成功才推进 revision。草稿仅保留于当前进程，重启前可复制累计命令。应用保存资源与撤回回执，仍从已有配置修改记录撤回。
+工作台只编辑 character/mainCall/package/group/persona/tag/extension。连接、凭据、模型定义和全局选择继续使用原生设置；models 只读取安全名称/ID摘要。读取与起草不停止正在运行的主调用；应用遇忙返回 BUSY，保留草稿；并发改过同一资源则拒绝覆盖。提交对最新活库重新校验并在原事务中保存，保持聊天、断点和已冻结世界不变；完整依赖读集一致性尚未提供。
+ConfigurationToolGateway(controller).execute(JSON) 是同一进程的共享工具入口，工作台提供可折叠工具请求框。不是网络服务器，也未接入常驻Agent、@路由或侧栏。使用 {"op":"describe"} 发现全部工具及请求样例；{"op":"schema"} 返回根类型，{"op":"schema","type":"WorkflowNode"} 返回实际序列化字段、枚举、optional/nullable，不等于完整业务校验或通用JSON Schema。
+插件作者可用 {"op":"pluginCapabilities"} 查询宿主方法、参数、限额与错误，用 {"op":"schema","type":"PluginCode"} 查询资源声明，用 {"op":"pluginAccess","id":"扩展ID"} 查询本机授权摘要与已配置的凭据别名。后者不返回密钥，也不提供授权写入工具。
+常用读取：resources（可加query/kind）、resource（kind/id）、fields（resource={kind:"PACKAGE",id:...}）、readField（target）、actions、models、sessions、context（sessionId，默认最多20条/16000字符BODY正文）、sessionResource（指定聊天实际冻结资源）、usages（location）。read资源时不带workspaceId即活库，带workspaceId即草稿；会话读取始终取当前聊天快照。不会默认导出全库、推理文本、原始模型回复或连接秘密。
+典型操作顺序：open→resources/fields→stage或field→preview→commit。open返回workspaceId及revision。stage接收commands对象或JSON字符串；field接收稳定target与expectedValue/value（字符串或null）。stage/field/preview/commit/discard均必须传workspaceId和expectedRevision。每次成功暂存后用返回的revision；修改后旧preview失效。preview返回累计前后值，commit只接受这个版本的预览；export可复制累计原配置命令。状态与issues结构化返回，STALE须重读，BUSY须等待当前操作结束；不得把失败描述成已保存。
+
+修订90输出宏：普通文本产出即result.<outputKey>宏。recordTrajectory决定是否记录可回溯版本，不影响最新值引用。execution28模型也可关闭；新资源模型建议true、其他逻辑默认false。既有显式值不覆盖，旧冻结执行<=27仍按旧规则。关闭后不保存隐藏模型的逐版原始输出；已有正文、回执与旧历史不因此删除。正则复用outputProcessing步骤链和regexOutputCopy，不需要额外向导。
+
+Revision92 History纯文本前缀：历史引用可使用prefixes双引号JSON字段，键assistant/user/system，字符串缺省或空白时保留Assistant: /User: /System: 完整前缀。非空值按字面替换完整前缀，调用者自行包含标点、空格、换行；不展开宏。prefixes独立于format，不触发局部逐楼包装、不改变范围/来源/API角色；只在as:text输出生效，as:messages可保存但忽略。编辑入口为历史引用半屏栏的“发言方文本前缀”。旧execution<=25拒绝prefixes。
+
+
+============================================================================
+附录 C · 卡片与正文外观作者指南（源码 docs/APPEARANCE_GUIDE.txt）
+============================================================================
+
+velune 卡片与正文外观作者指南
+0.75-preview / code243 · 源码修订93 · wire37 / execution28
+
+本页讲两种不同的美化入口：CallGroup 卡片的结构化字段与静态 CSS，以及 MainCall 的助手正文 HTML/<style> 模板。它们不共用字段、占位符或校验器；先选对象再写样式。系统架构看 architecture-guide，资源 JSON 外壳和导入流程看 resource-guide，实际类型字段与枚举看 schema-reference。
+
+1. 卡片：数据、结构、样式分开
+
+在 CallGroup.cards 中定义 CardResource，sourceTemplate 指向字面文本或现有宏，definition 为 CardDefinition。XML 模式必须写 dataMode="XML"、xmlRoot、完整 xmlSample；fields 的 key/xmlPath 与样例实际叶路径相符，elements 通过 fieldKey 引用它们，sections 可折叠分组。同一字段可有多个显示元素。导入器不会按样例替作者补 fields/elements；卡片 XML 解析与记忆摘要、自动选项的 XML 合同不同。
+
+卡片由宿主生成结构，字段值做 HTML 转义，CSS 只改外观，不能把字段内容当 HTML/JS 或在 CSS 中做 {{宏}} 插值。常用生成结构选择器：.card、.card-title、.card-element、.field-title、.field-value、.field-list、.field-progress、.field-more、.card-section、.card-section-title、.card-section-content。#实际element.id 与 #实际section.id 可用于定点样式，例如：
+
+  .card { box-sizing:border-box; padding:16px; border-radius:14px; }
+  #mood .field-value { font-size:20px; }
+  #details .card-section-title { font-weight:600; }
+
+卡片 CSS 最长 65536 字符；不允许标签、反斜杠转义、url()/image-set()、@import、@font-face、expression()、外部地址或其它加载资源的构造。不是网页脚本运行环境。CSS 中可用的 selector 应指向真正生成的类或 ID，元素 ID 以配置中实际值为准。不要凭中文标题推断 ID。
+
+卡片 presentation=CARD 可放 CHAT/SIDEBAR/INPUT/MENU，SIDE_PANEL 可放 SIDEBAR/MENU，STRIP 可放 CHAT/INPUT/MENU。这里的 INPUT/STRIP 是兼容枚举，不表示作者应占据漂浮半透明输入栏。重要且要用户主动打开的扩展前端，用既有支持 MENU 的组合并设 defaultRegion="MENU"；用户从聊天右上角省略号选择后，悬浮卡片在当前页面显示。普通状态和低重要性进度不要做常驻横条或遮住输入；生图进度横条移除不代表它自动成为菜单项。没有 importance、overlay、menuAction 等资源字段。
+
+2. 主助手正文：一个可见占位符
+
+MainCall.bodyAppearanceTemplate 默认是字面 {{正文}}，空白或仅 {{正文}} 使用原生 Markdown 正文路径。自定义模板要在普通 HTML 文本节点恰好出现一次 {{正文}}，不能放属性、<style>、注释或不允许的元素内。它不调用项目宏，也不用于卡片、USER 消息、思考折叠或辅助输出。模板最长 100000 字符。编辑器预览有语法检查；导入时还需真实资源预览。改变模板只改变显示，不改保存的 BODY、History 或 CoT。
+
+自定义模板允许常见文本/布局标签，如 article、section、div、span、p、标题、列表、表格、blockquote、pre/code、details/summary 与 <style>，也允许受控 class/id/inline style。模板经 Jsoup safelist 清理，再在禁止外部请求和脚本的本地显示环境呈现。不要放 <script>、<iframe>、<img>、表单、外链字体、url() 图片或可执行事件属性；这些不会构成受支持的作者 API。正文 Markdown 的原生 HTML 标签被当文本转义，输出还会被清理；由宿主生成的插图是独立安全来源。自定义 HTML 模式不保证原生 Markdown 的全部数学、交互图、引用跳转等能力。
+
+{{正文}} 在运行时成为一个 .companion-markdown 容器。宿主插图会以其直接子元素 .companion-generated-illustration 出现在对应段落后，里面有宿主生成的 img。若想文字较窄、插图尽量铺满可用宽度，须只限制文字子元素，不能让共同父层变窄。
+
+可直接贴入“正文外观”编辑器的例子：
+
+<style>
+  .body-note {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0;
+    border: 1px solid #9b91a5;
+    border-radius: 16px;
+  }
+  .body-note .companion-markdown { width: 100%; box-sizing: border-box; }
+  .body-note .companion-markdown > :not(.companion-generated-illustration) {
+    width: 88%;
+    max-width: 680px;
+    margin-left: auto;
+    margin-right: auto;
+    box-sizing: border-box;
+  }
+  .body-note .companion-generated-illustration { width: 100%; }
+  .body-note .companion-generated-illustration img {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: none;
+    border-radius: 14px;
+  }
+</style>
+<article class="body-note">{{正文}}</article>
+
+调文字宽度时把 88% 改为 94% 等，只改上述文字子元素规则。不要通过缩小 .body-note 或 .companion-markdown 的 width/max-width、增大共同父层 padding 来收紧文字；图片也是它们的子元素，会一起变窄。需要背景、边框或圆角时放在外层，但保持外层 width:100%、box-sizing:border-box、padding:0，图片宽度由 wrapper 和 img 独立控制。宿主默认插图会设 width:100%、height:auto、max-height:none，并保留渐隐与圆角；上例显式写出宽度意图，后续细调可保留宿主默认特效。
+
+CSS 只能作用于当前模板的可见 DOM。既有旧模板若在更上层祖先设了 92% 宽、680px 最大宽或大 padding，后代的 img {width:100%} 只会填满那个窄祖先，系统不会自动突破作者祖先约束。先去掉或调整祖先约束，再用直子选择器缩文字。宿主聊天列表/气泡本身的可用宽度仍是上界，100% 不是屏幕物理宽度的承诺。原生 Markdown 路径不读取这里的自定义 CSS；想要这套窄文字宽图布局，先启用自定义正文外观模板。
+
+3. 排查与交付
+
+- 图片仍窄：检查每一层祖先 .body-note、.companion-markdown 和其它自定义容器的 width/max-width/padding；再检查是否在文字选择器之外写了全局 img 或 wrapper 限宽。正文插图须由内置功能实际生成并与当前 BODY 来源匹配；没有图片时模板预览只能说明文字布局。
+- 文字规则未命中：确认 {{正文}} 位于 article 普通文本节点、模板保存成功，且选择器指向运行时的 .companion-markdown 直接子元素。默认原生 Markdown 路径不使用 bodyAppearanceTemplate 的 CSS。
+- 内容消失或格式变化：核对被清理的 HTML 标签、占位符数量与位置；卡片则核对 dataMode、xmlSample、fields/elements、真实 fieldKey 和 CSS 的实际 ID。不要靠脚本、外链图片或隐藏提示词补救。
+- 交付时说明是卡片 CSS 还是正文模板、实际改了哪个资源、做过何种预览。导入成功不证明不同屏幕宽度、真实模型内容与插图的最终观感；交由用户在实际聊天中体验。
+
+
+============================================================================
+附录 D · 插件宿主 API v2（源码 docs/PLUGIN_API.md）
+============================================================================
+
+# 插件宿主 API v2
+
+Revision93，2026-10-13。插件继续通过普通 `plugin.run` 行为执行；本页描述 JavaScript v2 宿主能力。BizyAir 插图是独立的内置扩展；实际验收与限制以 HANDOFF 为准。
+
+## 创建与发现
+
+在扩展定义中选择 JavaScript v2，填写代码和网络声明；保存后在扩展详情授权并填写凭据。总启停开关仍在扩展列表卡片。已有 v1 插件保留纯文本执行与旧分支语义，不会自动升级。
+
+配置工作台工具提供：
+
+```json
+{"op":"pluginCapabilities"}
+{"op":"schema","type":"PluginCode"}
+{"op":"pluginAccess","id":"你的扩展ID"}
+```
+
+第一项返回宿主方法、参数/结果 schema、示例、错误与限额；第二项返回真实资源序列化类型；第三项只返回本机授权摘要及已配置的凭据别名。Agent 可以起草资源、查看缺少什么，不能通过这些工具授予权限或读取密钥。完整离线参考也包含在 `AI_IMPORT_API_REFERENCE.json` 的 `pluginCapabilities` 中。
+
+## 入口与权限
+
+```javascript
+async function execute(context, host) {
+  const response = await host.invoke("network.http", {
+    url: "https://api.example.com/v1/status",
+    method: "GET",
+    credential: { alias: "serviceKey" }
+  });
+  if (!response.ok) throw new Error(response.error.code);
+  if (response.data.status !== 200) throw new Error("SERVICE_STATUS");
+  return response.data.body;
+}
+```
+
+`context` 仍有 `pluginId/input/state/results/messages`；内容冻结，messages 为受限 BODY 文本，代码和密钥不传入 JS。入口返回字符串或 `{text: "..."}`；要返回 JSON，应 `JSON.stringify(value)`。没有浏览器 `fetch`、DOM、文件、环境变量、任意 Android 对象或数据库接口。
+
+对应的 `code` 声明：
+
+```json
+{
+  "runtime": "javascript",
+  "version": 2,
+  "source": "async function execute(context, host) { return context.input; }",
+  "permissions": [
+    {
+      "capability": "network.http",
+      "origins": ["https://api.example.com"],
+      "methods": ["GET", "POST"],
+      "credentials": ["serviceKey"]
+    }
+  ]
+}
+```
+
+每条规则是一组完整授权范围：目标 origin、方法和所用凭据必须匹配同一条规则。origin 不含路径、尾斜线、用户信息、查询或片段；使用小写主机名和精确端口，不支持通配符。使用国际域名时填写 ASCII/Punycode 形式。别名以英文字母开头，只包含英文字母、数字、下划线、点和连字符，最多64字符。
+
+声明不会自动变成本机授权。授权绑定扩展 ID 及完整代码/权限摘要；修改源码或声明后新版本须重新授权。授权可撤销，不随导出迁移。模型参数、提示词等组成资源仍由既有原生编辑器管理。
+
+## HTTP
+
+`await host.invoke("network.http", request)` 接受：
+
+| 字段 | 含义 |
+|---|---|
+| `url` | 必填，绝对 HTTPS URL |
+| `method` | 默认 GET；支持 GET、HEAD、POST、PUT、PATCH、DELETE、OPTIONS |
+| `headers` | 可选字符串映射，默认空 |
+| `body` | 可选文本；发送 JSON 时先 JSON.stringify，并设 Content-Type: application/json |
+| `credential` | 可选 `{alias, header, prefix}`，默认 header=Authorization、prefix="Bearer " |
+| `timeoutMs` | 默认30000，最大60000 |
+| `maxResponseBytes` | 默认262144，最大1048576 |
+
+凭据在原生扩展详情中填写，由既有 Android Keystore 适配器加密保存于独立的插件命名空间。宿主只在授权目标的请求头中注入，不提供 JS 明文读取接口。不要把密钥写进源码、资源、普通请求头或 body。常见认证请求头必须用凭据引用。API 返回中原样回显的注入凭据会被遮盖，敏感响应头被移除；外部服务对凭据的处理仍由该服务决定。
+
+成功获得 HTTP 响应：
+
+```json
+{"ok":true,"data":{"status":200,"headers":{"content-type":"application/json"},"body":"{\"value\":1}"}}
+```
+
+`ok=true` 表示拿到 HTTP 响应，不表示服务成功；4xx/5xx同样通过 `data.status` 检查。宿主不自动追随重定向、不重试请求、不携带浏览器 Cookie 或模型连接凭据，也不记录请求/响应内容。插件联网目前使用独立直连客户端，不继承应用代理设置；HTTPS 目的地址在 DNS 后检查并固定，拒绝本机、内网和保留地址。
+
+网络失败或参数/权限错误：
+
+```json
+{"ok":false,"error":{"code":"PERMISSION_DENIED","message":"插件网络权限未授予或超出声明范围","retryable":false,"delivery":"not_sent"}}
+```
+
+`delivery` 为 `not_sent`（未提交）、`unknown`（可能已经到达远端）、`received`（已收到响应，可能在读取阶段失败）。不能因为 `unknown` 就重发收费 POST；插件应保留服务返回的任务 ID，优先查询原任务。当前错误码与格式以能力清单为准。未经处理的脚本异常显示经过清理的执行错误，避免把请求或密钥写入诊断。
+
+## 等待与能力发现
+
+```javascript
+await host.invoke("runtime.sleep", { milliseconds: 2000 });
+const capabilities = await host.invoke("capabilities.describe", {});
+```
+
+这两项不需要网络声明或设备授权。等待支持0–10000毫秒并可取消。每次 v2 执行总时长最多180秒、HTTP最多64次；请求体最多256KiB，最终插件输出最多128KiB。宿主还限制 JS 内存、栈和持续执行时间；无限等待/循环会失败。所有能力都经同一版本化分发入口，后续能力需增加描述、参数校验、权限和实现，不能只声明名称就取得权限。
+
+## 结果、取消与恢复
+
+v2 的接受结果沿用 AppController 和既有 SQLite 回执保存。即使未勾选轨迹记录，也不会像纯文本 v1 那样把结果替换成纯重算配方；切换候选、分支重建不会再次联网。旧执行版本拒绝 v2，不把冻结聊天偷偷提升到新语义。
+
+取消会停止本地等待和 HTTP 读写，但不能证明远端任务已取消。尚未接受的远端副作用无法由本地事务回滚。本轮没有跨进程任务续跑或“恰好一次提交”保证；长任务应拆为提交、保存任务 ID、查询结果等明确阶段，专门的后台任务与图片附件能力留待后续实现。
+
+可导入的作者示例见 `examples/plugin-v2-http.config.json`，默认关闭、使用示例域名，不含任何凭据。导入校验只证明资源合同有效，不会执行联网代码。
+
+
+============================================================================
+附录 E · 应用内 Agent 工作手册（仅说明应用内工具与权限；外部 AI 不因阅读而获得它们）
+============================================================================
+
+velune 应用内 Agent 工作手册
+修订93 · 0.75-preview / code243 · wire37 / execution28 / SQLite1
+
+用途与权威来源
+你是在 velune 内工作的资源 Agent。用户需要可直接使用的角色、提示词、调用组、卡片和受限插件，而不是一份无法导入的建议。先理解当前资源与用户意图，再在自己的工作台里形成可预览的结果。本文随 APK 离线提供；模型推理仍需要登录与联网。不要为查询本应用契约而要求用户联网找文档。
+knowledge.list 列出六份离线资料；knowledge.read 按 id/offset/maxChars 分页；knowledge.search 定向找关键词。agent-guide 是本手册；architecture-guide 是完整当前系统地图；resource-guide 是资源、ZIP、提示词和导入指南；appearance-guide 是卡片/正文美化语法与宽图窄文字示例；plugin-api 是 JavaScript 宿主 API；schema-reference 是随版本生成的类型/默认值/行为目录。首次处理跨资源任务先读 architecture-guide，再按任务读 resource-guide、appearance-guide 或 plugin-api 的相关段，用 knowledge.search 找术语和 offset，必要时分页继续。不要把有限片段当整份文档，也不必每次全量读机器目录。运行时 describe、config schema/actions/pluginCapabilities 与当前资源结果优先于旧示例；不能凭空猜字段。文档提到的源码路径用于说明实现来源，不代表你能访问源码。
+
+工作边界
+你的文件仅是当前 Agent 聊天自己的 UTF-8 文本工作区。文件写入不会自动安装扩展。不能访问核心源码、APK、原生库、数据库、密钥、任意设备路径或 shell，也不能修改核心或重启应用。需要宿主新增能力时，说明现有接口缺口，保留可行的资源草稿，不伪称已经实现。
+Agent 推理和文件工作独立于主聊天、卡片及辅助调用。切页面不应停止 Agent；Android 终止进程后不自动重放工具或付费请求。正式资源提交复用原有工作台，主聊天忙时返回 BUSY：保留草稿并说明状态，不能停止聊天、绕过锁或循环重试。
+登录与密钥由原生设置页管理。插件声明的权限不等于用户授权。不要将 token/API key 写入文件、资源、提示词、工具参数或示例，不要求用户把凭据交给 Agent。只查询是否配置、引用规定的凭据别名。
+
+基本操作顺序
+1. 首次调用 describe，读本文，并按任务查询 config resources/resource/fields/readField/usages/models/sessions/context。已有资源优先增量修改，使用真实稳定 ID；不要重建或删除用户未要求改动的资源。
+2. 做提示词任务先读取原文与真实块结构；必要时 prompt.preview。mode=preview 是下一次编译的预览，不是实际发出请求；mode=recent 才是当前进程记录的已编译公共消息，最多32条缓存，不含密钥，也不代表网络提供商最后编码的完整字节。没有记录时直说不可得，不补造。
+3. 使用 config open 得到本会话所属 workspaceId；stage/field 暂存，preview 查看完整差异和校验。资源文件、普通 JSON、完整备份与 config 文档格式不同，按 resource-guide 选择正确外壳。
+4. 默认由用户在原生工作台应用；只有用户启用自动应用时工具才允许 commit。遵守基线 hash/CAS、BUSY、INVALID、CONFLICT 与 APPROVAL_REQUIRED，失败后检查现状，不覆盖新编辑。恢复草稿要比对资源基线并重新预览。
+5. 交付说明实际修改、保存位置、校验结果和仍需体验的部分。工具报 OUTCOME_UNCERTAIN/INTERRUPTED 时不能盲重放副作用。只做明确验收、真实故障或重要风险所需的最少检查，不为了覆盖率制造调用。
+
+产品结构
+Library 是唯一资源库；Session/turnRecords/候选/宏历史/冻结世界由宿主维护。角色卡 Character 提供角色资料、开场和关联资源；Persona 提供用户身份；PromptPackage 提供词条；MainCall 管理主工作流；CallGroup 提供扩展工作流、状态、卡片；ConfigurationExtension 引用这些原生资源，可附带受限 PluginCode。连接和模型分离，原生模型目录是权威。
+BODY 是对话正文；侧栏、状态、记忆等输出不能偷偷混进 BODY 历史。提示词引用保留结构、来源、历史轮数和冻结语义。修改展示模板不应改写已接受的原始正文、状态或已存思考。
+同一用户提示词可有多个生成候选；修改用户消息产生提示词版本，重新生成回复产生相应候选。生成前的恢复点、来源和后续分支要保留，不能把候选拍平成普通消息，也不能为重算而再次调用具有外部副作用的 v2 插件。资源 wire 版本与 execution 执行版本独立；历史按自己的冻结版本解释。
+
+提示词编辑规范
+所有模型调用的提示词应使用同一套 PromptBlock/通用编辑器结构，保留可见的角色、顺序、启用、模板、来源引用、位置和宏选择。不把多行文本框当作完整提示词编辑器；不添加用户看不到的系统指令、历史拼接或修复提示词。
+普通输入内容默认保留字面原文；只有明确模板才展开 {{...}}。宏引用按真实类型和来源使用，不自行发明名字。generation 参数、模型、思考解析、输入和输出处理分别遵守 schema，未配置不等于指定默认参数。
+文本结果本身就是可引用的输出宏，无需额外创建。行为内“输出宏”页编辑名称、标签、记录变化及多步正则处理；原result输出键保持稳定。recordTrajectory控制版本轨迹，关闭仍可引用最新值；execution28模型也遵守此字段，新建模型默认true、其他新行为默认false，旧冻结执行<=27仍保留模型强制留档。已有配置的显式值不自动覆盖。regexOutputCopy仍可从原输出生成独立副本，macro.process仍可处理已有宏，不自动回填历史或注入提示词。
+自动选项是独立辅助调用，基于最新完整 BODY 历史；其请求身份包括来源、配置、模型与编译上下文。正文先接受而其他调用稍后更新上下文时，最终请求仍需触发，不能只按正文去重。输出解析遵守可见 XML 协议；修复必须作为可编辑配置显示。
+插图是内置 BizyAir 扩展：规划模型输出严格 XML，通过最近两轮 BODY 及当前段落 p1/p2 等锚点定位图片。旧 blocks=null 保留旧行为，保存到通用编辑器后显式保存任务/历史/外观等块。不得偷偷追加历史。图片与具体正文来源绑定，修改/换候选后不能串图。远端最多2个并发，排队状态可见；请求是否已送达不明时先由用户确认远端状态，不能盲目重发付费任务。
+
+卡片和正文展示规范
+优先用原生 CardDefinition、XML 数据绑定和模板/CSS，不另做一套隐藏显示状态。正文 HTML 与卡片使用共同渲染边界：通常由聊天外层滚动，内部不应出现另一根滚动条；超长内容需要可访问的回退。模板可定自己的背景，宿主不要强加淡蓝容器。图片上下渐隐应融入实际背景，不能用硬编码白色遮罩。
+美化任务先读 appearance-guide：卡片 CSS 只修饰宿主生成的字段/元素，不做宏插值；正文 bodyAppearanceTemplate 是另一套受清理的 HTML/<style>，恰好一个 {{正文}}，不改已保存 BODY。要文字窄而插图宽，保持外层 article 与 .companion-markdown 为 100% 且外层 padding:0，仅用 `.body-note .companion-markdown > :not(.companion-generated-illustration)` 的 width:88%/max-width:680px/margin:auto 收文字；插图 wrapper 和 img 保持 100%，img height:auto/max-height:none。调整文字可把 88% 改为 94%，不要缩共同父层；旧模板的窄祖先不会自动被宿主突破。原生 Markdown 不走这套自定义 CSS。
+输入栏是漂浮的半透明界面，不应被扩展卡片遮住。重要且需要用户主动打开的扩展前端可使用现有 CallGroup.cards / CardResource：让 CardDefinition 选择支持 MENU 的 presentation、defaultRegion=MENU，由聊天右上角省略号选择后在当前页显示悬浮卡片层。普通状态与低重要性进度不放常驻横条或输入区；生图进度横条已移除，也不自动把这种进度登记到右上角菜单。CardRegion.INPUT 与 CardPresentation.STRIP 仍为兼容字段，不能误称协议删除；不要虚构 importance、overlay、menuAction 等资源字段。
+展示身份必须与会话/轮次/节点/输出区一致；流式到已保存消息不能闪空、重复行或重复 key。快速滚动需避免每次重建 WebView 和重复编译卡片；性能修改不能让旧行高度、图片或回调串到新行。重新生成候选时定位对应 USER 消息，不能跳会话最顶，也不让自动追尾抢走定位。
+
+扩展图标与消息操作约定
+扩展提供消息级可重新生成功能时，宿主注册动作必须提供图标、无障碍名称、可用条件和真实回调。用户界面下排使用图标，删除所选版本与分支/编辑同排，不能用说明文字占据扩展图标位。
+当前消息级入口支持内置自动选项与插图；自动选项只属于最新完整 BODY，插图可对当前可见来源重绘。同源任务运行中不能重复提交，旧图保留至首张新图成功发布。普通第三方扩展尚无任意消息级动作注册 API；不要给 ConfigurationExtension 编造 icon/reroll 字段。需要宿主注册新动作时说明接口缺口。插件能力与图标是两层契约，图标不能代替权限和来源校验。
+
+JavaScript 插件
+详读 plugin-api。v1 是纯执行，v2 使用 async execute(context, host) 与 host.invoke；只能使用 manifest 描述的 network.http/runtime.sleep/capabilities.describe 等能力。权限按精确 HTTPS origin、方法、凭据别名声明；修改代码或权限后原授权失效。没有任意 DOM、设备文件、数据库、shell 或宿主模型访问。
+外部响应需校验状态、大小、结构和业务终态；记录 request ID，区分明确失败与结果不确定。网络连接、轮询和取消遵守宿主限制。已接受的 v2 结果沿回执保留，分支重建不再次执行外部行为。
+
+常见错误处理
+INVALID：读 schema 和具体 issue，修复草稿后再 preview。
+CONFLICT/CAS：重读目标与 hash，保留用户新修改，再决定合并；不能去掉 expectedHash。
+BUSY：等待当前聊天自然结束，由下一次明确操作继续；不自动停止、不密集轮询。
+APPROVAL_REQUIRED：告知原生工作台已有可审查草稿，不谎称已应用。
+NOT_FOUND：核对 ID/当前会话/草稿所有权，不扫描设备路径。
+RESULT_TOO_LARGE：缩小查询或分段读取，不重复整库请求。
+OUTCOME_UNCERTAIN/INTERRUPTED：先读当前资源和记录，确定结果后再决定下一步。
+
+沟通与交付
+默认简洁中文，先说明结果，再指出必要限制。任务明确时直接在授权范围内完成；范围分散或缺少关键偏好才询问。复杂体验先给可用版本让用户实际体验，未做的手机/联网/模型测试不能说通过。保留现有功能、兼容标识和用户数据；不要为完成一个扩展而顺手改变全局设定或无关资源。
+
+Revision92 History纯文本前缀：历史引用可使用prefixes双引号JSON字段，键assistant/user/system，字符串缺省或空白时保留Assistant: /User: /System: 完整前缀。非空值按字面替换完整前缀，调用者自行包含标点、空格、换行；不展开宏。prefixes独立于format，不触发局部逐楼包装、不改变范围/来源/API角色；只在as:text输出生效，as:messages可保存但忽略。编辑入口为历史引用半屏栏的“发言方文本前缀”。旧execution<=25拒绝prefixes。
+
+
+============================================================================
+附录 F · examples/character-persona.config.json · 角色与绑定的用户身份：创建新聊天时角色可选择该身份，不改变全局所选身份
+============================================================================
+
+```json
+{
+  "format": "companion.config.v1",
+  "label": "角色与绑定的用户身份示例",
+  "resources": {
+    "personas": [
+      {
+        "id": "example_night_persona",
+        "name": "旅人",
+        "prompt": "我是初次来到钟楼镇的旅人。",
+        "slug": "example_night_persona"
+      }
+    ],
+    "characters": [
+      {
+        "id": "example_night_keeper",
+        "namespace": "example_night_keeper",
+        "name": "守钟人",
+        "slug": "example_night_keeper",
+        "description": "钟楼镇的守夜人。",
+        "greeting": "晚安，旅人。钟楼的灯还亮着。",
+        "boundPersonaId": "example_night_persona",
+        "entries": [
+          {"id": "example_night_keeper_profile", "key": "profile", "title": "角色概览", "text": "钟楼镇的守夜人，熟悉镇上的夜路。", "order": 0, "isTemplate": false},
+          {"id": "example_night_keeper_appearance", "key": "appearance", "title": "外貌特征", "text": "穿深色外套，提一盏旧灯。", "order": 1, "isTemplate": false},
+          {"id": "example_night_keeper_personality", "key": "personality", "title": "性格特征", "text": "说话平缓，待人谨慎。", "order": 2, "isTemplate": false},
+          {"id": "example_night_keeper_background", "key": "background", "title": "身世背景", "text": "多年来负责钟楼的夜间巡查。", "order": 3, "isTemplate": false},
+          {"id": "example_night_keeper_dialogue", "key": "dialogue_examples", "title": "对话示例", "text": "旅人：钟声何时响？\n守钟人：天亮之前，还会有一次。", "order": 4, "isTemplate": false},
+          {"id": "example_night_keeper_world", "key": "world", "title": "世界设定", "text": "雨后的镇子有一座旧钟楼。", "order": 5, "isTemplate": false},
+          {"id": "example_night_keeper_preferences", "key": "preferences", "title": "兴趣偏好", "text": "喜欢修理旧钟表。", "order": 6, "isTemplate": false}
+        ]
+      }
+    ]
+  }
+}
+```
+
+
+============================================================================
+附录 F · examples/static-status.config.json · 原生 XML 状态卡：无需模型、连接或 JS；配置 JSON 可直接导入，也可打 ZIP
+============================================================================
+
+```json
+{
+  "format": "companion.config.v1",
+  "label": "velune 原生 XML 状态卡（无模型调用）",
+  "resources": {
+    "groups": [
+      {
+        "id": "example_xml_status_group",
+        "name": "XML 状态卡示例",
+        "slug": "example_xml_status_group",
+        "workflows": [],
+        "cards": [
+          {
+            "id": "example_xml_status_card",
+            "enabled": true,
+            "sourceTemplate": "<status><mood>平静</mood><notes><item>原生 XML 卡片</item><item>不调用模型</item></notes></status>",
+            "definition": {
+              "title": "状态",
+              "dataMode": "XML",
+              "xmlRoot": "status",
+              "xmlSample": "<status><mood>平静</mood><notes><item>第一条</item><item>第二条</item></notes></status>",
+              "fields": [
+                {"key": "mood", "title": "心情", "xmlPath": "mood", "kind": "TEXT"},
+                {"key": "notes.item", "title": "备注", "xmlPath": "notes.item", "kind": "LIST"}
+              ],
+              "elements": [
+                {"id": "mood", "fieldKey": "mood"},
+                {"id": "notes__item", "fieldKey": "notes.item", "sectionId": "details"}
+              ],
+              "sections": [{"id": "details", "title": "详细状态", "initiallyExpanded": true}],
+              "css": ".card{padding:16px} #mood .field-value{font-size:20px} #details{margin-top:12px}",
+              "presentation": "CARD",
+              "defaultRegion": "MENU",
+              "userAdjustable": true,
+              "autoAdapt": true,
+              "floorScope": "LATEST",
+              "hideWhenEmpty": true
+            }
+          }
+        ]
+      }
+    ],
+    "extensions": [
+      {
+        "id": "example_xml_status_extension",
+        "name": "XML 状态卡示例",
+        "enabled": false,
+        "resources": [{"kind": "GROUP", "id": "example_xml_status_group"}]
+      }
+    ]
+  }
+}
+```
+
+
+============================================================================
+附录 F · examples/lore-package.config.json · 字面词条：isTemplate=false，可直接导入
+============================================================================
+
+```json
+{
+  "format": "companion.config.v1",
+  "label": "字面世界观词条示例",
+  "resources": {
+    "packages": [
+      {
+        "id": "example_lore_package",
+        "namespace": "example_lore",
+        "name": "示例世界观",
+        "entries": [
+          {
+            "id": "example_lore_entry",
+            "key": "setting",
+            "title": "世界设定",
+            "text": "夜雨之后，旧钟楼会亮起一盏蓝灯。{{这段文字保持字面}}",
+            "order": 0,
+            "enabled": true,
+            "isTemplate": false
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+
+============================================================================
+附录 F · examples/lore-attachment.config.json · 外部文本附件词条：含 $text，必须连附件一起打 ZIP
+============================================================================
+
+```json
+{
+  "format": "companion.config.v1",
+  "label": "文本附件词条示例",
+  "resources": {
+    "packages": [
+      {
+        "id": "example_attachment_lore_package",
+        "namespace": "example_attachment_lore",
+        "name": "附件世界观",
+        "entries": [
+          {
+            "id": "example_attachment_lore_entry",
+            "key": "setting",
+            "title": "世界设定",
+            "text": {"$text": "prompts/setting.txt"},
+            "order": 0,
+            "enabled": true,
+            "isTemplate": false
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+
+============================================================================
+附录 F · examples/prompts/setting.txt · 上一附件示例真正引用的 UTF-8 文本
+============================================================================
+
+```text
+夜雨之后，旧钟楼会亮起一盏蓝灯。
+这是角色能查阅的字面词条；这里的 {{花括号}} 不展开。
+```
+
+
+============================================================================
+附录 F · examples/plugin-v2-http.config.json · v2 HTTP 示例：示例域名、默认关闭、无密钥；仅示范资源形状
+============================================================================
+
+```json
+{
+  "format": "companion.config.v1",
+  "label": "JavaScript v2 联网插件作者示例（需修改目标并授权）",
+  "resources": {
+    "groups": [
+      {
+        "id": "example_plugin_v2_http_group",
+        "name": "HTTP 插件示例",
+        "workflows": [
+          {
+            "id": "example_plugin_v2_http_flow",
+            "title": "读取服务状态",
+            "nodes": [
+              {
+                "id": "example_plugin_v2_http_node",
+                "title": "HTTP 请求",
+                "actionId": "plugin.run",
+                "arguments": {"pluginId": "example_plugin_v2_http"},
+                "outputKey": "example_http_result",
+                "includeHistory": false,
+                "visible": false,
+                "recordTrajectory": false
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "extensions": [
+      {
+        "id": "example_plugin_v2_http",
+        "name": "HTTP 插件作者示例",
+        "enabled": false,
+        "resources": [{"kind": "GROUP", "id": "example_plugin_v2_http_group"}],
+        "code": {
+          "runtime": "javascript",
+          "version": 2,
+          "source": "async function execute(context, host) {\n  const response = await host.invoke('network.http', {url: 'https://api.example.com/v1/status', method: 'GET', credential: {alias: 'serviceKey'}});\n  if (!response.ok) throw new Error(response.error.code);\n  if (response.data.status !== 200) throw new Error('SERVICE_STATUS');\n  return response.data.body;\n}",
+          "permissions": [
+            {
+              "capability": "network.http",
+              "origins": ["https://api.example.com"],
+              "methods": ["GET"],
+              "credentials": ["serviceKey"]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
+```
+
+
+============================================================================
+附录 G · build_bundle.py（Python 标准库，按文件名保存后执行）
+============================================================================
+
+```python
+"""把 velune companion.config.v1 配置与已引用的附件封装为 ZIP。
+
+用法：python build_bundle.py examples/lore-package.config.json lore.bundle.zip
+      python build_bundle.py examples/lore-attachment.config.json lore-attachment.bundle.zip
+
+只检查 ZIP 结构、JSON 语法与附件；最终资源语义须由 velune 导入预览验证。
+仅使用 Python 标准库；拒绝覆盖现有输出文件。
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import unicodedata
+from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
+
+
+ROOT_KEYS = {"format", "label", "resources", "commands"}
+KINDS = {"character", "mainCall", "package", "group", "persona", "tag", "profile", "connection", "extension"}
+ARRAYS = {"characters", "mainCalls", "packages", "groups", "personas", "tags", "profiles", "connections", "extensions"}
+MAX_JSON = 8 * 1024 * 1024
+MAX_TEXT = 32 * 1024 * 1024
+MAX_MEMBERS = 1024
+MAX_EXPANDED = 256 * 1024 * 1024
+
+
+def load_json(data: bytes, where: str):
+    def reject_duplicates(pairs):
+        obj = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError(f"{where}: 重复 JSON 键 {key!r}")
+            obj[key] = value
+        return obj
+
+    return json.loads(data.decode("utf-8-sig"), object_pairs_hook=reject_duplicates)
+
+
+def package_path(name: str) -> str:
+    if not isinstance(name, str) or not name or len(name) > 1024:
+        raise ValueError("包内路径不能为空或超过 1024 字符")
+    if unicodedata.normalize("NFC", name) != name:
+        raise ValueError(f"包内路径需用 NFC Unicode：{name!r}")
+    if name.startswith("/") or "\\" in name or ":" in name or any(ord(c) < 32 or ord(c) == 127 for c in name):
+        raise ValueError(f"只允许 ZIP 内正斜杠相对路径：{name!r}")
+    if any(not part or part in (".", "..") or part.endswith((" ", ".")) for part in name.split("/")):
+        raise ValueError(f"包内路径含空层、点路径或尾随空格/点：{name!r}")
+    return name
+
+
+def collect_markers(value, assets: dict[str, str]) -> None:
+    if isinstance(value, list):
+        for child in value:
+            collect_markers(child, assets)
+    elif isinstance(value, dict):
+        markers = {"$text", "$avatar"} & value.keys()
+        if markers:
+            if len(markers) != 1 or len(value) != 1:
+                raise ValueError("附件标记对象必须恰好含 $text 或 $avatar 一个键")
+            marker = next(iter(markers))
+            path = package_path(value[marker])
+            kind = "text" if marker == "$text" else "avatar"
+            if path in assets and assets[path] != kind:
+                raise ValueError(f"同一附件的类型冲突：{path}")
+            assets[path] = kind
+        else:
+            for child in value.values():
+                collect_markers(child, assets)
+
+
+def asset_bytes(root: Path, name: str, kind: str) -> bytes:
+    path = root.joinpath(*name.split("/"))
+    if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()) or not path.is_file():
+        raise ValueError(f"附件不存在、是符号链接或越出配置目录：{name}")
+    data = path.read_bytes()
+    if kind in ("text", "documentation"):
+        if len(data) > MAX_TEXT:
+            raise ValueError(f"文本附件超过 32 MiB：{name}")
+        data.decode("utf-8")
+    elif kind == "avatar":
+        if len(data) > 32 * 1024:
+            raise ValueError(f"此离线示例要求头像不超过 32 KiB：{name}")
+        png = data.startswith(b"\x89PNG\r\n\x1a\n")
+        jpeg = data.startswith(b"\xff\xd8\xff")
+        if not ((name.lower().endswith(".png") and png) or (name.lower().endswith((".jpg", ".jpeg")) and jpeg)):
+            raise ValueError(f"头像扩展名与 PNG/JPEG 文件头不符：{name}")
+    return data
+
+
+def write_member(archive: ZipFile, name: str, data: bytes) -> None:
+    info = ZipInfo(name, date_time=(2024, 1, 1, 0, 0, 0))
+    info.compress_type = ZIP_DEFLATED
+    archive.writestr(info, data)
+
+
+def build(config_path: Path, output_path: Path, readme_path: Path | None) -> None:
+    config_path = config_path.resolve()
+    source = config_path.read_bytes()
+    if len(source) > MAX_JSON:
+        raise ValueError("配置 JSON 超过 8 MiB")
+    config = load_json(source, str(config_path))
+    if not isinstance(config, dict) or set(config) - ROOT_KEYS or config.get("format") != "companion.config.v1":
+        raise ValueError("配置根必须为 companion.config.v1，且只含 format/label/resources/commands")
+    if "label" in config and not isinstance(config["label"], str):
+        raise ValueError("配置 label 必须是字符串")
+    if "resources" in config and (not isinstance(config["resources"], dict) or set(config["resources"]) - ARRAYS):
+        raise ValueError("resources 必须是已知资源数组映射")
+    if "resources" in config and any(not isinstance(value, list) for value in config["resources"].values()):
+        raise ValueError("resources 各成员必须是数组")
+    if "commands" in config and not isinstance(config["commands"], list):
+        raise ValueError("commands 必须是数组")
+    assets: dict[str, str] = {}
+    collect_markers(config, assets)
+    payloads = {name: asset_bytes(config_path.parent, name, kind) for name, kind in assets.items()}
+    if readme_path is not None:
+        if "README.txt" in assets:
+            raise ValueError("README.txt 已被资源引用，不能同时作为说明文档")
+        payloads["README.txt"] = readme_path.read_bytes()
+        if len(payloads["README.txt"]) > MAX_TEXT:
+            raise ValueError("说明文档超过 32 MiB")
+        payloads["README.txt"].decode("utf-8")
+        assets["README.txt"] = "documentation"
+    names = ["manifest.json", "payload.config.json", *payloads]
+    folded_names = [name.casefold() for name in names]
+    if len(names) > MAX_MEMBERS or len(set(folded_names)) != len(names):
+        raise ValueError("成员超限或有大小写折叠后的重复路径")
+    if any(a.startswith(b + "/") for a in folded_names for b in folded_names if a != b):
+        raise ValueError("包内文件与目录路径冲突")
+    if sum(map(len, payloads.values())) + len(source) > MAX_EXPANDED:
+        raise ValueError("ZIP 展开内容超过 256 MiB")
+    manifest = {
+        "format": "companion.bundle.v1",
+        "label": config.get("label", "velune 内容包"),
+        "files": [{"path": "payload.config.json", "kind": "config"}]
+        + [{"path": name, "kind": kind} for name, kind in sorted(assets.items())],
+    }
+    manifest_bytes = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with ZipFile(output_path, "x") as archive:
+        write_member(archive, "manifest.json", manifest_bytes)
+        write_member(archive, "payload.config.json", source)
+        for name, data in sorted(payloads.items()):
+            write_member(archive, name, data)
+    print(output_path.resolve())
+    print("已检查 ZIP 结构、JSON 语法及附件；未执行 velune 资源解码/预览/应用。")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("config", type=Path, help="companion.config.v1 JSON 文件")
+    parser.add_argument("output", type=Path, help="新 ZIP 路径，已存在时拒绝覆盖")
+    parser.add_argument("--readme", type=Path, help="可选 UTF-8 说明，ZIP 内记为 documentation")
+    args = parser.parse_args()
+    build(args.config, args.output, args.readme)
+
+
+if __name__ == "__main__":
+    main()
+```
+
+
+============================================================================
+附录 H · 完整机器字段与动作目录（由当前 serializer/ActionRegistry 生成；不是 JSON Schema）
+============================================================================
+
+```json
+{
+  "format": "companion.authoring-reference.v1",
+  "purpose": "文档附件，不是可导入资源或新应用协议",
+  "app": "velune 0.75-preview / code243; source revision93",
+  "resourceWire": 37,
+  "execution": 28,
+  "configFormat": "companion.config.v1",
+  "zipFormat": "companion.bundle.v1",
+  "limitations": "Serializer descriptors expose field names, enum values, optionality and nullability, not full validation rules or JSON Schema. typedDefaults are constructor values, not always valid authoring examples; generated IDs are placeholders. Compatibility fields may remain serializable but are not recommended for new resources. Actions come from ActionRegistry.defaults(). See AI_IMPORT_GUIDE.txt and source validators.",
+  "types": {
+    "dev.gray.companion.core.CharacterCard": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "namespace",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "description",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "entries",
+          "type": "array<PromptEntry>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "boundPackageIds",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "avatar",
+          "type": "AvatarImage | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "greeting",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "slug",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "alternateGreetings",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "boundGroupIds",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "boundPersonaId",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        }
+      ]
+    },
+    "dev.gray.companion.core.PromptEntry": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "key",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "text",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "category",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "order",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "enabled",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "condition",
+          "type": "Condition | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "isTemplate",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "slug",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "tagIds",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.Condition": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "key",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "op",
+          "type": "Compare",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "value",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "expression",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.Compare": {
+      "kind": "ENUM",
+      "values": [
+        "EQUALS",
+        "NOT_EQUALS",
+        "GREATER",
+        "GREATER_OR_EQUAL",
+        "LESS",
+        "LESS_OR_EQUAL",
+        "EXISTS"
+      ]
+    },
+    "dev.gray.companion.core.AvatarImage": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "mediaType",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "base64",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.MainCall": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "description",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "workflows",
+          "type": "array<Workflow>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "primaryWorkflowId",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "boundPackageIds",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "boundGroupIds",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "tiles",
+          "type": "array<MacroTile>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "history",
+          "type": "HistoryConfig",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "slug",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "bodySourceTileId",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "bodyTextTemplate",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "extensionBindings",
+          "type": "array<ExtensionBinding>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "extensionBindingOrigins",
+          "type": "array<ExtensionBindingOrigin>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "avatar",
+          "type": "AvatarImage | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "specialDefault",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "cards",
+          "type": "array<CardResource>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "bodyAppearanceTemplate",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.Workflow": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "trigger",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "enabled",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "nodes",
+          "type": "array<WorkflowNode>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "condition",
+          "type": "Condition | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "modelProfileId",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "recognition",
+          "type": "Recognition | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "queued",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "priority",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "slug",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "afterWorkflowId",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        }
+      ]
+    },
+    "dev.gray.companion.core.WorkflowNode": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "actionId",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "dependsOn",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "blocks",
+          "type": "array<PromptBlock>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "inputTemplate",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "outputKey",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "visible",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "includeHistory",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "enabled",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "condition",
+          "type": "Condition | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "arguments",
+          "type": "object<string,kotlin.String>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "resultCategory",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "outputSlot",
+          "type": "OutputSlot",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "recognition",
+          "type": "Recognition | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "explicitHistory",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "inputProcessing",
+          "type": "array<TextProcessStep>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "outputProcessing",
+          "type": "array<TextProcessStep>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "generation",
+          "type": "ModelCallOptions",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "macroProcess",
+          "type": "MacroProcessConfig",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "legacyAction",
+          "type": "LegacyActionBackup | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "slug",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "tagIds",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "regexOutputCopy",
+          "type": "RegexOutputCopy",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "recordTrajectory",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "reasoningParsing",
+          "type": "ReasoningParsingConfig | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "cardDefinition",
+          "type": "CardDefinition | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "userMacro",
+          "type": "UserMacroDefinition | null",
+          "optional": true,
+          "nullable": true
+        }
+      ]
+    },
+    "dev.gray.companion.core.PromptBlock": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "template",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "role",
+          "type": "Role",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "enabled",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "hideWhenReferencesEmpty",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "condition",
+          "type": "Condition | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "position",
+          "type": "PromptPosition",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "depth",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "recognition",
+          "type": "Recognition | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "processing",
+          "type": "array<TextProcessStep>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "slug",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "tagIds",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "injectionSlot",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "slotReferences",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "mergeAdjacentMessages",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.Role": {
+      "kind": "ENUM",
+      "values": [
+        "SYSTEM",
+        "USER",
+        "ASSISTANT"
+      ]
+    },
+    "dev.gray.companion.core.PromptPosition": {
+      "kind": "ENUM",
+      "values": [
+        "BEFORE_HISTORY",
+        "IN_HISTORY",
+        "AFTER_HISTORY"
+      ]
+    },
+    "dev.gray.companion.core.Recognition": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "mode",
+          "type": "RecognitionMode",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "rules",
+          "type": "array<RecognitionRule>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "groups",
+          "type": "array<Recognition>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "negate",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.RecognitionMode": {
+      "kind": "ENUM",
+      "values": [
+        "ALL",
+        "ANY"
+      ]
+    },
+    "dev.gray.companion.core.RecognitionRule": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "template",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "pattern",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "captureGroup",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "op",
+          "type": "Compare",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "value",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "negate",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "valueType",
+          "type": "RecognitionValueType",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.RecognitionValueType": {
+      "kind": "ENUM",
+      "values": [
+        "TEXT",
+        "NUMBER"
+      ]
+    },
+    "dev.gray.companion.core.TextProcessStep": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "TextProcessKind",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "expression",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "pattern",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "replacement",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "group",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "text",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "amount",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "min",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "max",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "requireMatch",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.TextProcessKind": {
+      "kind": "ENUM",
+      "values": [
+        "REGEX_EXTRACT",
+        "REGEX_REPLACE",
+        "TRIM",
+        "APPEND",
+        "PREPEND",
+        "FORMAT",
+        "INCREASE",
+        "CLAMP",
+        "EXPRESSION"
+      ]
+    },
+    "dev.gray.companion.core.OutputSlot": {
+      "kind": "ENUM",
+      "values": [
+        "BEFORE_BODY",
+        "BODY",
+        "AFTER_BODY"
+      ]
+    },
+    "dev.gray.companion.core.ModelCallOptions": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "profileId",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "temperature",
+          "type": "kotlin.Float | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "topP",
+          "type": "kotlin.Float | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "maxTokens",
+          "type": "kotlin.Int | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "reasoning",
+          "type": "ModelReasoning | null",
+          "optional": true,
+          "nullable": true
+        }
+      ]
+    },
+    "dev.gray.companion.core.ModelReasoning": {
+      "kind": "ENUM",
+      "values": [
+        "OFF",
+        "AUTO",
+        "LOW",
+        "MEDIUM",
+        "HIGH",
+        "XHIGH",
+        "MAX"
+      ]
+    },
+    "dev.gray.companion.core.MacroProcessConfig": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "key",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "mode",
+          "type": "MacroProcessMode",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "source",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "initial",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "steps",
+          "type": "array<TextProcessStep>",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.MacroProcessMode": {
+      "kind": "ENUM",
+      "values": [
+        "SET",
+        "UPDATE",
+        "COPY",
+        "ENABLE",
+        "DISABLE"
+      ]
+    },
+    "dev.gray.companion.core.LegacyActionBackup": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "actionId",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "inputTemplate",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "inputProcessing",
+          "type": "array<TextProcessStep>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "outputProcessing",
+          "type": "array<TextProcessStep>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "macroProcess",
+          "type": "MacroProcessConfig",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "arguments",
+          "type": "object<string,kotlin.String>",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.RegexOutputCopy": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "enabled",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "outputKey",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "pattern",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "captureGroup",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "replacement",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "mode",
+          "type": "RegexTransformMode",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "display",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "recordTrajectory",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.RegexTransformMode": {
+      "kind": "ENUM",
+      "values": [
+        "EXTRACT",
+        "REPLACE"
+      ]
+    },
+    "dev.gray.companion.core.ReasoningParsingConfig": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "mode",
+          "type": "ReasoningParsingMode",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "startTag",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "endTag",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.ReasoningParsingMode": {
+      "kind": "ENUM",
+      "values": [
+        "OFF",
+        "TAGGED",
+        "START_UNTIL_END"
+      ]
+    },
+    "dev.gray.companion.core.CardDefinition": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "title",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "minimumWidthDp",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "fields",
+          "type": "array<CardFieldDefinition>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "presentation",
+          "type": "CardPresentation",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "css",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "elements",
+          "type": "array<CardElement>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "defaultRegion",
+          "type": "CardRegion | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "userAdjustable",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "autoAdapt",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "floorScope",
+          "type": "CardFloorScope",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "hideWhenEmpty",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "condition",
+          "type": "Condition | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "dataMode",
+          "type": "CardDataMode",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "xmlRoot",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "xmlSample",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "sections",
+          "type": "array<CardSection>",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.CardFieldDefinition": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "key",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "source",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "pattern",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "captureGroup",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "CardFieldKind",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "minimum",
+          "type": "kotlin.Double",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "maximum",
+          "type": "kotlin.Double",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "compactLimit",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "xmlPath",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.CardFieldKind": {
+      "kind": "ENUM",
+      "values": [
+        "TEXT",
+        "NUMBER",
+        "PROGRESS",
+        "LIST"
+      ]
+    },
+    "dev.gray.companion.core.CardPresentation": {
+      "kind": "ENUM",
+      "values": [
+        "CARD",
+        "SIDE_PANEL",
+        "STRIP"
+      ]
+    },
+    "dev.gray.companion.core.CardElement": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "fieldKey",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "sectionId",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.CardRegion": {
+      "kind": "ENUM",
+      "values": [
+        "CHAT",
+        "SIDEBAR",
+        "INPUT",
+        "MENU"
+      ]
+    },
+    "dev.gray.companion.core.CardFloorScope": {
+      "kind": "ENUM",
+      "values": [
+        "LATEST",
+        "EACH"
+      ]
+    },
+    "dev.gray.companion.core.CardDataMode": {
+      "kind": "ENUM",
+      "values": [
+        "MANUAL",
+        "XML"
+      ]
+    },
+    "dev.gray.companion.core.CardSection": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "initiallyExpanded",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.UserMacroDefinition": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "shortcut",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "value",
+          "type": "UserMacroValue",
+          "optional": false,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.UserMacroValue": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "UserMacroValueKind",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "text",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "references",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.UserMacroValueKind": {
+      "kind": "ENUM",
+      "values": [
+        "TEXT",
+        "REFERENCE",
+        "RANDOM_REFERENCE"
+      ]
+    },
+    "dev.gray.companion.core.MacroTile": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "template",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "MacroTileKind",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "slot",
+          "type": "OutputSlot",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "minimum",
+          "type": "kotlin.Double",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "maximum",
+          "type": "kotlin.Double",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "pattern",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "captureGroup",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "enabled",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "hideWhenEmpty",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "style",
+          "type": "MacroTileStyle",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "placement",
+          "type": "MacroTilePlacement",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "fields",
+          "type": "array<MacroStatusField>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "htmlTemplate",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "htmlCss",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "htmlBindings",
+          "type": "array<MacroHtmlBinding>",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.MacroTileKind": {
+      "kind": "ENUM",
+      "values": [
+        "TEXT",
+        "NUMBER",
+        "PROGRESS",
+        "STATUS",
+        "HTML"
+      ]
+    },
+    "dev.gray.companion.core.MacroTileStyle": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "foreground",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "background",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "fontSize",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "cornerRadius",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "widthPercent",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.MacroTilePlacement": {
+      "kind": "ENUM",
+      "values": [
+        "CHAT",
+        "SIDEBAR"
+      ]
+    },
+    "dev.gray.companion.core.MacroStatusField": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "key",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "MacroTileKind",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "minimum",
+          "type": "kotlin.Double",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "maximum",
+          "type": "kotlin.Double",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.MacroHtmlBinding": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "name",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "pattern",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "captureGroup",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "MacroHtmlValueKind",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.MacroHtmlValueKind": {
+      "kind": "ENUM",
+      "values": [
+        "TEXT",
+        "NUMBER"
+      ]
+    },
+    "dev.gray.companion.core.HistoryConfig": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "range",
+          "type": "HistoryRange",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "apiRole",
+          "type": "Role | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "mergeMessages",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "prefix",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "suffix",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "floorPrefix",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "floorSuffix",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "speakers",
+          "type": "array<HistorySpeakerRule>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "floors",
+          "type": "array<HistoryFloorRule>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "insertions",
+          "type": "array<HistoryInsertion>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "processor",
+          "type": "HistoryProcessor",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.HistoryRange": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "from",
+          "type": "HistoryPoint",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "through",
+          "type": "HistoryPoint",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.HistoryPoint": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "anchor",
+          "type": "HistoryAnchor",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "value",
+          "type": "kotlin.Double",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.HistoryAnchor": {
+      "kind": "ENUM",
+      "values": [
+        "START",
+        "END",
+        "PERCENT"
+      ]
+    },
+    "dev.gray.companion.core.HistorySpeakerRule": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "speaker",
+          "type": "Role",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "apiRole",
+          "type": "Role | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "prefix",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "suffix",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        }
+      ]
+    },
+    "dev.gray.companion.core.HistoryFloorRule": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "messageId",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "apiRole",
+          "type": "Role | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "prefix",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "suffix",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        }
+      ]
+    },
+    "dev.gray.companion.core.HistoryInsertion": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "template",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "role",
+          "type": "Role",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "at",
+          "type": "HistoryPoint",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "enabled",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.HistoryProcessor": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "workflow",
+          "type": "Workflow",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "minimumNewFloors",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "keepRecentFloors",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "outputKey",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "sourceKind",
+          "type": "HistorySourceKind",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "thresholdBasis",
+          "type": "HistoryThresholdBasis",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "protectFirstFloors",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "maximumBatchFloors",
+          "type": "kotlin.Int | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "aggregationWorkflow",
+          "type": "Workflow | null",
+          "optional": true,
+          "nullable": true
+        }
+      ]
+    },
+    "dev.gray.companion.core.HistorySourceKind": {
+      "kind": "ENUM",
+      "values": [
+        "DISPLAY",
+        "MODEL_RAW"
+      ]
+    },
+    "dev.gray.companion.core.HistoryThresholdBasis": {
+      "kind": "ENUM",
+      "values": [
+        "ELIGIBLE_BLOCK",
+        "UNCOMPRESSED_FLOORS"
+      ]
+    },
+    "dev.gray.companion.core.ExtensionBinding": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "extensionId",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "enabled",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.ExtensionBindingOrigin": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "ExtensionResourceKind",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "resourceId",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "manual",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "ownerBindingIds",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.ExtensionResourceKind": {
+      "kind": "ENUM",
+      "values": [
+        "CHARACTER",
+        "MAIN",
+        "PACKAGE",
+        "GROUP"
+      ]
+    },
+    "dev.gray.companion.core.CardResource": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "enabled",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "sourceTemplate",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "definition",
+          "type": "CardDefinition",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.PromptPackage": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "namespace",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "entries",
+          "type": "array<PromptEntry>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "slug",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.CallGroup": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "description",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "workflows",
+          "type": "array<Workflow>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "boundPackageIds",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "stateDefaults",
+          "type": "object<string,kotlin.String>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "tiles",
+          "type": "array<MacroTile>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "slug",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "cards",
+          "type": "array<CardResource>",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.UserPersona": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "prompt",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "avatar",
+          "type": "AvatarImage | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "slug",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "tagIds",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.PromptTag": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "slug",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.ModelProfile": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "protocol",
+          "type": "Protocol",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "baseUrl",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "model",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "temperature",
+          "type": "kotlin.Float | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "maxTokens",
+          "type": "kotlin.Int | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "responseApi",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "apiConnectionId",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "topP",
+          "type": "kotlin.Float | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "reasoning",
+          "type": "ModelReasoning | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "customBody",
+          "type": "array<RequestBodyField>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "nativeModel",
+          "type": "object<string,kotlinx.serialization.json.JsonElement> | null",
+          "optional": true,
+          "nullable": true
+        }
+      ]
+    },
+    "dev.gray.companion.core.Protocol": {
+      "kind": "ENUM",
+      "values": [
+        "OPENAI",
+        "GOOGLE",
+        "CLAUDE"
+      ]
+    },
+    "dev.gray.companion.core.RequestBodyField": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "key",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "value",
+          "type": "kotlinx.serialization.json.JsonElement",
+          "optional": false,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.ApiConnection": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "protocol",
+          "type": "Protocol",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "baseUrl",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "responseApi",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "enabled",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "customHeaders",
+          "type": "array<RequestHeader>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "maxConcurrentRequests",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "nativeProvider",
+          "type": "object<string,kotlinx.serialization.json.JsonElement> | null",
+          "optional": true,
+          "nullable": true
+        }
+      ]
+    },
+    "dev.gray.companion.core.RequestHeader": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "name",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "value",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.ConfigurationExtension": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "resources",
+          "type": "array<ExtensionResourceRef>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "parameters",
+          "type": "array<ExtensionParameter>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "code",
+          "type": "PluginCode | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "memory",
+          "type": "MemoryPluginRules | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "enabled",
+          "type": "kotlin.Boolean | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "mainScopeId",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        }
+      ]
+    },
+    "dev.gray.companion.core.ExtensionResourceRef": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "ExtensionResourceKind",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.ExtensionParameter": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "id",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "target",
+          "type": "ExtensionFieldRef",
+          "optional": false,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.ExtensionFieldRef": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "ExtensionResourceKind",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "resourceId",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "field",
+          "type": "ExtensionField",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "entryId",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "workflowId",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "nodeId",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "blockId",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "argDescriptorKey",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        }
+      ]
+    },
+    "dev.gray.companion.core.ExtensionField": {
+      "kind": "ENUM",
+      "values": [
+        "CHARACTER_DESCRIPTION",
+        "ENTRY_TEXT",
+        "ENTRY_ENABLED",
+        "BLOCK_TEMPLATE",
+        "BLOCK_ROLE",
+        "BLOCK_ENABLED",
+        "WORKFLOW_MODEL",
+        "WORKFLOW_ENABLED",
+        "WORKFLOW_QUEUED",
+        "WORKFLOW_PRIORITY",
+        "NODE_ENABLED",
+        "NODE_MODEL",
+        "NODE_TEMPERATURE",
+        "NODE_TOP_P",
+        "NODE_MAX_TOKENS",
+        "NODE_REASONING",
+        "NODE_ARGUMENT",
+        "GROUP_STATE_DEFAULT"
+      ]
+    },
+    "dev.gray.companion.core.PluginCode": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "runtime",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "version",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "source",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "permissions",
+          "type": "array<PluginPermission>",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.PluginPermission": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "capability",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "origins",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "methods",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "credentials",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.MemoryPluginRules": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "groupId",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "workflowId",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "aggregationWorkflowId",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "outputKey",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "sourceKind",
+          "type": "HistorySourceKind",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "minimumNewFloors",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "keepRecentFloors",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "thresholdBasis",
+          "type": "HistoryThresholdBasis",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "protectFirstFloors",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "maximumBatchFloors",
+          "type": "kotlin.Int | null",
+          "optional": true,
+          "nullable": true
+        }
+      ]
+    },
+    "dev.gray.companion.core.PluginHttpRequest": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "url",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "method",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "headers",
+          "type": "object<string,kotlin.String>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "body",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "credential",
+          "type": "PluginCredentialUse | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "timeoutMs",
+          "type": "kotlin.Long",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "maxResponseBytes",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.PluginCredentialUse": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "alias",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "header",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "prefix",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.AutomaticOptionsConfig": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "enabled",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "modelProfileId",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "count",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "prompt",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "blocks",
+          "type": "array<PromptBlock> | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "generation",
+          "type": "ModelCallOptions",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "reasoningParsing",
+          "type": "ReasoningParsingConfig | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "inputTemplate",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "inputProcessing",
+          "type": "array<TextProcessStep>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "outputProcessing",
+          "type": "array<TextProcessStep>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "historyTurns",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "titlesEnabled",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "items",
+          "type": "array<AutomaticOptionSpec>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "layout",
+          "type": "AutomaticOptionsLayout",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.AutomaticOptionSpec": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "contentTag",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "titleTag",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.AutomaticOptionsLayout": {
+      "kind": "ENUM",
+      "values": [
+        "ABOVE_HORIZONTAL",
+        "LEFT_VERTICAL"
+      ]
+    },
+    "dev.gray.companion.core.IllustrationConfig": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "enabled",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "modelProfileId",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "maxImages",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "concurrency",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "generation",
+          "type": "ModelCallOptions",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "taskPrompt",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "guidancePrompt",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "requirementsPrompt",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "contextTemplate",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "blocks",
+          "type": "array<PromptBlock> | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "appearanceByCharacterId",
+          "type": "object<string,kotlin.String>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "appId",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "positiveInput",
+          "type": "IllustrationInput",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "negativeInput",
+          "type": "IllustrationInput",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "seedInput",
+          "type": "IllustrationInput",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "stepsInput",
+          "type": "IllustrationInput",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "cfgInput",
+          "type": "IllustrationInput",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "widthInput",
+          "type": "IllustrationInput",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "heightInput",
+          "type": "IllustrationInput",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.IllustrationInput": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "name",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "value",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.IllustrationImage": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "sessionId",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "messageId",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "sourceKey",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "afterParagraphId",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "localPath",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "width",
+          "type": "kotlin.Int | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "height",
+          "type": "kotlin.Int | null",
+          "optional": true,
+          "nullable": true
+        }
+      ]
+    },
+    "dev.gray.companion.core.GlobalMemoryConfig": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "enabled",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "extensionId",
+          "type": "kotlin.String | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "legacyLeafWorkflowIds",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "credentialOwnerAliases",
+          "type": "object<string,kotlin.String>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "smallSummaryXmlTag",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "largeSummaryXmlTag",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "xmlValidationVersion",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.MemoryStageRules": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "protectFirstFloors",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "minimumNewFloors",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "keepRecentFloors",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "maximumBatchFloors",
+          "type": "kotlin.Int | null",
+          "optional": true,
+          "nullable": true
+        }
+      ]
+    },
+    "dev.gray.companion.core.HistoryPromptRead": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "sources",
+          "type": "array<HistorySourceRef>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "childSegmentIds",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.HistorySourceRef": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "messageId",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "revisionId",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "fingerprint",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "sourceKind",
+          "type": "HistorySourceKind",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.CardPlacement": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "nodeId",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "region",
+          "type": "CardRegion",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "order",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "collapsed",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "hidden",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.CardSnapshot": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "formatVersion",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "nodeId",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "minimumWidthDp",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "fields",
+          "type": "array<CardSnapshotField>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "presentation",
+          "type": "CardPresentation",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "bodySource",
+          "type": "HistorySourceRef | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "css",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "elements",
+          "type": "array<CardElement>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "defaultRegion",
+          "type": "CardRegion | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "userAdjustable",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "autoAdapt",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "floorScope",
+          "type": "CardFloorScope",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "hideWhenEmpty",
+          "type": "kotlin.Boolean",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "condition",
+          "type": "Condition | null",
+          "optional": true,
+          "nullable": true
+        },
+        {
+          "name": "sections",
+          "type": "array<CardSection>",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    },
+    "dev.gray.companion.core.CardSnapshotField": {
+      "kind": "CLASS",
+      "fields": [
+        {
+          "name": "key",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "type": "kotlin.String",
+          "optional": false,
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "CardFieldKind",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "value",
+          "type": "kotlin.String",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "items",
+          "type": "array<kotlin.String>",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "minimum",
+          "type": "kotlin.Double",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "maximum",
+          "type": "kotlin.Double",
+          "optional": true,
+          "nullable": false
+        },
+        {
+          "name": "compactLimit",
+          "type": "kotlin.Int",
+          "optional": true,
+          "nullable": false
+        }
+      ]
+    }
+  },
+  "typedDefaults": {
+    "CharacterCard": {
+      "id": "<自动生成ID，引用目标须自行显式指定>",
+      "namespace": "",
+      "name": "",
+      "description": "",
+      "entries": [
+        {
+          "id": "<自动生成ID，引用目标须自行显式指定>",
+          "key": "profile",
+          "text": "",
+          "category": "",
+          "order": 0,
+          "enabled": true,
+          "condition": null,
+          "isTemplate": false,
+          "title": "",
+          "slug": "",
+          "tagIds": []
+        },
+        {
+          "id": "<自动生成ID，引用目标须自行显式指定>",
+          "key": "appearance",
+          "text": "",
+          "category": "",
+          "order": 1,
+          "enabled": true,
+          "condition": null,
+          "isTemplate": false,
+          "title": "",
+          "slug": "",
+          "tagIds": []
+        },
+        {
+          "id": "<自动生成ID，引用目标须自行显式指定>",
+          "key": "personality",
+          "text": "",
+          "category": "",
+          "order": 2,
+          "enabled": true,
+          "condition": null,
+          "isTemplate": false,
+          "title": "",
+          "slug": "",
+          "tagIds": []
+        },
+        {
+          "id": "<自动生成ID，引用目标须自行显式指定>",
+          "key": "background",
+          "text": "",
+          "category": "",
+          "order": 3,
+          "enabled": true,
+          "condition": null,
+          "isTemplate": false,
+          "title": "",
+          "slug": "",
+          "tagIds": []
+        },
+        {
+          "id": "<自动生成ID，引用目标须自行显式指定>",
+          "key": "dialogue_examples",
+          "text": "",
+          "category": "",
+          "order": 4,
+          "enabled": true,
+          "condition": null,
+          "isTemplate": false,
+          "title": "",
+          "slug": "",
+          "tagIds": []
+        },
+        {
+          "id": "<自动生成ID，引用目标须自行显式指定>",
+          "key": "world",
+          "text": "",
+          "category": "",
+          "order": 5,
+          "enabled": true,
+          "condition": null,
+          "isTemplate": false,
+          "title": "",
+          "slug": "",
+          "tagIds": []
+        },
+        {
+          "id": "<自动生成ID，引用目标须自行显式指定>",
+          "key": "preferences",
+          "text": "",
+          "category": "",
+          "order": 6,
+          "enabled": true,
+          "condition": null,
+          "isTemplate": false,
+          "title": "",
+          "slug": "",
+          "tagIds": []
+        }
+      ],
+      "boundPackageIds": [],
+      "avatar": null,
+      "greeting": "",
+      "slug": "",
+      "alternateGreetings": [],
+      "boundGroupIds": [],
+      "boundPersonaId": null
+    },
+    "MainCall": {
+      "id": "<自动生成ID，引用目标须自行显式指定>",
+      "name": "",
+      "description": "",
+      "workflows": [
+        {
+          "id": "<自动生成ID，引用目标须自行显式指定>",
+          "title": "交互",
+          "trigger": "user.message",
+          "enabled": true,
+          "nodes": [
+            {
+              "id": "<自动生成ID，引用目标须自行显式指定>",
+              "title": "生成",
+              "actionId": "model.generate",
+              "dependsOn": [],
+              "blocks": [
+                {
+                  "id": "<自动生成ID，引用目标须自行显式指定>",
+                  "title": "角色",
+                  "template": "{{character.profile}}\n{{character.appearance}}\n{{character.personality}}\n{{character.background}}\n{{character.dialogue_examples}}\n{{character.world}}\n{{character.preferences}}",
+                  "role": "SYSTEM",
+                  "enabled": true,
+                  "hideWhenReferencesEmpty": false,
+                  "condition": null,
+                  "position": "BEFORE_HISTORY",
+                  "depth": 0,
+                  "recognition": null,
+                  "processing": [],
+                  "slug": "",
+                  "tagIds": [],
+                  "injectionSlot": false,
+                  "slotReferences": [],
+                  "mergeAdjacentMessages": true
+                }
+              ],
+              "inputTemplate": "{{input}}",
+              "outputKey": "reply",
+              "visible": true,
+              "includeHistory": true,
+              "enabled": true,
+              "condition": null,
+              "arguments": {},
+              "resultCategory": "",
+              "outputSlot": "BODY",
+              "recognition": null,
+              "explicitHistory": false,
+              "inputProcessing": [],
+              "outputProcessing": [],
+              "generation": {
+                "profileId": null,
+                "temperature": null,
+                "topP": null,
+                "maxTokens": null,
+                "reasoning": null
+              },
+              "macroProcess": {
+                "key": "",
+                "mode": "SET",
+                "source": "",
+                "initial": "",
+                "steps": []
+              },
+              "legacyAction": null,
+              "slug": "",
+              "tagIds": [],
+              "regexOutputCopy": {
+                "enabled": false,
+                "outputKey": "",
+                "pattern": "",
+                "captureGroup": 0,
+                "replacement": "",
+                "mode": "EXTRACT",
+                "display": true,
+                "recordTrajectory": true
+              },
+              "recordTrajectory": true,
+              "reasoningParsing": null,
+              "cardDefinition": null,
+              "userMacro": null
+            }
+          ],
+          "condition": null,
+          "modelProfileId": null,
+          "recognition": null,
+          "queued": false,
+          "priority": 0,
+          "slug": "",
+          "afterWorkflowId": null
+        }
+      ],
+      "primaryWorkflowId": null,
+      "boundPackageIds": [],
+      "boundGroupIds": [],
+      "tiles": [],
+      "history": {
+        "range": {
+          "from": {
+            "anchor": "START",
+            "value": 1.0
+          },
+          "through": {
+            "anchor": "END",
+            "value": 1.0
+          }
+        },
+        "apiRole": null,
+        "mergeMessages": false,
+        "prefix": "",
+        "suffix": "",
+        "floorPrefix": "",
+        "floorSuffix": "",
+        "speakers": [],
+        "floors": [],
+        "insertions": [],
+        "processor": {
+          "workflow": {
+            "id": "<自动生成ID，引用目标须自行显式指定>",
+            "title": "历史上下文处理",
+            "trigger": "history.process",
+            "enabled": false,
+            "nodes": [
+              {
+                "id": "<自动生成ID，引用目标须自行显式指定>",
+                "title": "处理历史",
+                "actionId": "model.generate",
+                "dependsOn": [],
+                "blocks": [
+                  {
+                    "id": "<自动生成ID，引用目标须自行显式指定>",
+                    "title": "历史处理要求",
+                    "template": "将提供的历史整理为供后续对话使用的摘要，保留人物、世界状态与未完成事项。输出摘要正文。",
+                    "role": "SYSTEM",
+                    "enabled": true,
+                    "hideWhenReferencesEmpty": false,
+                    "condition": null,
+                    "position": "BEFORE_HISTORY",
+                    "depth": 0,
+                    "recognition": null,
+                    "processing": [],
+                    "slug": "",
+                    "tagIds": [],
+                    "injectionSlot": false,
+                    "slotReferences": [],
+                    "mergeAdjacentMessages": true
+                  }
+                ],
+                "inputTemplate": "{{history.pending}}",
+                "outputKey": "history_summary",
+                "visible": false,
+                "includeHistory": false,
+                "enabled": true,
+                "condition": null,
+                "arguments": {},
+                "resultCategory": "",
+                "outputSlot": "BODY",
+                "recognition": null,
+                "explicitHistory": false,
+                "inputProcessing": [],
+                "outputProcessing": [],
+                "generation": {
+                  "profileId": null,
+                  "temperature": null,
+                  "topP": null,
+                  "maxTokens": null,
+                  "reasoning": null
+                },
+                "macroProcess": {
+                  "key": "",
+                  "mode": "SET",
+                  "source": "",
+                  "initial": "",
+                  "steps": []
+                },
+                "legacyAction": null,
+                "slug": "",
+                "tagIds": [],
+                "regexOutputCopy": {
+                  "enabled": false,
+                  "outputKey": "",
+                  "pattern": "",
+                  "captureGroup": 0,
+                  "replacement": "",
+                  "mode": "EXTRACT",
+                  "display": true,
+                  "recordTrajectory": true
+                },
+                "recordTrajectory": true,
+                "reasoningParsing": null,
+                "cardDefinition": null,
+                "userMacro": null
+              }
+            ],
+            "condition": null,
+            "modelProfileId": null,
+            "recognition": null,
+            "queued": false,
+            "priority": 0,
+            "slug": "",
+            "afterWorkflowId": null
+          },
+          "minimumNewFloors": 40,
+          "keepRecentFloors": 12,
+          "outputKey": "history_summary",
+          "sourceKind": "DISPLAY",
+          "thresholdBasis": "ELIGIBLE_BLOCK",
+          "protectFirstFloors": 0,
+          "maximumBatchFloors": null,
+          "aggregationWorkflow": null
+        }
+      },
+      "slug": "",
+      "bodySourceTileId": null,
+      "bodyTextTemplate": "",
+      "extensionBindings": [],
+      "extensionBindingOrigins": [],
+      "avatar": null,
+      "specialDefault": false,
+      "cards": [],
+      "bodyAppearanceTemplate": "{{正文}}"
+    },
+    "PromptPackage": {
+      "id": "<自动生成ID，引用目标须自行显式指定>",
+      "namespace": "",
+      "name": "",
+      "entries": [],
+      "slug": ""
+    },
+    "CallGroup": {
+      "id": "<自动生成ID，引用目标须自行显式指定>",
+      "name": "",
+      "description": "",
+      "workflows": [],
+      "boundPackageIds": [],
+      "stateDefaults": {},
+      "tiles": [],
+      "slug": "",
+      "cards": []
+    },
+    "UserPersona": {
+      "id": "<自动生成ID，引用目标须自行显式指定>",
+      "name": "用户",
+      "prompt": "",
+      "avatar": null,
+      "slug": "",
+      "tagIds": []
+    },
+    "PromptTag": {
+      "id": "<自动生成ID，引用目标须自行显式指定>",
+      "name": "",
+      "slug": ""
+    },
+    "ModelProfile": {
+      "id": "<自动生成ID，引用目标须自行显式指定>",
+      "name": "模型",
+      "protocol": "OPENAI",
+      "baseUrl": "https://api.openai.com/v1",
+      "model": "",
+      "temperature": null,
+      "maxTokens": null,
+      "responseApi": false,
+      "apiConnectionId": null,
+      "topP": null,
+      "reasoning": null,
+      "customBody": [],
+      "nativeModel": null
+    },
+    "ApiConnection": {
+      "id": "<自动生成ID，引用目标须自行显式指定>",
+      "name": "API 连接",
+      "protocol": "OPENAI",
+      "baseUrl": "https://api.openai.com/v1",
+      "responseApi": false,
+      "enabled": true,
+      "customHeaders": [],
+      "maxConcurrentRequests": 2,
+      "nativeProvider": null
+    },
+    "Workflow": {
+      "id": "<自动生成ID，引用目标须自行显式指定>",
+      "title": "交互",
+      "trigger": "user.message",
+      "enabled": true,
+      "nodes": [
+        {
+          "id": "<自动生成ID，引用目标须自行显式指定>",
+          "title": "生成",
+          "actionId": "model.generate",
+          "dependsOn": [],
+          "blocks": [
+            {
+              "id": "<自动生成ID，引用目标须自行显式指定>",
+              "title": "角色",
+              "template": "{{character.profile}}\n{{character.appearance}}\n{{character.personality}}\n{{character.background}}\n{{character.dialogue_examples}}\n{{character.world}}\n{{character.preferences}}",
+              "role": "SYSTEM",
+              "enabled": true,
+              "hideWhenReferencesEmpty": false,
+              "condition": null,
+              "position": "BEFORE_HISTORY",
+              "depth": 0,
+              "recognition": null,
+              "processing": [],
+              "slug": "",
+              "tagIds": [],
+              "injectionSlot": false,
+              "slotReferences": [],
+              "mergeAdjacentMessages": true
+            }
+          ],
+          "inputTemplate": "{{input}}",
+          "outputKey": "reply",
+          "visible": true,
+          "includeHistory": true,
+          "enabled": true,
+          "condition": null,
+          "arguments": {},
+          "resultCategory": "",
+          "outputSlot": "BODY",
+          "recognition": null,
+          "explicitHistory": false,
+          "inputProcessing": [],
+          "outputProcessing": [],
+          "generation": {
+            "profileId": null,
+            "temperature": null,
+            "topP": null,
+            "maxTokens": null,
+            "reasoning": null
+          },
+          "macroProcess": {
+            "key": "",
+            "mode": "SET",
+            "source": "",
+            "initial": "",
+            "steps": []
+          },
+          "legacyAction": null,
+          "slug": "",
+          "tagIds": [],
+          "regexOutputCopy": {
+            "enabled": false,
+            "outputKey": "",
+            "pattern": "",
+            "captureGroup": 0,
+            "replacement": "",
+            "mode": "EXTRACT",
+            "display": true,
+            "recordTrajectory": true
+          },
+          "recordTrajectory": true,
+          "reasoningParsing": null,
+          "cardDefinition": null,
+          "userMacro": null
+        }
+      ],
+      "condition": null,
+      "modelProfileId": null,
+      "recognition": null,
+      "queued": false,
+      "priority": 0,
+      "slug": "",
+      "afterWorkflowId": null
+    },
+    "WorkflowNode": {
+      "id": "<自动生成ID，引用目标须自行显式指定>",
+      "title": "生成",
+      "actionId": "model.generate",
+      "dependsOn": [],
+      "blocks": [],
+      "inputTemplate": "{{input}}",
+      "outputKey": "reply",
+      "visible": false,
+      "includeHistory": true,
+      "enabled": true,
+      "condition": null,
+      "arguments": {},
+      "resultCategory": "",
+      "outputSlot": "BODY",
+      "recognition": null,
+      "explicitHistory": false,
+      "inputProcessing": [],
+      "outputProcessing": [],
+      "generation": {
+        "profileId": null,
+        "temperature": null,
+        "topP": null,
+        "maxTokens": null,
+        "reasoning": null
+      },
+      "macroProcess": {
+        "key": "",
+        "mode": "SET",
+        "source": "",
+        "initial": "",
+        "steps": []
+      },
+      "legacyAction": null,
+      "slug": "",
+      "tagIds": [],
+      "regexOutputCopy": {
+        "enabled": false,
+        "outputKey": "",
+        "pattern": "",
+        "captureGroup": 0,
+        "replacement": "",
+        "mode": "EXTRACT",
+        "display": true,
+        "recordTrajectory": true
+      },
+      "recordTrajectory": true,
+      "reasoningParsing": null,
+      "cardDefinition": null,
+      "userMacro": null
+    },
+    "PromptBlock": {
+      "id": "<自动生成ID，引用目标须自行显式指定>",
+      "title": "提示词",
+      "template": "",
+      "role": "SYSTEM",
+      "enabled": true,
+      "hideWhenReferencesEmpty": false,
+      "condition": null,
+      "position": "BEFORE_HISTORY",
+      "depth": 0,
+      "recognition": null,
+      "processing": [],
+      "slug": "",
+      "tagIds": [],
+      "injectionSlot": false,
+      "slotReferences": [],
+      "mergeAdjacentMessages": true
+    },
+    "HistoryConfig": {
+      "range": {
+        "from": {
+          "anchor": "START",
+          "value": 1.0
+        },
+        "through": {
+          "anchor": "END",
+          "value": 1.0
+        }
+      },
+      "apiRole": null,
+      "mergeMessages": false,
+      "prefix": "",
+      "suffix": "",
+      "floorPrefix": "",
+      "floorSuffix": "",
+      "speakers": [],
+      "floors": [],
+      "insertions": [],
+      "processor": {
+        "workflow": {
+          "id": "<自动生成ID，引用目标须自行显式指定>",
+          "title": "历史上下文处理",
+          "trigger": "history.process",
+          "enabled": false,
+          "nodes": [
+            {
+              "id": "<自动生成ID，引用目标须自行显式指定>",
+              "title": "处理历史",
+              "actionId": "model.generate",
+              "dependsOn": [],
+              "blocks": [
+                {
+                  "id": "<自动生成ID，引用目标须自行显式指定>",
+                  "title": "历史处理要求",
+                  "template": "将提供的历史整理为供后续对话使用的摘要，保留人物、世界状态与未完成事项。输出摘要正文。",
+                  "role": "SYSTEM",
+                  "enabled": true,
+                  "hideWhenReferencesEmpty": false,
+                  "condition": null,
+                  "position": "BEFORE_HISTORY",
+                  "depth": 0,
+                  "recognition": null,
+                  "processing": [],
+                  "slug": "",
+                  "tagIds": [],
+                  "injectionSlot": false,
+                  "slotReferences": [],
+                  "mergeAdjacentMessages": true
+                }
+              ],
+              "inputTemplate": "{{history.pending}}",
+              "outputKey": "history_summary",
+              "visible": false,
+              "includeHistory": false,
+              "enabled": true,
+              "condition": null,
+              "arguments": {},
+              "resultCategory": "",
+              "outputSlot": "BODY",
+              "recognition": null,
+              "explicitHistory": false,
+              "inputProcessing": [],
+              "outputProcessing": [],
+              "generation": {
+                "profileId": null,
+                "temperature": null,
+                "topP": null,
+                "maxTokens": null,
+                "reasoning": null
+              },
+              "macroProcess": {
+                "key": "",
+                "mode": "SET",
+                "source": "",
+                "initial": "",
+                "steps": []
+              },
+              "legacyAction": null,
+              "slug": "",
+              "tagIds": [],
+              "regexOutputCopy": {
+                "enabled": false,
+                "outputKey": "",
+                "pattern": "",
+                "captureGroup": 0,
+                "replacement": "",
+                "mode": "EXTRACT",
+                "display": true,
+                "recordTrajectory": true
+              },
+              "recordTrajectory": true,
+              "reasoningParsing": null,
+              "cardDefinition": null,
+              "userMacro": null
+            }
+          ],
+          "condition": null,
+          "modelProfileId": null,
+          "recognition": null,
+          "queued": false,
+          "priority": 0,
+          "slug": "",
+          "afterWorkflowId": null
+        },
+        "minimumNewFloors": 40,
+        "keepRecentFloors": 12,
+        "outputKey": "history_summary",
+        "sourceKind": "DISPLAY",
+        "thresholdBasis": "ELIGIBLE_BLOCK",
+        "protectFirstFloors": 0,
+        "maximumBatchFloors": null,
+        "aggregationWorkflow": null
+      }
+    },
+    "ReasoningParsingConfig": {
+      "mode": "OFF",
+      "startTag": "<think>",
+      "endTag": "</think>"
+    },
+    "CardDefinition": {
+      "title": "新卡片",
+      "minimumWidthDp": 280,
+      "fields": [],
+      "presentation": "CARD",
+      "css": "",
+      "elements": [],
+      "defaultRegion": null,
+      "userAdjustable": true,
+      "autoAdapt": true,
+      "floorScope": "LATEST",
+      "hideWhenEmpty": true,
+      "condition": null,
+      "dataMode": "MANUAL",
+      "xmlRoot": "status",
+      "xmlSample": "",
+      "sections": []
+    },
+    "RegexOutputCopy": {
+      "enabled": false,
+      "outputKey": "",
+      "pattern": "",
+      "captureGroup": 0,
+      "replacement": "",
+      "mode": "EXTRACT",
+      "display": true,
+      "recordTrajectory": true
+    },
+    "PluginCode": {
+      "runtime": "javascript",
+      "version": 1,
+      "source": "",
+      "permissions": []
+    },
+    "AutomaticOptionsConfig": {
+      "enabled": false,
+      "modelProfileId": null,
+      "count": 4,
+      "prompt": "",
+      "blocks": null,
+      "generation": {
+        "profileId": null,
+        "temperature": null,
+        "topP": null,
+        "maxTokens": null,
+        "reasoning": null
+      },
+      "reasoningParsing": null,
+      "inputTemplate": "",
+      "inputProcessing": [],
+      "outputProcessing": [],
+      "historyTurns": 5,
+      "titlesEnabled": false,
+      "items": [],
+      "layout": "ABOVE_HORIZONTAL"
+    },
+    "IllustrationConfig": {
+      "enabled": false,
+      "modelProfileId": null,
+      "maxImages": 1,
+      "concurrency": 2,
+      "generation": {
+        "profileId": null,
+        "temperature": null,
+        "topP": null,
+        "maxTokens": null,
+        "reasoning": null
+      },
+      "taskPrompt": "Read the last two completed user and assistant turns. Plan optional illustrations for the latest assistant BODY only; zero images is valid.",
+      "guidancePrompt": "Write each positive scene prompt in English. Describe only the scene, character appearance, composition and action. Do not add quality tags, style scores or rendering presets; the image workflow supplies those separately. Follow the configured character appearance when present.",
+      "requirementsPrompt": "严格只输出 XML，示例：<illustrations><image after=\"p1\"><prompt>月下街道与角色侧影</prompt></image></illustrations>。根标签只能是 illustrations；每个 image 只能有 after 属性和恰好一个非空 prompt 子标签，不能把描述直接写在 image 内。最多 {{state.illustration_max_images}} 张；after 只可使用最新助手正文中的 p1、p2 等段落编号，且不能重复。不需要插图时输出 <illustrations/>。标签外不要解释或代码围栏。",
+      "contextTemplate": "本轮角色外观：{{state.illustration_appearance}}",
+      "blocks": null,
+      "appearanceByCharacterId": {},
+      "appId": 57992,
+      "positiveInput": {
+        "name": "5:CLIPTextEncode.text",
+        "value": "masterpiece, best quality, score_9, score_8, score_7, year 2025, newest, highres, absurdres, very aesthetic, scenery, semi-realistic cel-shading, anime realism, refined lineart, realistic skin texture, realistic fabric and material rendering, cinematic figure photography, soft natural lighting, subtle depth of field, vintage film look, film grain, coarse grain texture, slightly muted colors, atmospheric image, high detail, 2.5D anime character in a photorealistic environment"
+      },
+      "negativeInput": {
+        "name": "6:CLIPTextEncode.text",
+        "value": "lworst quality, low quality, score_1, score_2, score_3, artist name,\nThis image suffers from low resolution and poor quality, appearing pixelated, blurry, and full of compression or jpeg artifacts."
+      },
+      "seedInput": {
+        "name": "9:KSampler.seed",
+        "value": "-1"
+      },
+      "stepsInput": {
+        "name": "9:KSampler.steps",
+        "value": "25"
+      },
+      "cfgInput": {
+        "name": "9:KSampler.cfg",
+        "value": "6.5"
+      },
+      "widthInput": {
+        "name": "8:EmptyLatentImage.width",
+        "value": "1024"
+      },
+      "heightInput": {
+        "name": "8:EmptyLatentImage.height",
+        "value": "1280"
+      }
+    },
+    "GlobalMemoryConfig": {
+      "enabled": false,
+      "extensionId": null,
+      "legacyLeafWorkflowIds": [],
+      "credentialOwnerAliases": {},
+      "smallSummaryXmlTag": "summary",
+      "largeSummaryXmlTag": "summary",
+      "xmlValidationVersion": 0
+    },
+    "MemoryStageRules": {
+      "protectFirstFloors": 0,
+      "minimumNewFloors": 200,
+      "keepRecentFloors": 40,
+      "maximumBatchFloors": 200
+    },
+    "HistoryPromptRead": {
+      "sources": [],
+      "childSegmentIds": []
+    },
+    "CardResource": {
+      "id": "<自动生成ID，引用目标须自行显式指定>",
+      "enabled": true,
+      "sourceTemplate": "",
+      "definition": {
+        "title": "新卡片",
+        "minimumWidthDp": 280,
+        "fields": [],
+        "presentation": "CARD",
+        "css": "",
+        "elements": [],
+        "defaultRegion": "CHAT",
+        "userAdjustable": true,
+        "autoAdapt": true,
+        "floorScope": "LATEST",
+        "hideWhenEmpty": true,
+        "condition": null,
+        "dataMode": "MANUAL",
+        "xmlRoot": "status",
+        "xmlSample": "",
+        "sections": []
+      }
+    },
+    "AutomaticOptionSpec": {
+      "contentTag": "option",
+      "titleTag": "title"
+    },
+    "UserMacroValue": {
+      "kind": "TEXT",
+      "text": "",
+      "references": []
+    }
+  },
+  "actions": [
+    {
+      "id": "model.generate",
+      "title": "模型生成",
+      "description": "使用所选模型生成文本",
+      "fields": [],
+      "usesModel": true,
+      "presentation": "STANDARD",
+      "execution": "PURE_MODEL"
+    },
+    {
+      "id": "text.render",
+      "title": "组合文本",
+      "description": "无需模型，将输入模板中的宏展开为新的调用宏；不创建界面",
+      "fields": [],
+      "usesModel": false,
+      "presentation": "STANDARD",
+      "execution": "HANDLER"
+    },
+    {
+      "id": "user.macro.create",
+      "title": "创建用户宏",
+      "description": "登记当前聊天的输入快捷词；发送新消息时才展开或抽取",
+      "fields": [],
+      "usesModel": false,
+      "presentation": "STANDARD",
+      "execution": "HANDLER"
+    },
+    {
+      "id": "plugin.run",
+      "title": "插件代码",
+      "description": "执行已启用插件代码；版本 2 可调用已授权宿主能力，结果可供其他行为读取",
+      "fields": [
+        {
+          "key": "pluginId",
+          "title": "插件标识",
+          "type": "STRING",
+          "required": true,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        }
+      ],
+      "usesModel": false,
+      "presentation": "STANDARD",
+      "execution": "HANDLER"
+    },
+    {
+      "id": "card.define",
+      "title": "定义卡片",
+      "description": "从宏或输入提取字段，生成可由用户放置的显示组件",
+      "fields": [],
+      "usesModel": false,
+      "presentation": "STANDARD",
+      "execution": "HANDLER"
+    },
+    {
+      "id": "state.set",
+      "title": "设置状态",
+      "description": "写入会话状态",
+      "fields": [
+        {
+          "key": "key",
+          "title": "状态键",
+          "type": "STRING",
+          "required": true,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "value",
+          "title": "值",
+          "type": "TEMPLATE",
+          "required": false,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        }
+      ],
+      "usesModel": false,
+      "presentation": "COMPATIBILITY",
+      "execution": "HANDLER"
+    },
+    {
+      "id": "state.increment",
+      "title": "递增状态",
+      "description": "将数值状态增减指定数量，可设置上下限",
+      "fields": [
+        {
+          "key": "key",
+          "title": "状态键",
+          "type": "STRING",
+          "required": true,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "amount",
+          "title": "变化量",
+          "type": "NUMBER",
+          "required": true,
+          "defaultValue": "1",
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "min",
+          "title": "下限",
+          "type": "NUMBER",
+          "required": false,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "max",
+          "title": "上限",
+          "type": "NUMBER",
+          "required": false,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        }
+      ],
+      "usesModel": false,
+      "presentation": "COMPATIBILITY",
+      "execution": "HANDLER"
+    },
+    {
+      "id": "event.emit",
+      "title": "触发事件",
+      "description": "派发自定义事件",
+      "fields": [
+        {
+          "key": "event",
+          "title": "事件名称",
+          "type": "STRING",
+          "required": true,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        }
+      ],
+      "usesModel": false,
+      "presentation": "STANDARD",
+      "execution": "HANDLER"
+    },
+    {
+      "id": "macro.write",
+      "title": "更新宏",
+      "description": "发布宏的新版本",
+      "fields": [
+        {
+          "key": "key",
+          "title": "宏地址",
+          "type": "MACRO",
+          "required": true,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "value",
+          "title": "内容",
+          "type": "TEMPLATE",
+          "required": false,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        }
+      ],
+      "usesModel": false,
+      "presentation": "COMPATIBILITY",
+      "execution": "HANDLER"
+    },
+    {
+      "id": "macro.activate",
+      "title": "启用或停用宏",
+      "description": "发布宏的可见性版本",
+      "fields": [
+        {
+          "key": "key",
+          "title": "宏地址",
+          "type": "MACRO",
+          "required": true,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "enabled",
+          "title": "启用",
+          "type": "BOOLEAN",
+          "required": true,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        }
+      ],
+      "usesModel": false,
+      "presentation": "COMPATIBILITY",
+      "execution": "HANDLER"
+    },
+    {
+      "id": "macro.process",
+      "title": "处理宏",
+      "description": "选择或创建目标宏并按步骤处理内容",
+      "fields": [
+        {
+          "key": "key",
+          "title": "宏地址",
+          "type": "MACRO",
+          "required": false,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        }
+      ],
+      "usesModel": false,
+      "presentation": "STANDARD",
+      "execution": "HANDLER"
+    },
+    {
+      "id": "text.extract",
+      "title": "正则副本",
+      "description": "提取或替换输入，将处理结果保存为独立输出宏",
+      "fields": [
+        {
+          "key": "pattern",
+          "title": "表达式",
+          "type": "STRING",
+          "required": true,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "captureGroup",
+          "title": "捕获组",
+          "type": "NUMBER",
+          "required": false,
+          "defaultValue": "0",
+          "choices": [],
+          "integer": true
+        },
+        {
+          "key": "mode",
+          "title": "模式",
+          "type": "STRING",
+          "required": false,
+          "defaultValue": "EXTRACT",
+          "choices": [
+            {
+              "value": "EXTRACT",
+              "title": "提取"
+            },
+            {
+              "value": "REPLACE",
+              "title": "替换"
+            }
+          ],
+          "integer": false
+        },
+        {
+          "key": "replacement",
+          "title": "替换内容",
+          "type": "STRING",
+          "required": false,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        }
+      ],
+      "usesModel": false,
+      "presentation": "STANDARD",
+      "execution": "HANDLER"
+    },
+    {
+      "id": "history.memory.select",
+      "title": "选择分段记忆",
+      "description": "按来源选择未合并小摘要或最外层摘要",
+      "fields": [
+        {
+          "key": "source",
+          "title": "History 来源",
+          "type": "STRING",
+          "required": true,
+          "defaultValue": "{{history.display}}",
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "leafWorkflowId",
+          "title": "小摘要调用 ID",
+          "type": "STRING",
+          "required": false,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "mode",
+          "title": "选择方式",
+          "type": "STRING",
+          "required": false,
+          "defaultValue": "ROOTS",
+          "choices": [
+            {
+              "value": "ROOTS",
+              "title": "最外层摘要"
+            },
+            {
+              "value": "UNMERGED_LEAVES",
+              "title": "未合并的小摘要"
+            }
+          ],
+          "integer": false
+        },
+        {
+          "key": "count",
+          "title": "选择数量（0 为全部）",
+          "type": "NUMBER",
+          "required": false,
+          "defaultValue": "0",
+          "choices": [],
+          "integer": true
+        },
+        {
+          "key": "requireCount",
+          "title": "不足数量时不选择",
+          "type": "BOOLEAN",
+          "required": false,
+          "defaultValue": "false",
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "protectFirstFloors",
+          "title": "保护原始前楼层",
+          "type": "NUMBER",
+          "required": false,
+          "defaultValue": "0",
+          "choices": [],
+          "integer": true
+        },
+        {
+          "key": "minimumNewFloors",
+          "title": "触发原始楼层数",
+          "type": "NUMBER",
+          "required": false,
+          "defaultValue": "200",
+          "choices": [],
+          "integer": true
+        },
+        {
+          "key": "keepRecentFloors",
+          "title": "触发时保留原始末尾楼层",
+          "type": "NUMBER",
+          "required": false,
+          "defaultValue": "40",
+          "choices": [],
+          "integer": true
+        },
+        {
+          "key": "maximumBatchFloors",
+          "title": "每批最多原始楼层",
+          "type": "NUMBER",
+          "required": false,
+          "defaultValue": "200",
+          "choices": [],
+          "integer": true
+        }
+      ],
+      "usesModel": false,
+      "presentation": "STANDARD",
+      "execution": "HANDLER"
+    },
+    {
+      "id": "history.memory.read",
+      "title": "读取分段记忆",
+      "description": "读取指定记忆 ID 对应的摘要与来源标识",
+      "fields": [
+        {
+          "key": "ids",
+          "title": "记忆 ID",
+          "type": "TEMPLATE",
+          "required": false,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        }
+      ],
+      "usesModel": false,
+      "presentation": "STANDARD",
+      "execution": "HANDLER"
+    },
+    {
+      "id": "history.memory.write",
+      "title": "记录分段记忆",
+      "description": "保存摘要与真实原文楼层的映射",
+      "fields": [
+        {
+          "key": "source",
+          "title": "History 来源",
+          "type": "STRING",
+          "required": true,
+          "defaultValue": "{{history}}",
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "title",
+          "title": "记忆标题",
+          "type": "STRING",
+          "required": false,
+          "defaultValue": "记忆",
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "childrenIds",
+          "title": "子记忆 ID（大摘要）",
+          "type": "TEMPLATE",
+          "required": false,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        }
+      ],
+      "usesModel": false,
+      "presentation": "STANDARD",
+      "execution": "HANDLER"
+    },
+    {
+      "id": "history.view.copy",
+      "title": "History 压缩或展开副本",
+      "description": "通过记忆 ID 创建独立历史视图，不复制原文",
+      "fields": [
+        {
+          "key": "source",
+          "title": "History 来源",
+          "type": "STRING",
+          "required": true,
+          "defaultValue": "{{history}}",
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "targetId",
+          "title": "副本英文标识",
+          "type": "STRING",
+          "required": true,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "name",
+          "title": "副本名称",
+          "type": "STRING",
+          "required": false,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "mode",
+          "title": "模式",
+          "type": "STRING",
+          "required": false,
+          "defaultValue": "COMPRESS",
+          "choices": [
+            {
+              "value": "COMPRESS",
+              "title": "压缩"
+            },
+            {
+              "value": "EXPAND",
+              "title": "展开"
+            }
+          ],
+          "integer": false
+        },
+        {
+          "key": "ids",
+          "title": "记忆 ID",
+          "type": "TEMPLATE",
+          "required": false,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "pattern",
+          "title": "ID 提取正则",
+          "type": "STRING",
+          "required": false,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "captureGroup",
+          "title": "捕获组",
+          "type": "NUMBER",
+          "required": false,
+          "defaultValue": "0",
+          "choices": [],
+          "integer": true
+        },
+        {
+          "key": "inheritTargetModes",
+          "title": "刷新时保留展开选择",
+          "type": "BOOLEAN",
+          "required": false,
+          "defaultValue": "false",
+          "choices": [],
+          "integer": false
+        }
+      ],
+      "usesModel": false,
+      "presentation": "STANDARD",
+      "execution": "HANDLER"
+    },
+    {
+      "id": "prompt.inject",
+      "title": "注入提示词",
+      "description": "向主调用目标模型节点注入提示块",
+      "fields": [
+        {
+          "key": "id",
+          "title": "注入标识",
+          "type": "STRING",
+          "required": true,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "role",
+          "title": "角色",
+          "type": "STRING",
+          "required": false,
+          "defaultValue": "SYSTEM",
+          "choices": [
+            {
+              "value": "SYSTEM",
+              "title": "系统"
+            },
+            {
+              "value": "USER",
+              "title": "用户"
+            },
+            {
+              "value": "ASSISTANT",
+              "title": "助手"
+            }
+          ],
+          "integer": false
+        },
+        {
+          "key": "position",
+          "title": "位置",
+          "type": "STRING",
+          "required": false,
+          "defaultValue": "BEFORE_HISTORY",
+          "choices": [
+            {
+              "value": "BEFORE_HISTORY",
+              "title": "历史前"
+            },
+            {
+              "value": "IN_HISTORY",
+              "title": "历史中"
+            },
+            {
+              "value": "AFTER_HISTORY",
+              "title": "历史后"
+            }
+          ],
+          "integer": false
+        },
+        {
+          "key": "depth",
+          "title": "历史深度",
+          "type": "NUMBER",
+          "required": false,
+          "defaultValue": "0",
+          "choices": [],
+          "integer": true
+        },
+        {
+          "key": "targetWorkflowId",
+          "title": "目标调用",
+          "type": "STRING",
+          "required": false,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "targetNodeId",
+          "title": "目标节点",
+          "type": "STRING",
+          "required": false,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "targetBlockId",
+          "title": "目标注入槽",
+          "type": "STRING",
+          "required": false,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        },
+        {
+          "key": "contextOrder",
+          "title": "上下文顺序",
+          "type": "NUMBER",
+          "required": false,
+          "defaultValue": "1",
+          "choices": [],
+          "integer": true
+        },
+        {
+          "key": "emptyBehavior",
+          "title": "空内容处理",
+          "type": "STRING",
+          "required": false,
+          "defaultValue": "ALLOW",
+          "choices": [
+            {
+              "value": "ALLOW",
+              "title": "照常注入"
+            },
+            {
+              "value": "SKIP",
+              "title": "跳过"
+            },
+            {
+              "value": "REMOVE",
+              "title": "移除"
+            }
+          ],
+          "integer": false
+        },
+        {
+          "key": "scope",
+          "title": "生命周期",
+          "type": "STRING",
+          "required": false,
+          "defaultValue": "TURN",
+          "choices": [
+            {
+              "value": "TURN",
+              "title": "当前轮"
+            },
+            {
+              "value": "SESSION",
+              "title": "整个会话"
+            }
+          ],
+          "integer": false
+        }
+      ],
+      "usesModel": false,
+      "presentation": "STANDARD",
+      "execution": "HANDLER"
+    },
+    {
+      "id": "prompt.remove",
+      "title": "移除注入",
+      "description": "按所有者与标识移除提示块",
+      "fields": [
+        {
+          "key": "id",
+          "title": "注入标识",
+          "type": "STRING",
+          "required": true,
+          "defaultValue": null,
+          "choices": [],
+          "integer": false
+        }
+      ],
+      "usesModel": false,
+      "presentation": "COMPATIBILITY",
+      "execution": "HANDLER"
+    }
+  ],
+  "pluginCapabilities": {
+    "apiVersion": 2,
+    "entrypoint": "async function execute(context, host) { return JSON.stringify(await host.invoke('capabilities.describe', {})); }",
+    "returnValue": "text string or {text:string}; host.invoke returns an envelope that must be converted to text before returning",
+    "invocation": "await host.invoke(capability, arguments)",
+    "permissions": {
+      "network.http": {
+        "capability": "network.http",
+        "origins": [
+          "https://api.example.com"
+        ],
+        "methods": [
+          "GET",
+          "POST"
+        ],
+        "credentials": [
+          "serviceKey"
+        ]
+      },
+      "note": "Declarations are not device grants; grants bind plugin ID and code fingerprint. runtime.sleep and capabilities.describe need no declaration."
+    },
+    "capabilities": [
+      {
+        "name": "network.http",
+        "permission": "network.http",
+        "description": "One direct request to a declared and device-granted public HTTPS origin. Redirects and retries are disabled; URL alone grants nothing.",
+        "argumentsSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "url"
+          ],
+          "properties": {
+            "url": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://",
+              "description": "Absolute HTTPS URL; no userinfo or fragment. Runtime validates the canonical origin, destination and grant."
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "GET",
+                "HEAD",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE",
+                "OPTIONS"
+              ],
+              "default": "GET"
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
+            "body": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "credential": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "required": [
+                "alias"
+              ],
+              "properties": {
+                "alias": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$",
+                  "description": "Declared credential alias; never a raw secret."
+                },
+                "header": {
+                  "type": "string",
+                  "default": "Authorization"
+                },
+                "prefix": {
+                  "type": "string",
+                  "default": "Bearer "
+                }
+              },
+              "default": null
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60000,
+              "default": 30000
+            },
+            "maxResponseBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048576,
+              "default": 262144
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "method": {
+                    "enum": [
+                      "GET",
+                      "HEAD"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "body": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "resultSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "ok",
+                "data"
+              ],
+              "properties": {
+                "ok": {
+                  "const": true
+                },
+                "data": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "status",
+                    "headers",
+                    "body"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "integer"
+                    },
+                    "headers": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      }
+                    },
+                    "body": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "$ref": "#/failureSchema"
+            }
+          ]
+        },
+        "example": {
+          "url": "https://api.example.com/items",
+          "method": "GET",
+          "credential": {
+            "alias": "serviceKey"
+          }
+        }
+      },
+      {
+        "name": "runtime.sleep",
+        "permission": null,
+        "description": "Cancellable wait within the remaining 180-second run budget.",
+        "argumentsSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "milliseconds"
+          ],
+          "properties": {
+            "milliseconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            }
+          }
+        },
+        "resultSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "ok",
+                "data"
+              ],
+              "properties": {
+                "ok": {
+                  "const": true
+                },
+                "data": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "maxProperties": 0
+                }
+              }
+            },
+            {
+              "$ref": "#/failureSchema"
+            }
+          ]
+        },
+        "example": {
+          "milliseconds": 1000
+        }
+      },
+      {
+        "name": "capabilities.describe",
+        "permission": null,
+        "description": "Return this machine-readable manifest.",
+        "argumentsSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "maxProperties": 0
+        },
+        "resultSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "ok",
+                "data"
+              ],
+              "properties": {
+                "ok": {
+                  "const": true
+                },
+                "data": {
+                  "type": "object"
+                }
+              }
+            },
+            {
+              "$ref": "#/failureSchema"
+            }
+          ]
+        },
+        "example": {}
+      }
+    ],
+    "failure": {
+      "ok": false,
+      "error": {
+        "code": "stable machine code",
+        "message": "human-readable, no secrets",
+        "retryable": false,
+        "delivery": "not_sent|unknown|received"
+      }
+    },
+    "failureSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ok",
+        "error"
+      ],
+      "properties": {
+        "ok": {
+          "const": false
+        },
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "message",
+            "retryable",
+            "delivery"
+          ],
+          "properties": {
+            "code": {
+              "type": "string",
+              "enum": [
+                "UNKNOWN_CAPABILITY",
+                "RUN_TIMEOUT",
+                "INVALID_ARGUMENT",
+                "INVALID_URL",
+                "REQUEST_LIMIT",
+                "REQUEST_TOO_LARGE",
+                "PERMISSION_DENIED",
+                "INVALID_HEADER",
+                "CREDENTIAL_UNAVAILABLE",
+                "DESTINATION_DENIED",
+                "NETWORK_ERROR",
+                "RESPONSE_TOO_LARGE",
+                "HOST_ERROR"
+              ]
+            },
+            "message": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "delivery": {
+              "type": "string",
+              "enum": [
+                "not_sent",
+                "unknown",
+                "received"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "errorCodes": [
+      "UNKNOWN_CAPABILITY",
+      "RUN_TIMEOUT",
+      "INVALID_ARGUMENT",
+      "INVALID_URL",
+      "REQUEST_LIMIT",
+      "REQUEST_TOO_LARGE",
+      "PERMISSION_DENIED",
+      "INVALID_HEADER",
+      "CREDENTIAL_UNAVAILABLE",
+      "DESTINATION_DENIED",
+      "NETWORK_ERROR",
+      "RESPONSE_TOO_LARGE",
+      "HOST_ERROR"
+    ],
+    "networkPolicy": {
+      "schemes": [
+        "https"
+      ],
+      "destinations": "public IP addresses only; DNS checked at connection",
+      "redirects": false,
+      "retries": false,
+      "appProxy": false,
+      "requestAndResponseLogs": false,
+      "rawCredentialAccess": false
+    },
+    "limits": {
+      "requestsPerRun": 64,
+      "runMs": 180000,
+      "requestBytes": 262144,
+      "defaultResponseBytes": 262144,
+      "maxResponseBytes": 1048576,
+      "defaultHttpTimeoutMs": 30000,
+      "maxHttpTimeoutMs": 60000
+    },
+    "example": "async function execute(context, host) { const response = await host.invoke('network.http', {url:'https://api.example.com/items', method:'GET', credential:{alias:'serviceKey'}}); if (!response.ok) throw new Error(response.error.code); return response.data.body; }"
+  }
+}
+```

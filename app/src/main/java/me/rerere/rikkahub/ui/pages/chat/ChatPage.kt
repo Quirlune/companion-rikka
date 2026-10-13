@@ -2,6 +2,14 @@ package me.rerere.rikkahub.ui.pages.chat
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.WindowInsets
@@ -18,11 +26,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
@@ -45,6 +53,7 @@ import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,12 +64,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.dokar.sonner.ToastType
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.HazeState
@@ -105,6 +118,8 @@ import me.rerere.rikkahub.ui.hooks.EditStateContent
 import me.rerere.rikkahub.ui.hooks.useEditState
 import me.rerere.rikkahub.utils.base64Decode
 import me.rerere.rikkahub.utils.navigateToChatPage
+import dev.gray.companion.AppEventLog
+import dev.gray.companion.AppLogLevel
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import org.koin.core.parameter.parametersOf
@@ -617,6 +632,11 @@ private fun ChatFilesPickerSheet(
     }
 }
 
+private object CompanionErrorFlashMemory {
+    // Process-lifetime UI acknowledgement; historical errors do not replay on recomposition.
+    var lastSeenSerial: Long? = null
+}
+
 @Composable
 internal fun TopBar(
     settings: Settings,
@@ -632,12 +652,45 @@ internal fun TopBar(
     companionSubtitle: String? = null,
     companionMenu: Boolean = false,
     companionMenuEnabled: Boolean = true,
+    companionErrorSerial: Long = 0L,
     companionMenuContent: (@Composable (onClose: () -> Unit) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
     val titleState = useEditState<String> {
         onUpdateTitle(it)
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var isResumed by remember(lifecycleOwner) {
+        mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+    }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, _ ->
+            isResumed = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    var flashError by remember { mutableStateOf(false) }
+    LaunchedEffect(companionMenu, companionErrorSerial, isResumed) {
+        if (!companionMenu || !isResumed) return@LaunchedEffect
+        val previous = CompanionErrorFlashMemory.lastSeenSerial
+        if (previous == null) {
+            CompanionErrorFlashMemory.lastSeenSerial = companionErrorSerial
+            return@LaunchedEffect
+        }
+        if (companionErrorSerial <= previous) return@LaunchedEffect
+        CompanionErrorFlashMemory.lastSeenSerial = companionErrorSerial
+        try {
+            repeat(3) {
+                flashError = true
+                delay(170)
+                flashError = false
+                delay(170)
+            }
+        } finally {
+            flashError = false
+        }
     }
 
     TopAppBar(
@@ -661,7 +714,8 @@ internal fun TopBar(
                     if (conversation.messageNodes.isNotEmpty()) {
                         titleState.open(conversation.title)
                     } else {
-                        toaster.show(editTitleWarning, type = ToastType.Warning)
+                        if (companionMenu) AppEventLog.record("聊天", editTitleWarning, AppLogLevel.WARNING)
+                        else toaster.show(editTitleWarning, type = ToastType.Warning)
                     }
                 },
                 color = Color.Transparent,
@@ -695,10 +749,33 @@ internal fun TopBar(
                 var expanded by remember { mutableStateOf(false) }
                 Box {
                     IconButton(onClick = { expanded = true }, enabled = companionMenuEnabled) {
-                        Icon(HugeIcons.MoreVertical, "卡片菜单", modifier = Modifier.rotate(90f))
+                        Icon(HugeIcons.MoreVertical, "菜单与日志", modifier = Modifier.rotate(90f),
+                            tint = if (flashError) MaterialTheme.colorScheme.error else LocalContentColor.current)
                     }
-                    DropdownMenu(expanded = expanded && companionMenuEnabled, onDismissRequest = { expanded = false }) {
-                        companionMenuContent?.invoke { expanded = false }
+                    val configuration = LocalConfiguration.current
+                    val menuWidth = minOf(460.dp, (configuration.screenWidthDp - 24).coerceAtLeast(200).dp)
+                    if (expanded && companionMenuEnabled) {
+                        val menuOffset = with(LocalDensity.current) { 48.dp.roundToPx() }
+                        // MENU cards use subcomposition. A regular popup avoids the
+                        // intrinsic measurements performed by Material DropdownMenu.
+                        Popup(
+                            alignment = Alignment.TopEnd,
+                            offset = IntOffset(0, menuOffset),
+                            onDismissRequest = { expanded = false },
+                            properties = PopupProperties(focusable = true),
+                        ) {
+                            Surface(
+                                modifier = Modifier.width(menuWidth)
+                                    .heightIn(max = configuration.screenHeightDp.dp * 0.75f),
+                                shape = RoundedCornerShape(20.dp),
+                                tonalElevation = 3.dp,
+                                shadowElevation = 8.dp,
+                            ) {
+                                Column(Modifier.verticalScroll(rememberScrollState())) {
+                                    companionMenuContent?.invoke { expanded = false }
+                                }
+                            }
+                        }
                     }
                 }
             } else {

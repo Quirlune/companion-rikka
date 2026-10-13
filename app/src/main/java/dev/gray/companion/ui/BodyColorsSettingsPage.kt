@@ -46,7 +46,6 @@ internal fun BodyColorsSettingsContent(modifier: Modifier = Modifier, vm: Settin
         vm.updateSettings(saved.copy(displaySetting = value))
     }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("正文默认支持 Markdown。颜色是全局显示偏好，修改立即保存并应用于所有聊天，不随主调用模板保存或撤销。", style = MaterialTheme.typography.bodyMedium)
         BodyColorField("粗体 · **文字**", display.companionBoldColor) { update(display.copy(companionBoldColor = it)) }
         BodyColorField("斜体 · *文字*", display.companionItalicColor) { update(display.copy(companionItalicColor = it)) }
         BodyColorField("引号 · “文字” / \"文字\"", display.companionQuoteColor) { update(display.copy(companionQuoteColor = it)) }
@@ -59,7 +58,6 @@ internal fun BodyColorsSettingsContent(modifier: Modifier = Modifier, vm: Settin
         CompositionLocalProvider(LocalSettings provides saved.copy(displaySetting = display)) {
             BodyMarkdownBlock("普通正文，**粗体强调**，*斜体描写*。\n\n“我在这里。” 她说：\"慢慢来。\"\n\n`代码中的 \"引号\" 保持原样`")
         }
-        Text("引号颜色优先于粗体和斜体；代码不染色。仅改变显示，不改变正文、历史或发送内容。自定义正文外观会先解析 {{正文}} 的 Markdown，再应用外层 HTML/CSS；模板可用更具体的 CSS 覆盖默认颜色。", style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -71,7 +69,7 @@ private fun BodyColorField(label: String, value: String, onChange: (String) -> U
         OutlinedTextField(value = input, onValueChange = {
             input = it
             if (Regex("#[0-9a-fA-F]{6}").matches(it)) onChange(it)
-        }, label = { Text(label) }, supportingText = { Text(if (valid) "色值格式：#RRGGBB" else "请输入完整的六位色值，例如 #767676") },
+        }, label = { Text(label) }, supportingText = if (valid) null else ({ Text("请输入六位色值，例如 #767676") }),
             isError = !valid, singleLine = true, modifier = Modifier.fillMaxWidth())
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             listOf("#767676", "#A0712F", "#B97758", "#8C82B5", "#64969A", "#657F60").forEach { color ->

@@ -1,6 +1,7 @@
 package dev.gray.companion.ui
 
 import dev.gray.companion.core.BodyAppearanceTemplates
+import dev.gray.companion.core.IllustrationCore
 import me.rerere.rikkahub.data.datastore.DisplaySetting
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
@@ -44,6 +45,14 @@ internal object BodyAppearanceMarkup {
     fun render(template: String, markdown: String, colors: DisplaySetting = DisplaySetting()): String =
         renderFrame(template, markdownFragment(markdown), colors, incremental = false)
 
+    /** Adds only host-generated local-image URLs after sanitized Markdown blocks. */
+    fun renderWithIllustrations(
+        template: String,
+        markdown: String,
+        illustrations: List<IllustrationBodyImage>,
+        colors: DisplaySetting = DisplaySetting(),
+    ): String = renderFrame(template, illustratedMarkdownFragment(markdown, illustrations), colors, incremental = false)
+
     /** The template and its CSS stay mounted while a response streams. */
     fun incrementalShell(template: String, colors: DisplaySetting = DisplaySetting()): String =
         renderFrame(template, "", colors, incremental = true)
@@ -53,6 +62,24 @@ internal object BodyAppearanceMarkup {
         content.outputSettings().prettyPrint(false)
         highlightQuotes(content.body())
         return content.body().html()
+    }
+
+    private fun illustratedMarkdownFragment(markdown: String, illustrations: List<IllustrationBodyImage>): String {
+        val paragraphs = IllustrationCore.paragraphs(markdown)
+        val illustrationsByAnchor = illustrations.groupBy { it.paragraphId }
+        return buildString {
+            paragraphs.forEach { paragraph ->
+                // The planner's paragraph anchors are blank-line chunks, not DOM child indexes:
+                // headings, lists, tables and code fences can each expand to different HTML shapes.
+                append(markdownFragment(paragraph.text))
+                illustrationsByAnchor[paragraph.id].orEmpty().forEach { illustration ->
+                    if (!Regex("https://companion\\.invalid/illustration/[0-9a-fA-F-]+/[0-9]+").matches(illustration.requestUrl)) return@forEach
+                    val wrapper = Element("div").addClass("companion-generated-illustration")
+                    wrapper.appendChild(Element("img").attr("src", illustration.requestUrl).attr("alt", "正文插图"))
+                    append(wrapper.outerHtml())
+                }
+            }
+        }
     }
 
     private fun renderFrame(template: String, markdownContent: String, colors: DisplaySetting, incremental: Boolean): String {
@@ -74,7 +101,8 @@ internal object BodyAppearanceMarkup {
         val colorCss = ":where(.companion-markdown) strong,:where(.companion-markdown) b{color:${normalizedBodyColor(colors.companionBoldColor, "#767676")}}" +
             ":where(.companion-markdown) em,:where(.companion-markdown) i{color:${normalizedBodyColor(colors.companionItalicColor, "#767676")}}" +
             ":where(.companion-markdown) .body-quote{color:${normalizedBodyColor(colors.companionQuoteColor, "#A0712F")}}"
-        return "<style>$colorCss .companion-markdown{display:flow-root;min-width:0}.companion-markdown>:first-child{margin-top:0}.companion-markdown>:last-child{margin-bottom:0}.companion-markdown pre{white-space:pre-wrap;overflow-wrap:anywhere}.companion-markdown table{border-collapse:collapse;max-width:100%}.companion-markdown th,.companion-markdown td{border:1px solid currentColor;padding:4px 8px}</style>" + doc.body().html()
+        val illustrationCss = ".companion-generated-illustration{display:flex;justify-content:center;box-sizing:border-box;width:100%;margin:1em 0;overflow:hidden}.companion-generated-illustration img{display:block;width:100%;height:auto;max-width:100%;max-height:none;object-fit:contain;border-radius:14px;opacity:0;animation:companion-illustration-fade .32s ease-out forwards;mask-image:linear-gradient(to bottom,transparent 0%,black 8%,black 92%,transparent 100%);-webkit-mask-image:linear-gradient(to bottom,transparent 0%,black 8%,black 92%,transparent 100%)}@keyframes companion-illustration-fade{to{opacity:1}}@media(prefers-reduced-motion:reduce){.companion-generated-illustration img{animation:none;opacity:1}}"
+        return "<style>$colorCss $illustrationCss .companion-markdown{display:flow-root;min-width:0}.companion-markdown>:first-child{margin-top:0}.companion-markdown>:last-child{margin-bottom:0}.companion-markdown pre{white-space:pre-wrap;overflow-wrap:anywhere}.companion-markdown table{border-collapse:collapse;max-width:100%}.companion-markdown th,.companion-markdown td{border:1px solid currentColor;padding:4px 8px}</style>" + doc.body().html()
     }
 
     private fun highlightQuotes(root: Element) {

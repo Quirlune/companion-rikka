@@ -1,0 +1,51 @@
+{
+  "format": "companion.config.v1",
+  "label": "JavaScript v2 联网插件作者示例（需修改目标并授权）",
+  "resources": {
+    "groups": [
+      {
+        "id": "example_plugin_v2_http_group",
+        "name": "HTTP 插件示例",
+        "workflows": [
+          {
+            "id": "example_plugin_v2_http_flow",
+            "title": "读取服务状态",
+            "nodes": [
+              {
+                "id": "example_plugin_v2_http_node",
+                "title": "HTTP 请求",
+                "actionId": "plugin.run",
+                "arguments": {"pluginId": "example_plugin_v2_http"},
+                "outputKey": "example_http_result",
+                "includeHistory": false,
+                "visible": false,
+                "recordTrajectory": false
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "extensions": [
+      {
+        "id": "example_plugin_v2_http",
+        "name": "HTTP 插件作者示例",
+        "enabled": false,
+        "resources": [{"kind": "GROUP", "id": "example_plugin_v2_http_group"}],
+        "code": {
+          "runtime": "javascript",
+          "version": 2,
+          "source": "async function execute(context, host) {\n  const response = await host.invoke('network.http', {url: 'https://api.example.com/v1/status', method: 'GET', credential: {alias: 'serviceKey'}});\n  if (!response.ok) throw new Error(response.error.code);\n  if (response.data.status !== 200) throw new Error('SERVICE_STATUS');\n  return response.data.body;\n}",
+          "permissions": [
+            {
+              "capability": "network.http",
+              "origins": ["https://api.example.com"],
+              "methods": ["GET"],
+              "credentials": ["serviceKey"]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

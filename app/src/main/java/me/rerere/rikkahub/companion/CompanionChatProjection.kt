@@ -4,6 +4,9 @@ import dev.gray.companion.PendingOutput
 import dev.gray.companion.core.AvatarImage
 import dev.gray.companion.core.ChatMessage
 import dev.gray.companion.core.BodyDisplaySnapshot
+import dev.gray.companion.core.IllustrationCore
+import dev.gray.companion.core.IllustrationImage
+import dev.gray.companion.core.IllustrationSource
 import dev.gray.companion.core.Library
 import dev.gray.companion.core.OutputSlot
 import dev.gray.companion.core.Role
@@ -105,6 +108,7 @@ internal fun projectCompanionSettings(base: Settings, library: Library, session:
             id = stableUuid(character.id),
             name = character.name,
             avatar = character.avatar.toRikkaAvatar(),
+            useAssistantAvatar = true,
             chatModelId = if (character.id == card?.id) primary?.modelProfileId?.let(::stableUuid) else null,
             quickMessageIds = quickMessageIds,
         )
@@ -171,10 +175,15 @@ internal data class CompanionHistoryProjection(
     val logicalMessageIds: Map<Uuid, String>,
     val bodyDisplays: Map<Uuid, BodyDisplaySnapshot>,
     val presentationIds: Map<Uuid, Uuid>,
+    val inlineIllustrations: Map<Uuid, List<IllustrationImage>>,
 )
 
 /** Display-only nodes project compatible prompt paths and their own generation candidates. */
-internal fun projectCompanionHistory(session: Session): CompanionHistoryProjection {
+internal fun projectCompanionHistory(
+    session: Session,
+    illustrationImages: List<IllustrationImage> = emptyList(),
+    illustrationsEnabled: Boolean = false,
+): CompanionHistoryProjection {
     val visible = orderTurnRegions(
         session.messages.filterNot { it.deleted },
         turnId = { if (it.role == Role.ASSISTANT) it.turnId else null },
@@ -195,7 +204,28 @@ internal fun projectCompanionHistory(session: Session): CompanionHistoryProjecti
     val logicalIds = mutableMapOf<Uuid, String>()
     val bodyDisplays = mutableMapOf<Uuid, BodyDisplaySnapshot>()
     val presentationIds = mutableMapOf<Uuid, Uuid>()
+    val inlineIllustrations = mutableMapOf<Uuid, List<IllustrationImage>>()
     val regionOccurrences = mutableMapOf<String, Int>()
+
+    fun projectIllustrations(uiId: Uuid, displayed: ChatMessage, revisionId: String) {
+        if (!illustrationsEnabled || displayed.role != Role.ASSISTANT || displayed.outputSlot != OutputSlot.BODY) return
+        val activeRevision = displayed.activeTextRevisionId ?: displayed.id
+        if (revisionId != activeRevision) return
+        val current = session.messages.firstOrNull { it.id == displayed.id && !it.deleted } ?: return
+        if (current.role != Role.ASSISTANT || current.outputSlot != OutputSlot.BODY) return
+        val source = IllustrationSource(session.id, current.id,
+            current.activeTextRevisionId ?: current.id, IllustrationCore.sourceKey(current))
+          if (revisionId != source.revisionId || IllustrationCore.sourceKey(displayed) != source.key) return
+        if (!IllustrationCore.isCurrentSource(session, source)) return
+        val paragraphs = IllustrationCore.paragraphs(current.text)
+        val anchorIndex = paragraphs.mapIndexed { index, paragraph -> paragraph.id to index }.toMap()
+        val matches = illustrationImages.filter { image ->
+            image.sessionId == source.sessionId && image.messageId == source.messageId &&
+                image.sourceKey == source.key && image.afterParagraphId in anchorIndex
+        }.distinctBy { it.afterParagraphId }.sortedBy { anchorIndex[it.afterParagraphId] }
+        if (matches.isNotEmpty()) inlineIllustrations[uiId] = matches
+    }
+
     val nodes = visible.map { message ->
         val anchorTurn = anchorTurns[message.id]
         val turnRecord = anchorTurn?.let(records::get)
@@ -236,6 +266,7 @@ internal fun projectCompanionHistory(session: Session): CompanionHistoryProjecti
             uiMessages += message.toDisplayMessage(uiId, message.activeTextRevisionCreatedAt ?: message.createdAt)
             message.bodyDisplay?.let { bodyDisplays[uiId] = it }
             logicalIds[uiId] = message.id
+            projectIllustrations(uiId, message, activeId)
         } else if (message.role == Role.USER && message.outputSlot == OutputSlot.BODY) {
             ConversationPaths.userVersions(session, message.id).forEach { revision ->
                 val uiId = stableUuid("user:${message.id}:${revision.id}")
@@ -267,6 +298,7 @@ internal fun projectCompanionHistory(session: Session): CompanionHistoryProjecti
                         turnUser.id, variant.id, representative.id, revisionId,
                     )
                     logicalIds[uiId] = message.id
+                projectIllustrations(uiId, representative, revisionId)
                 }
             }
         } else {
@@ -278,13 +310,14 @@ internal fun projectCompanionHistory(session: Session): CompanionHistoryProjecti
                 branchChoices += if (message.authoredOpening) CompanionBranchChoice.Opening(message.id, revisionId)
                     else CompanionBranchChoice.Text(message.id, revisionId)
                 logicalIds[uiId] = message.id
+                projectIllustrations(uiId, message, revisionId)
             }
         }
         choices[nodeId] = branchChoices
         uiMessages.forEach { presentationIds[it.id] = nodeId }
         MessageNode(id = nodeId, messages = uiMessages, selectIndex = selectedIndex)
     }
-    return CompanionHistoryProjection(nodes, choices, logicalIds, bodyDisplays, presentationIds)
+    return CompanionHistoryProjection(nodes, choices, logicalIds, bodyDisplays, presentationIds, inlineIllustrations)
 }
 
 private fun ChatMessage.displayForRevision(revisionId: String): BodyDisplaySnapshot? =

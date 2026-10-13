@@ -54,7 +54,6 @@ internal fun SessionConfigScreen(
         CardGroup {
             item(
                 headlineContent = { Text(character?.name?.ifBlank { "未命名角色" } ?: "未选择角色") },
-                supportingContent = { Text("从聊天侧栏切换角色，会开始一段新对话。") },
             )
         }
         val personaChoices = listOf<String?>(null).map { it to "旧版用户资料 · ${library.user.name}" } +
@@ -62,14 +61,11 @@ internal fun SessionConfigScreen(
             if (draft.personaId != null && library.personas.none { it.id == draft.personaId })
                 listOf(draft.personaId to "身份已不可用：${draft.personaId}") else emptyList()
         ChoiceLine("本段对话的用户身份", draft.personaId, personaChoices) { draft = draft.copy(personaId = it) }
-        Text("切换只应用于本段对话，已有消息保留原称呼。{{user.prompt}} 被提示词引用时才会发送。",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         onManagePersonas?.let { manage -> TextButton(onClick = manage) { Text("管理用户身份") } }
         ChoiceLine("主调用", draft.mainCallId, listOf("" to "无") + library.mainCalls.map { it.id to it.name.ifBlank { "未命名主调用" } }) {
             draft = draft.copy(mainCallId = it)
         }
         EditorSection("额外提示词包", "额外选择 ${draft.packageIds.size} 项 · 当前可用 ${loadedPackages.size} 项") {
-            Text("随角色卡、主调用或调用组一起加载的包，不受额外勾选影响。", style = MaterialTheme.typography.bodySmall)
             ResourceBindingList(library.packages.map { it.id to it.name.ifBlank { it.namespace } }, draft.packageIds) {
                 draft = draft.copy(packageIds = it)
             }
@@ -80,7 +76,7 @@ internal fun SessionConfigScreen(
                 draft = draft.copy(groupIds = it)
             }
         }
-        EditorSection("会话状态", "${draft.state.size} 项 · 用于条件识别与宏引用") {
+        EditorSection("会话状态", "${draft.state.size} 项") {
             draft.state.forEach { (name, value) -> key(name) {
                 TextFieldLine(name, value, { draft = draft.copy(state = draft.state + (name to it)) })
                 TextButton(onClick = { draft = draft.copy(state = draft.state - name) }) { Text("删除 $name") }

@@ -148,6 +148,7 @@ internal object CompanionProviderAdapter {
             require(when (slot.kind) {
                 CredentialKind.API_KEY, CredentialKind.PRIVATE_KEY -> connections.any { it.id == slot.ownerId }
                 CredentialKind.MODEL_API_KEY, CredentialKind.MODEL_PRIVATE_KEY -> profiles.any { it.id == slot.ownerId }
+                CredentialKind.PLUGIN_SECRET -> false // Plugin keys belong to the native plugin access panel.
             }) { "凭据所属资源已不存在" }
             if (edit.first == edit.second) null else CredentialWrite(slot.ownerId, edit.first, edit.second, slot.kind)
         }

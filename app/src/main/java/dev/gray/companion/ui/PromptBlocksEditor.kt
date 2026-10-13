@@ -138,14 +138,12 @@ internal fun PromptBlocksEditor(
                             fun update(value: PromptBlock, group: String? = null) = edit(blocks.map { if (it.id == block.id) value else it }, group)
                             PromptTagSelector(tags, block.tagIds) { update(block.copy(tagIds = it)) }
                             if (block.injectionSlot) {
-                                Text("提示词接收槽 · 只接收宏来源和指定到此槽的注入，不编辑字面内容或内容处理。来源先按下列顺序展开，再按独立上下文顺序填入注入内容；角色与位置由此槽决定。",
-                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 PromptSlotReferencesEditor(block, references) { update(block.copy(slotReferences = it)) }
                             } else {
                                 PromptTemplateField("内容", block.template, references, { update(block.copy(template = it), "template:${block.id}") }, minLines = 3, owner = owner?.let { ExtensionFieldRef(it.resource.kind, it.resource.id, ExtensionField.BLOCK_TEMPLATE, workflowId = it.workflowId, nodeId = it.nodeId, blockId = block.id) })
                                 TextProcessingEditor("内容处理", block.processing, references) { update(block.copy(processing = it)) }
                             }
-                            EditorSection("触发条件", "位置由提示词列表顺序决定") {
+                            EditorSection("触发条件") {
                                 ToggleLine("引用均为空或不可用时隐藏整条", block.hideWhenReferencesEmpty) { update(block.copy(hideWhenReferencesEmpty = it)) }
                                 Text(if (block.injectionSlot) "槽停用或条件不满足时，槽内来源和注入均不发送；来源语法错误仍会报告。" else "只对含引用的提示词生效；纯文字照常保留，语法错误仍会报告。",
                                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -156,8 +154,6 @@ internal fun PromptBlocksEditor(
                                 ToggleLine("合并相邻同角色消息", block.mergeAdjacentMessages) {
                                     update(block.copy(mergeAdjacentMessages = it))
                                 }
-                                Text("关闭后，本条目产生的消息不与前后同角色消息拼接，便于保留独立 Assistant 段落。可在提示词预览检查实际消息顺序。",
-                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                             OutlinedButton(onClick = { deleteId = block.id },
@@ -226,8 +222,6 @@ private fun PromptSlotReferencesEditor(block: PromptBlock, references: List<Prom
             }
         }
     }
-    Text("这里编辑的是来源宏表达式，可用既有包、分类、标签等引用语法；解析出的内容只读。", style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant)
     OutlinedButton(onClick = { picking = true }) { Text("添加来源宏") }
     if (picking) PromptReferenceSheet(choices, { reference ->
         if (DefaultPromptSlots.referenceError(reference) == null) onChange(block.slotReferences + reference)

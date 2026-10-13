@@ -13,13 +13,23 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.navigation3.runtime.NavKey
+import androidx.navigation3.runtime.entryProvider
 import dev.gray.companion.core.*
+import kotlinx.serialization.Serializable
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.FloppyDisk
 import me.rerere.rikkahub.data.model.Avatar
+import me.rerere.rikkahub.RikkaNavDisplay
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.UIAvatar
 import me.rerere.rikkahub.ui.theme.CustomColors
+
+@Serializable
+private sealed interface CharacterEditorRoute : NavKey {
+    @Serializable data object Home : CharacterEditorRoute
+    @Serializable data object BasicSettings : CharacterEditorRoute
+}
 
 @Composable
 private fun EntryForm(entry: PromptEntry, index: Int, count: Int, onChange: (PromptEntry) -> Unit, onUp: () -> Unit, onDown: () -> Unit, onRemove: () -> Unit, onDuplicate: () -> Unit, canMove: Boolean = true, initiallyExpanded: Boolean = false, macro: String? = null, siblings: List<PromptEntry> = emptyList(), tags: List<PromptTag> = emptyList(), owner: ExtensionFieldRef? = null) {
@@ -101,6 +111,11 @@ internal fun CharacterEditor(initial: CharacterCard, packages: List<PromptPackag
     var avatarEditorOpen by remember(initial.id) { mutableStateOf(false) }
     var extraSearch by remember(initial.id) { mutableStateOf("") }
     var extrasRevealKey by remember(initial.id) { mutableIntStateOf(0) }
+    val stack = remember(initial.id) { mutableStateListOf<NavKey>(CharacterEditorRoute.Home) }
+    val backs = remember(initial.id) { mutableStateMapOf<NavKey, () -> Unit>() }
+    var bindingSheet by remember(initial.id) { mutableStateOf<String?>(null) }
+    fun openBasics() { if (stack.last() != CharacterEditorRoute.BasicSettings) stack.add(CharacterEditorRoute.BasicSettings) }
+    fun pop() { if (stack.size > 1) stack.removeAt(stack.lastIndex) else onBack() }
     val newlyExpandedEntries = remember(initial.id) { mutableStateListOf<String>() }
     val greetingReferences = remember(card, library, packages) {
         val base = library ?: Library(packages = packages)
@@ -118,17 +133,29 @@ internal fun CharacterEditor(initial: CharacterCard, packages: List<PromptPackag
     val sourceResource = ExtensionResourceRef(ExtensionResourceKind.CHARACTER, card.id)
     val sourceFocus = LocalSourceNavigation.current?.focus
     LaunchedEffect(sourceFocus) {
-        if (sourceFocus != null && sourceFocus.resource == sourceResource && sourceFocus.entryId != null) {
-            extraSearch = ""
-            sourceFocus.entryId?.let { newlyExpandedEntries.add(it) }
-            extrasRevealKey++
+        if (sourceFocus != null && sourceFocus.resource == sourceResource) {
+            when {
+                sourceFocus.section == "boundPackageIds" -> bindingSheet = "packages"
+                sourceFocus.section == "boundGroupIds" -> bindingSheet = "groups"
+                sourceFocus.entryId != null -> {
+                    if (card.entries.any { it.id == sourceFocus.entryId && CharacterFields.isBasic(it.key) }) openBasics()
+                    else {
+                        extraSearch = ""
+                        sourceFocus.entryId?.let { newlyExpandedEntries.add(it) }
+                        extrasRevealKey++
+                    }
+                }
+            }
         }
     }
     SourceDraftBoundary(sourceResource,
         overlay = { base -> base.withSourceResource(base.copy(characters = listOf(card)), sourceResource) },
         restore = { candidate, parent -> candidate.withSourceResource(parent, sourceResource) },
         accept = { candidate -> candidate.characters.firstOrNull { it.id == card.id }?.let { card = it } }) {
-    EditorPage("角色卡", onBack, { onSave(card.copy(name = card.name.trim())) }, dirty = card != cardBaseline, saving = saving || avatarProcessing) {
+    RikkaNavDisplay(stack, { backs[stack.last()]?.invoke() ?: pop() }, entryProvider {
+    entry<CharacterEditorRoute.Home> { route ->
+    CallEditorPage("角色卡", card != cardBaseline, onBack, { onSave(card.copy(name = card.name.trim())) },
+        saving = saving || avatarProcessing, onRegisterBack = { backs[route] = it }) {
         CardGroup {
             item(
                 onClick = { avatarEditorOpen = !avatarEditorOpen },
@@ -141,7 +168,6 @@ internal fun CharacterEditor(initial: CharacterCard, packages: List<PromptPackag
                     )
                 },
                 headlineContent = { Text("头像") },
-                supportingContent = { Text("点击更换或移除头像") },
             )
         }
         if (avatarEditorOpen) CharacterAvatarEditor(card, { avatarProcessing = it }) { card = card.copy(avatar = it) }
@@ -152,30 +178,10 @@ internal fun CharacterEditor(initial: CharacterCard, packages: List<PromptPackag
             LegacyAddressLine("character.${card.namespace}.*")
         }
         HorizontalDivider()
-        Text("基础设定", style = MaterialTheme.typography.titleMedium)
-        CharacterFields.definitions.forEach { field ->
-            val entry = card.entries.first { it.key == field.key }
-            var renameBase by remember(entry.id) { mutableStateOf(false) }
-            HorizontalDivider()
-            EditorTitleRow("${entry.title.ifBlank { field.title }} / ${entry.slug}", { renameBase = true }) {
-                PromptTagSelector(library?.promptTags.orEmpty(), entry.tagIds, compact = true) { selected ->
-                    card = card.copy(entries = card.entries.map { if (it.id == entry.id) it.copy(tagIds = selected) else it })
-                }
-            }
-            if (renameBase) NamingDialog("${field.title}名称", entry.title.ifBlank { field.title }, entry.slug,
-                card.entries.filterNot { it.id == entry.id }.map { it.title }, card.entries.filterNot { it.id == entry.id }.map { it.slug },
-                { renameBase = false }) { title, slug ->
-                card = card.copy(entries = card.entries.map { if (it.id == entry.id) it.copy(title = title, slug = slug) else it })
-                renameBase = false
-            }
-            PromptTemplateField(field.title, entry.text, greetingReferences, { text ->
-                card = card.copy(entries = card.entries.map { if (it.id == entry.id) it.copy(text = text) else it })
-            }, minLines = 3, owner = ExtensionFieldRef(ExtensionResourceKind.CHARACTER, card.id, ExtensionField.ENTRY_TEXT, entryId = entry.id))
-            Text(field.hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            SelectionContainer { Text("{{character.${field.key}}}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
-        }
+        val filledBasics = card.entries.count { CharacterFields.isBasic(it.key) && it.text.isNotBlank() }
+        EditorDestinationRow("基础设定", "${CharacterFields.definitions.size} 项设定 · 已填写 $filledBasics 项", ::openBasics)
         HorizontalDivider()
-        EditorSection("开场消息", "${1 + card.alternateGreetings.size} 个选项 · 仅用于新对话",
+        EditorSection("开场消息", "${1 + card.alternateGreetings.size} 个选项",
             initiallyExpanded = sourceFocus?.resource == sourceResource &&
                 (sourceFocus.section == "greeting" || sourceFocus.section?.startsWith("alternateGreetings") == true)) {
                 PromptTemplateField("首选开场消息（仅新对话）", card.greeting, greetingReferences,
@@ -189,8 +195,6 @@ internal fun CharacterEditor(initial: CharacterCard, packages: List<PromptPackag
                         { card = card.copy(alternateGreetings = card.alternateGreetings.filterIndexed { i, _ -> i != index }) })
                 } }
                 OutlinedButton(onClick = { card = card.copy(alternateGreetings = card.alternateGreetings + "") }) { Text("添加备选开场") }
-                Text("新建对话时冻结开场选项，不请求模型；发送用户消息前可在聊天中用左右箭头切换。已聊过的开场不会随后修改。",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         val boundNames = card.boundPackageIds.map { id ->
             packages.firstOrNull { it.id == id }?.let { it.name.ifBlank { it.namespace } } ?: id
@@ -202,32 +206,16 @@ internal fun CharacterEditor(initial: CharacterCard, packages: List<PromptPackag
             if (card.boundPersonaId != null && library?.personas.orEmpty().none { it.id == card.boundPersonaId })
                 listOf(card.boundPersonaId to "身份已不可用：${card.boundPersonaId}") else emptyList()
         ChoiceLine("新对话默认用户身份", card.boundPersonaId, personaChoices) { card = card.copy(boundPersonaId = it) }
-        Text("只影响之后用此角色创建的聊天；已有聊天保留自己的身份。",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        EditorSection("关联提示词包", boundNames.joinToString("、").ifBlank { "暂无绑定" },
-            initiallyExpanded = sourceFocus?.resource == sourceResource && sourceFocus.section == "boundPackageIds") {
-            Text("一起加载；引用后才进入提示词。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            ResourceBindingList(packages.map { it.id to it.name.ifBlank { it.namespace } }, card.boundPackageIds) {
-                card = card.copy(boundPackageIds = it)
-            }
-        }
+        EditorSheetButton("关联提示词包", boundNames.joinToString("、").ifBlank { "暂无绑定" }) { bindingSheet = "packages" }
         val groups = library?.groups.orEmpty()
         val boundGroupNames = card.boundGroupIds.map { id ->
             groups.firstOrNull { it.id == id }?.name?.ifBlank { "未命名调用组" } ?: "未找到调用组"
         }
-        EditorSection("关联调用组", boundGroupNames.joinToString("、").ifBlank { "暂无绑定" },
-            initiallyExpanded = sourceFocus?.resource == sourceResource && sourceFocus.section == "boundGroupIds") {
-            Text("使用这个角色时一起加载组中的调用、提示词包、宏和卡片；调用按各自触发条件执行。",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            ResourceBindingList(groups.map { it.id to it.name.ifBlank { "未命名调用组" } }, card.boundGroupIds) {
-                card = card.copy(boundGroupIds = it)
-            }
-        }
+        EditorSheetButton("关联调用组", boundGroupNames.joinToString("、").ifBlank { "暂无绑定" }) { bindingSheet = "groups" }
         HorizontalDivider()
         val extras = card.entries.filterNot { CharacterFields.isBasic(it.key) }
         key(extrasRevealKey) {
             EditorSection("附加条目", "${extras.size} 项 · ${extras.take(2).joinToString("、") { it.key.ifBlank { "未命名" } }}", initiallyExpanded = extrasRevealKey > 0) {
-                Text("宏键不能与七项基础设定或 name 重复。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 TextFieldLine("搜索名称、宏键、标签或内容", extraSearch, { extraSearch = it })
                 if (extraSearch.isNotBlank()) Text("筛选期间暂停排序；保存仍包含全部条目。", style = MaterialTheme.typography.bodySmall)
                 extras.forEachIndexed { i, entry -> if (extraSearch.isBlank() || entryMatches(entry, extraSearch.trim(), library?.promptTags.orEmpty())) key(entry.id) {
@@ -256,6 +244,28 @@ internal fun CharacterEditor(initial: CharacterCard, packages: List<PromptPackag
             newlyExpandedEntries += entry.id
             extrasRevealKey++
         }) { Text("添加附加条目") }
+    }
+    }
+    entry<CharacterEditorRoute.BasicSettings> { route ->
+        SideEffect { backs[route] = ::pop }
+        CharacterBasicSettingsPage(card, library?.promptTags.orEmpty(), greetingReferences,
+            focusedEntryId = sourceFocus?.takeIf { it.resource == sourceResource }?.entryId,
+            onChange = { card = it }, onBack = ::pop)
+    }
+    })
+    bindingSheet?.let { selected ->
+        EditorModalSheet(if (selected == "packages") "关联提示词包" else "关联调用组",
+            subtitle = "角色卡 · ${card.name}", onDismiss = { bindingSheet = null }) {
+            if (selected == "packages") {
+                ResourceBindingList(packages.map { it.id to it.name.ifBlank { it.namespace } }, card.boundPackageIds) {
+                    card = card.copy(boundPackageIds = it)
+                }
+            } else {
+                ResourceBindingList(library?.groups.orEmpty().map { it.id to it.name.ifBlank { "未命名调用组" } }, card.boundGroupIds) {
+                    card = card.copy(boundGroupIds = it)
+                }
+            }
+        }
     }
     }
     if (renameCard) NamingDialog("角色卡名称", card.name, card.slug,
@@ -312,7 +322,6 @@ internal fun PackageEditor(initial: PromptPackage, library: Library, onSave: (Pr
     EditorPage("提示词包", onBack, { onSave(pack.copy(entries = pack.entries.mapIndexed { index, entry -> entry.copy(order = index) }), characterIds, mainCallIds) }, dirty = pack != baseline || characterIds != initialCharacters || mainCallIds != initialMainCalls, saving = saving) {
         EditorTitleRow("${pack.name} / ${pack.slug}", { renamePack = true })
         EditorSection("引用地址", "pack.${pack.namespace}.*") { LegacyAddressLine("pack.${pack.namespace}.*") }
-        Text("载入后通过宏引用内容。可以随角色卡、主调用加载，也可以在当前对话中单独加载。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         val boundNames = remember(library.characters, library.mainCalls, characterIds, mainCallIds) {
             library.characters.filter { it.id in characterIds }.map { "角色：${it.name}" } + library.mainCalls.filter { it.id in mainCallIds }.map { "主调用：${it.name}" }
         }

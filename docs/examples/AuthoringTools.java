@@ -60,7 +60,7 @@ public class AuthoringTools {
         return element;
     }
     static void catalog(Path destination) throws Exception {
-        String[] classes = {"CharacterCard","MainCall","PromptPackage","CallGroup","UserPersona","PromptTag","ModelProfile","ApiConnection","ConfigurationExtension","Workflow","WorkflowNode","PromptBlock","HistoryConfig","ReasoningParsingConfig","CardDefinition","RegexOutputCopy","PluginCode","AutomaticOptionsConfig","GlobalMemoryConfig","MemoryStageRules","HistoryPromptRead","CardResource","CardPlacement","CardSnapshot","AutomaticOptionSpec","AutomaticOptionsLayout","UserMacroDefinition","UserMacroValue","UserMacroValueKind"};
+        String[] classes = {"CharacterCard","MainCall","PromptPackage","CallGroup","UserPersona","PromptTag","ModelProfile","ApiConnection","ConfigurationExtension","Workflow","WorkflowNode","PromptBlock","HistoryConfig","ReasoningParsingConfig","CardDefinition","RegexOutputCopy","PluginCode","PluginHttpRequest","PluginCredentialUse","AutomaticOptionsConfig","IllustrationConfig","IllustrationImage","GlobalMemoryConfig","MemoryStageRules","HistoryPromptRead","CardResource","CardPlacement","CardSnapshot","AutomaticOptionSpec","AutomaticOptionsLayout","UserMacroDefinition","UserMacroValue","UserMacroValueKind"};
         Map<String,JsonElement> defaults = new LinkedHashMap<>();
         for(String simple:classes) {
             KSerializer s=serializer(simple); visit(s.getDescriptor());
@@ -70,9 +70,9 @@ public class AuthoringTools {
         List<JsonElement> actions = new ArrayList<>();
         for(ActionDescriptor d: ActionRegistry.Companion.defaults(null).descriptors()) actions.add(json.encodeToJsonElement(ActionDescriptor.Companion.serializer(), d));
         JsonObject root=obj(map("format",str("companion.authoring-reference.v1"),"purpose",str("文档附件，不是可导入资源或新应用协议"),
-            "app",str("velune 0.66-preview / code234; source revision78"),"resourceWire",JsonElementKt.JsonPrimitive(LibraryFormat.CURRENT_VERSION),
+            "app",str("velune 0.75-preview / code243; source revision93"),"resourceWire",JsonElementKt.JsonPrimitive(LibraryFormat.CURRENT_VERSION),
             "execution",JsonElementKt.JsonPrimitive(ExecutionSemantics.CURRENT),"configFormat",str("companion.config.v1"),"zipFormat",str("companion.bundle.v1"),
-            "limitations",str("Serializer descriptors expose field names, enum values, optionality and nullability, not full validation rules or JSON Schema. typedDefaults are constructor values, not always valid authoring examples; generated IDs are placeholders. Compatibility fields may remain serializable but are not recommended for new resources. Actions come from ActionRegistry.defaults(). See AI_IMPORT_GUIDE.txt and source validators."),"types",obj(types),"typedDefaults",obj(defaults),"actions",arr(actions)));
+            "limitations",str("Serializer descriptors expose field names, enum values, optionality and nullability, not full validation rules or JSON Schema. typedDefaults are constructor values, not always valid authoring examples; generated IDs are placeholders. Compatibility fields may remain serializable but are not recommended for new resources. Actions come from ActionRegistry.defaults(). See AI_IMPORT_GUIDE.txt and source validators."),"types",obj(types),"typedDefaults",obj(defaults),"actions",arr(actions),"pluginCapabilities",PluginCapabilities.INSTANCE.manifest()));
         if (destination.toAbsolutePath().getParent() != null) Files.createDirectories(destination.toAbsolutePath().getParent()); Files.writeString(destination,root.toString());
         System.out.println("Catalog: " + types.size() + " types, " + actions.size() + " actions");
     }
@@ -99,8 +99,3 @@ public class AuthoringTools {
         else validate(Arrays.copyOfRange(args,1,args.length));
     }
 }
-
-
-
-
-

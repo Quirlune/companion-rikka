@@ -479,7 +479,7 @@ private fun ImportProviderButton(
 private fun handleQRResult(
     result: QRResult,
     onAdd: (ProviderSetting) -> Unit,
-    toaster: com.dokar.sonner.ToasterState,
+    toaster: me.rerere.rikkahub.ui.context.UiToaster,
     context: android.content.Context,
     onAddConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)? = null,
 ) {
@@ -519,7 +519,7 @@ private fun handleQRResult(
 private fun handleImageQRCode(
     uri: Uri,
     onAdd: (ProviderSetting) -> Unit,
-    toaster: com.dokar.sonner.ToasterState,
+    toaster: me.rerere.rikkahub.ui.context.UiToaster,
     context: android.content.Context,
     onAddConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)? = null,
 ) {
@@ -548,7 +548,7 @@ private fun handleImageQRCode(
 
 private fun completeProviderImport(provider: ProviderSetting, onAdd: (ProviderSetting) -> Unit,
     onAddConfirmed: ((ProviderSetting, (Boolean) -> Unit) -> Unit)?,
-    toaster: com.dokar.sonner.ToasterState, context: android.content.Context) {
+    toaster: me.rerere.rikkahub.ui.context.UiToaster, context: android.content.Context) {
     val complete: (Boolean) -> Unit = { accepted -> if (accepted) toaster.show(
         context.getString(R.string.setting_provider_page_import_success), type = ToastType.Success) }
     if (onAddConfirmed != null) onAddConfirmed(provider, complete)

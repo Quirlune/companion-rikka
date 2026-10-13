@@ -1,0 +1,49 @@
+velune 当前系统与作者架构地图
+0.75-preview / code243 · 源码修订93 · 资源 wire37 · 执行 execution28 · SQLite1
+
+这是一份给应用内 Agent 和外部作者的当前结构地图，不是可导入配置，也不覆盖机器字段目录或实际导入校验。重点是资源从哪里来、何时参与聊天、结果存在哪里。作者不需要阅读历史修订才能理解当前边界。
+
+1. 一条工作流贯穿什么
+
+原生编辑器／配置导入／Agent 工作台草稿
+  → 唯一 Library 活资源库与配置预览、校验、应用
+  → 新聊天或当前聊天捕获的资源与 executionVersion
+  → 主 MainCall、绑定 CallGroup、已启用扩展的工作流
+  → 提示块编译与 BODY-only 历史 → 模型网关或原生行为／受限插件
+  → 输出格式校验、结果接受、回执、来源与分支
+  → 主 BODY、输出宏、状态、卡片、记忆和辅助显示
+
+应用内 core 负责资源、执行计划、宏、历史、接受回执、恢复和分支；Android 宿主负责 SQLite 保存、模型传输、权限、原生编辑器和展示。主聊天显示复用前端，但原 ChatService/Room 聊天存储不是第二个资源或会话权威。
+
+2. 资源、会话、来源
+
+- Library 是唯一当前资源库。CharacterCard 提供角色资料、开场和绑定；UserPersona 提供用户身份；PromptPackage 提供可引用词条；MainCall 定义主回复与 bodyAppearanceTemplate；CallGroup 提供可复用 workflows、stateDefaults、packages 与 cards；ConfigurationExtension 关联原生资源、全局启停，可带受限 JavaScript；ApiConnection 与 ModelProfile 分别管理连接和模型定义。内置记忆、自动选项和插图由各自专用配置管理。
+- Session 保存某个聊天的消息、已接受 state/results、宏历史、记忆、候选、来源和暂停恢复点。SavedChat 是独立收藏快照；不能以 ZIP 资源包伪造会话、回执或分支。聊天在开始或恢复时使用捕获的资源世界与执行版本；修改今天的 live 资源不追溯改写旧回复。全新扩展在旧冻结聊天中不一定可见，通常从新聊天验证。
+- 主回复的 BODY 才进入普通对话历史。附加节点、卡片、状态、记忆或插图不能悄悄混进 BODY。USER 修改是该用户消息的版本；AI 重新生成保留相应候选和来源，不把已接受效果扁平化。暂停可继续，也不锁死普通编辑；真正运行中仍有互斥。外部副作用不能因分支重建而盲目重放。
+- ID 是引用与更新身份，显示名、title 和 slug 各有用途。资源及 workflow/node/block/card/entry 要用稳定、互不冲突的 ID。重导入同 ID 可能更新既有资源，须审查预览差异。一个资源包的所有引用必须闭合，不靠“名字看起来相同”猜目标。
+
+3. 提示词、行为与结果
+
+- Workflow 是调用，WorkflowNode 是行为。主调用负责用户轮次的主模型响应；CallGroup 可按 turn.prepare、reply.completed、workflow 依赖或自定义事件运行附加流程。dependsOn 是同一 workflow 内节点依赖；afterWorkflowId 是跨 workflow 顺序。queued/priority 影响调度，不表示提示词上下文顺序。
+- 模型行为使用可见 PromptBlock 保存角色、位置、模板、条件、来源引用和合并规则。编译器把当前 input、角色／用户／package、state/results、选定历史与注入块组合成实际消息。普通原文默认字面；只有明确的模板才展开 {{...}}。结构化历史与 .as:text 历史的 API 消息语义不同，不能自行把文本前缀当 API role。不要暗加系统提示、历史或修复指令。
+- 模型生成参数属于每个模型行为，省略不等于明确 OFF/AUTO。输出本身可以通过 result.<outputKey> 引用；recordTrajectory 决定是否保留变化轨迹，execution28 的新模型行为也尊重它。macro.process、文本处理和 state 等行为通过既有接受路径发布，失败与过期来源不能发布假成功。高风险外部结果须核对状态与幂等性。
+- 有效输出经过验证、发布并产生回执。回执和捕获世界支持恢复、候选切换与历史解释；v2 宿主联网结果不可改造成纯文本重算配方。旧 execution 与兼容字段保留旧语义，不能因当前作者偏好批量迁移历史。
+
+4. 展示、摘要与辅助能力
+
+- 新扩展卡片定义于 CallGroup.cards，CardResource.sourceTemplate 从现有宏或字面数据读取，CardDefinition 用 MANUAL/XML 字段、elements、sections 和静态 CSS 展示。一个字段可被多个元素显示。卡片来源与被接受的楼层／候选关联；CHAT、SIDEBAR、INPUT、MENU 与 CARD/SIDE_PANEL/STRIP 是既有兼容枚举。重要且需主动打开的扩展前端可设支持 MENU 的 presentation 和 defaultRegion=MENU，三点选择后在当前页打开悬浮卡片层。普通状态和低重要性进度不占常驻横条或遮住漂浮半透明输入栏；生图进度横条移除不意味着自动进菜单。
+- MainCall.bodyAppearanceTemplate 只美化主助手正文。唯一 {{正文}} 被替换为经处理的 Markdown 内容；这不是项目宏。宿主生成的插图 wrapper 可在正文流中，不能用父容器的固定窄宽与 padding 无意压缩图片。卡片 CSS 与正文 HTML/CSS 是两套不同合同，具体规则见 appearance-guide。
+- 内置全局记忆对每个聊天保存独立摘要，按真实 BODY 楼层来源记录。小／大摘要必须通过各自配置的严格 XML 内容标签后才能发布。自动选项是基于最近完整 BODY 的独立辅助生成，按可见 XML 协议解析，结果临时显示并填入草稿，不写会话或自动发送。卡片 XML、摘要 XML、选项 XML 的解析合同各不相同。
+- 内置 BizyAir 插图以模型规划 XML 和正文段落锚点关联当前准确的 BODY 来源，完成图片保存在应用私有位置并按来源显示；不改写 BODY、历史或已接受世界。图片可排队并受并发上限控制；收费提交结果不确定时不能盲重发。它不是通用第三方 JavaScript 插件的图片附件 API。
+
+5. Agent、插件和权限
+
+- 应用内 Agent 在独立聊天和 UTF-8 文本工作区工作；推理与主聊天、卡片和辅助调用分离。它可用 knowledge.list/read/search 读取 APK 内的离线资料，也可用共享配置工作台读取资源、起草、预览。Agent 文件不是已安装资源；提交仍要走同一配置预览、当前活库验证和事务，忙时保留草稿。是否自动提交受用户设置约束。Agent 不能访问任意设备文件、源码、数据库、密钥或 shell。
+- ConfigurationExtension.code 的 JavaScript v1 是受限同步纯函数文本执行；v2 使用 async execute(context, host)，通过已实现的 host.invoke 请求 network.http、runtime.sleep、capabilities.describe。无任意 DOM、设备文件、数据库或宿主模型 API。网络必须声明精确 HTTPS origin／方法／凭据别名，并取得设备授权；声明和导入不授予权限。真实密钥在原生权限/凭据界面保存，不进 ZIP、提示词或 JS 源码。代码或权限变化后须重新授权。
+- 插件 v2 HTTP 仅访问许可的公共 HTTPS 目标，未实现自动重定向或自动重试。一个成功的 HTTP 响应不等于服务业务成功，需自行检查状态与内容。未知是否送达的 POST 不可盲目重发。第三方插件也没有任意消息级图标动作注册或自定义页面 API；重要前端使用现有 MENU 卡片，不凭空编造字段。
+
+6. 导入、知识和诊断入口
+
+- 推荐的单配置根是 companion.config.v1，含 format/label/resources/commands；ZIP 根必须有 manifest.json，格式 companion.bundle.v1，逐项声明主文件和被引用附件。Library 原生备份的 schemaVersion37 属另一用途；SQLite1 与 execution28 是另外两种版本。config/ZIP 不能混写根字段、运行记录或凭据。资源预览走真实解码、ConfigurationCommands.preview/apply 和 LibraryValidator；JSON 语法通过不是导入通过。
+- 应用内 Agent 先用 knowledge.list 获取固定 ID：agent-guide（工作步骤）、architecture-guide（本结构）、resource-guide（资源和 ZIP）、appearance-guide（美化）、plugin-api（JS 权限）、schema-reference（字段/枚举/行为目录）。knowledge.read 分段读，knowledge.search 用具体关键词定位；config 的 describe/schema/actions/pluginCapabilities 和当前资源结果是运行时权威，文档不代替当前实值。外部 AI 可用独立作者包的单 TXT 或分文件取得同样规范，仍须由实际应用预览验证成品。
+- 普通提示、错误与调用状态写有界本机日志；它不是完整模型请求/响应或凭据存档。可定位的错误看当前 issue 路径和日志，修复配置后重预览。UI 渲染、真实模型格式、网络服务与手机手感属于各自实际使用验收，不能从资源解析推断全部通过。

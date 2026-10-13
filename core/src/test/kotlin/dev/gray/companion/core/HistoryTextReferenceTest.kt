@@ -55,4 +55,14 @@ class HistoryTextReferenceTest {
         val structured = HistoryViews.project(library, session, main, HistorySelection(), executionVersion = 26)
         assertEquals(listOf(Role.SYSTEM), structured.messages.map { it.role })
     }
+    @Test fun customPrefixesRoundTripAndBlankKeepsOriginal() {
+        val prefixes = HistoryTextPrefixes(assistant = "Gray: ", user = "\n\"你\": ", system = "   ")
+        val selection = HistorySelection(readMode = HistoryReadMode.TEXT, textPrefixes = prefixes)
+        assertEquals(selection, HistoryViews.selection(HistoryReferences.expression(selection)))
+        assertNull(HistoryViews.selection(HistoryReferences.expression(selection), executionVersion = 25))
+        assertNull(selection.format)
+        val messages = listOf(ChatMessage(role = Role.ASSISTANT, text = "你好"),
+            ChatMessage(role = Role.USER, text = "嗯"), ChatMessage(role = Role.SYSTEM, text = "说明"))
+        assertEquals("Gray: 你好\n\n\"你\": 嗯\nSystem: 说明", HistoryReferences.plainText(messages, prefixes))
+    }
 }

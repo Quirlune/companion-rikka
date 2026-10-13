@@ -102,7 +102,7 @@ class ActionRegistry {
                 require(issue == null) { issue!!.message }
                 ActionOutcome(userMacroWrites = mapOf(definition.shortcut to definition))
             }
-            .register(ActionDescriptor("plugin.run", "插件代码", "执行已启用插件的纯文本代码；结果可供其他行为读取", listOf(
+            .register(ActionDescriptor("plugin.run", "插件代码", "执行已启用插件代码；版本 2 可调用已授权宿主能力，结果可供其他行为读取", listOf(
                 ActionFieldDescriptor("pluginId", "插件标识", required = true)
             ), pureReplay = PureReplayKind.PLUGIN_TEXT)) { context ->
                 PluginCodeActions.run(context, pluginExecutor ?: error("当前环境未提供插件代码执行器"))

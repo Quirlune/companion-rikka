@@ -43,7 +43,6 @@ object ConversationPaths {
         variants(snapshot(session), session.inactivePaths, turnId)
 
     fun selectUserVersion(session: Session, messageId: String, revisionId: String): MessageOperationResult {
-        if (session.pendingRun != null) return unavailable("请先结束当前生成或恢复")
         val current = snapshot(session)
         val active = user(current, messageId) ?: return unavailable("用户消息不存在")
         if (revision(active) == revisionId) return MessageOperationResult(session)
@@ -55,7 +54,6 @@ object ConversationPaths {
 
     /** Atomic edit/send boundary. No old answer or old turn record belongs to the new revision. */
     fun editUserAndSend(session: Session, messageId: String, text: String): MessageOperationResult {
-        if (session.pendingRun != null) return unavailable("请先结束当前生成或恢复")
         if (text.isBlank()) return unavailable("消息不能为空")
         val index = session.messages.indexOfFirst { it.id == messageId && it.role == Role.USER && !it.deleted }
         if (index < 0) return unavailable("用户消息不存在或已删除")
@@ -82,7 +80,6 @@ object ConversationPaths {
     }
 
     fun selectGenerationVariant(session: Session, turnId: String, variantId: String): MessageOperationResult {
-        if (session.pendingRun != null) return unavailable("请先结束当前生成或恢复")
         val current = snapshot(session)
         val record = session.turnRecords.firstOrNull { it.userMessageId == turnId }
             ?: return unavailable("这一轮没有运行状态检查点")
@@ -100,7 +97,6 @@ object ConversationPaths {
 
     /** Remove this prompt's candidate and the continuations owned by that candidate, in this chat. */
     fun deleteGenerationVariant(session: Session, turnId: String, variantId: String): MessageOperationResult {
-        if (session.pendingRun != null) return unavailable("请先结束当前生成或恢复")
         val current = snapshot(session)
         val hydrated = hydrate(session)
         val record = hydrated.turnRecords.firstOrNull { it.userMessageId == turnId }
@@ -136,7 +132,6 @@ object ConversationPaths {
 
     /** Historical regeneration stays in this chat and preserves its old continuation. */
     fun regenerationBase(session: Session, messageId: String): MessageOperationResult {
-        if (session.pendingRun != null) return unavailable("请先结束当前生成或恢复")
         val target = session.messages.firstOrNull { it.id == messageId && !it.deleted }
             ?: return unavailable("消息不存在或已删除")
         val userId = (if (target.role == Role.USER) target.id else target.turnId)

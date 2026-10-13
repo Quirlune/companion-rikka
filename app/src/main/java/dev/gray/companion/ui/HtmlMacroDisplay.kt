@@ -3,26 +3,25 @@ package dev.gray.companion.ui
 import android.graphics.Color as AndroidColor
 import android.content.Context
 import android.view.View
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.compose.foundation.layout.Arrangement
+import android.widget.FrameLayout
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -33,6 +32,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.gray.companion.core.BodyDisplaySnapshot
 import java.io.ByteArrayInputStream
+import java.io.File
+import java.io.FileInputStream
 import kotlin.math.roundToInt
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -41,7 +42,8 @@ internal fun FrozenHtmlBody(snapshot: BodyDisplaySnapshot, messageId: String) {
     val html = snapshot.html ?: return
     val foreground = frozenBodyColor(snapshot.style.foreground) ?: MaterialTheme.colorScheme.onSurface
     val background = frozenBodyColor(snapshot.style.background) ?: Color.Transparent
-    InertHtmlView(html, foreground, background, snapshot.style.fontSize, messageId)
+    val initialText = remember(html) { org.jsoup.Jsoup.parse(html).wholeText() }
+    InertHtmlView(html, foreground, background, snapshot.style.fontSize, messageId, initialBodyText = initialText)
 }
 
 @Composable
@@ -49,127 +51,264 @@ internal fun InertHtmlView(
     fragment: String, foreground: Color, background: Color, fontSize: Int, tileId: String,
     incremental: Boolean = false, incrementalShell: String? = null, incrementalTargetId: String = "companion-content",
     presentationKey: String? = null, presentationStreaming: Boolean = false,
+    localImages: Map<String, File> = emptyMap(), localImageRoot: File? = null,
+    initialBodyText: String? = null,
 ) {
-    val fontScale = LocalDensity.current.fontScale
-    var renderedHeight by remember(tileId) { mutableStateOf(120.dp) }
-    // AndroidView can survive a candidate/tile change; its factory callback must write
-    // the current tile's height state instead of the state captured on first creation.
-    val updateHeight by rememberUpdatedState<(Dp) -> Unit>({ renderedHeight = it })
+    val density = LocalDensity.current
+    val memory = LocalHtmlRenderMemory.current ?: remember { HtmlRenderMemory() }
     val shellFragment = if (incremental) incrementalShell.orEmpty() else fragment
+    // Image authorization stays in the interceptor. No local paths enter the document.
     val document = remember(shellFragment, foreground, background, fontSize, incremental) {
         """<!doctype html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-$HEIGHT_SCRIPT_HASH'; style-src 'unsafe-inline'; img-src 'none'; font-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-$HEIGHT_SCRIPT_HASH'; style-src 'unsafe-inline'; img-src https://companion.invalid; font-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'">
 <style>html,body{margin:0;padding:0;background:${background.cssColor()};color:${foreground.cssColor()};font-family:sans-serif;font-size:${fontSize.coerceIn(8, 72)}px;overflow-wrap:anywhere}${if (incremental) "html,body{max-width:100%;overflow-x:hidden;overflow-anchor:none}#companion-content{display:flow-root;max-width:100%;min-width:0}" else ""}</style>
 </head><body><div id="companion-content">$shellFragment</div><script>$HEIGHT_SCRIPT</script></body></html>"""
     }
-    AndroidView(
-        factory = { context ->
-            ContentSizedWebView(context).apply {
-                setBackgroundColor(AndroidColor.TRANSPARENT)
-                // CSP permits only our hashed size observer; author scripts and network remain blocked.
-                settings.javaScriptEnabled = true
-                settings.javaScriptCanOpenWindowsAutomatically = false
-                settings.domStorageEnabled = false
-                settings.allowFileAccess = false
-                settings.allowContentAccess = false
-                settings.allowFileAccessFromFileURLs = false
-                settings.allowUniversalAccessFromFileURLs = false
-                settings.blockNetworkLoads = true
-                settings.loadsImagesAutomatically = false
-                settings.cacheMode = WebSettings.LOAD_NO_CACHE
-                settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                settings.setSupportMultipleWindows(false)
-                settings.textZoom = (fontScale * 100).roundToInt().coerceIn(80, 300)
-                webChromeClient = object : WebChromeClient() {
-                    override fun onReceivedTitle(view: WebView, title: String?) {
-                        val cssHeight = title?.removePrefix("companion-height:")?.toFloatOrNull() ?: return
-                        if (!cssHeight.isFinite() || cssHeight < 0) return
-                        val density = view.resources.displayMetrics.density
-                        if (density > 0) updateHeight((cssHeight * view.scale / density).dp.coerceIn(80.dp, 16000.dp))
+    val documentDigest = remember(document, incrementalTargetId) {
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest((incrementalTargetId + "\u0000" + document).toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+    }
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val identity = remember(tileId, documentDigest, constraints.maxWidth, density.density, density.fontScale) {
+            HtmlLayoutIdentity(tileId, documentDigest, constraints.maxWidth, density.density, density.fontScale)
+        }
+        // Cached geometry survives lazy disposal. A body-only hint reduces cold long-row
+        // collapse; arbitrary author CSS still requires Chromium's actual measurement.
+        var renderedHeight by remember(memory, identity) {
+            mutableStateOf((memory.height(identity) ?: initialBodyText?.let {
+                HtmlRenderMemory.estimateBodyHeight(it, identity.widthPx, density.density, density.fontScale, fontSize)
+            } ?: 120f).dp)
+        }
+        var rendererFailed by remember(identity) { mutableStateOf(false) }
+        if (rendererFailed) {
+            Column(Modifier.fillMaxWidth().height(renderedHeight.coerceAtLeast(120.dp))) {
+                Text("此段内容的显示进程已停止。", color = MaterialTheme.colorScheme.error)
+                TextButton(onClick = { rendererFailed = false }) { Text("重新加载") }
+            }
+        } else {
+            AndroidView(
+                factory = { context -> HtmlViewHost(context) },
+                modifier = Modifier.fillMaxWidth().height(renderedHeight),
+                update = { host ->
+                    host.onFailure = { rendererFailed = true }
+                    if (host.released) {
+                        rendererFailed = true
+                    } else {
+                        val view = host.webView
+                        val rebound = view.onContentHeight == null
+                        view.onContentHeight = {
+                            memory.record(identity, it.value)
+                            renderedHeight = it
+                        }
+                        view.localImages = localImages
+                        view.localImageRoot = localImageRoot
+                        view.settings.textZoom = (density.fontScale * 100).roundToInt().coerceIn(80, 300)
+                        view.settings.loadsImagesAutomatically = localImages.isNotEmpty()
+                        view.lockScrollToOrigin = renderedHeight < 16000.dp
+                        view.isVerticalScrollBarEnabled = !view.lockScrollToOrigin
+                        view.isHorizontalScrollBarEnabled = false
+                        view.overScrollMode = if (view.lockScrollToOrigin) View.OVER_SCROLL_NEVER else view.defaultOverScrollMode
+                        var state = view.documentState
+                        if (state == null || state.identity != identity) {
+                            state = HtmlDocumentState(identity, fragment, incremental,
+                                incrementalTargetId, presentationKey, presentationStreaming)
+                            // Invalidate the old page before any new navigation can deliver callbacks.
+                            view.documentState = state
+                            view.stopLoading()
+                            view.scrollTo(0, 0)
+                            view.loadDataWithBaseURL(state.url,
+                                document.replaceFirst("<html>", "<html data-companion-navigation=\"${state.token}\">"),
+                                "text/html", "UTF-8", null)
+                        } else {
+                            val samePresentation = state.presentationKey == presentationKey
+                            val changed = state.fragment != fragment ||
+                                state.presentationStreaming != presentationStreaming || !samePresentation
+                            state.presentationKey = presentationKey
+                            state.presentationStreaming = presentationStreaming
+                            state.fragment = fragment
+                            if (changed) state.revision++
+                            if (state.ready) {
+                                view.applyLatestFragment(state, animateGrowthAllowed = samePresentation)
+                                if (rebound) {
+                                    state.lastReport?.let { view.acceptHeight(it) }
+                                    view.requestHeight()
+                                }
+                            }
+                        }
                     }
-                }
-                webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(view: WebView, url: String?) {
-                        val state = view.tag as? IncrementalHtmlState ?: return
-                        if (url != state.url) return
-                        state.ready = true
-                        view.applyLatestFragment(state)
+                },
+                // A deactivated lazy view can return to the same row. Preserve its document,
+                // pending load and immutable local image permissions, but never its row callback.
+                onReset = { host ->
+                    host.onFailure = null
+                    host.webView.onContentHeight = null
+                    if (!host.released) {
+                        host.webView.clearFocus()
+                        host.webView.scrollTo(0, 0)
                     }
-                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = true
-                    override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
-                        if (request.isForMainFrame) null
-                        else WebResourceResponse("text/plain", "UTF-8", ByteArrayInputStream(ByteArray(0)))
+                },
+                onRelease = { host -> host.release() },
+            )
+        }
+    }
+}
+
+/** Owns removal before destroy, including renderer death while the row is deactivated. */
+private class HtmlViewHost(context: Context) : FrameLayout(context) {
+    var onFailure: (() -> Unit)? = null
+    var released = false
+        private set
+    val webView = ContentSizedWebView(context)
+
+    init {
+        addView(webView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        webView.apply {
+            setBackgroundColor(AndroidColor.TRANSPARENT)
+            settings.javaScriptEnabled = true
+            settings.javaScriptCanOpenWindowsAutomatically = false
+            settings.domStorageEnabled = false
+            settings.allowFileAccess = false
+            settings.allowContentAccess = false
+            settings.allowFileAccessFromFileURLs = false
+            settings.allowUniversalAccessFromFileURLs = false
+            settings.blockNetworkLoads = true
+            settings.cacheMode = WebSettings.LOAD_NO_CACHE
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            settings.setSupportMultipleWindows(false)
+            webChromeClient = object : WebChromeClient() {
+                override fun onReceivedTitle(view: WebView, title: String?) {
+                    HtmlHeightReport.parse(title)?.let { webView.acceptHeight(it) }
                 }
             }
-        },
-        modifier = Modifier.fillMaxWidth().height(renderedHeight),
-        update = { view ->
-            view.settings.textZoom = (fontScale * 100).roundToInt().coerceIn(80, 300)
-            // DOM growth reaches WebView before the measured height reaches Compose. The
-            // temporary overflow must not become a second scroll surface inside the chat.
-            // Keep the existing escape hatch for documents above the host's height limit.
-            view.lockScrollToOrigin = incremental && renderedHeight < 16000.dp
-            view.isVerticalScrollBarEnabled = !view.lockScrollToOrigin && view.defaultVerticalScrollBarEnabled
-            view.isHorizontalScrollBarEnabled = !incremental && view.defaultHorizontalScrollBarEnabled
-            view.overScrollMode = if (incremental) View.OVER_SCROLL_NEVER else view.defaultOverScrollMode
-            if (incremental) {
-                var state = view.tag as? IncrementalHtmlState
-                if (state == null || state.document != document || state.targetId != incrementalTargetId) {
-                    state = IncrementalHtmlState(document, fragment, incrementalTargetId, presentationKey, presentationStreaming)
-                    view.tag = state
-                    view.loadDataWithBaseURL(state.url, document, "text/html", "UTF-8", null)
-                } else {
-                    // A streaming row becomes a persisted/history row with a new UI
-                    // identity. Keep the same document and measured height, but treat
-                    // that identity transition as a fade reset rather than a reload.
-                    val samePresentation = state.presentationKey == presentationKey
-                    state.presentationKey = presentationKey
-                    state.fragment = fragment
-                    state.presentationStreaming = presentationStreaming
-                    if (state.ready) view.applyLatestFragment(state, animateGrowthAllowed = samePresentation)
+            webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView, url: String?) {
+                    if (released) return
+                    val state = webView.documentState ?: return
+                    if (url != state.url) return
+                    state.ready = true
+                    webView.applyLatestFragment(state)
                 }
-            } else if (view.tag != document) {
-                view.tag = document
-                view.loadDataWithBaseURL("https://companion.invalid/html-tile/", document, "text/html", "UTF-8", null)
+
+                override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                    val notify = onFailure
+                    runCatching {
+                        me.rerere.rikkahub.utils.CrashHandler.recordWebViewExit(
+                            context, detail.didCrash(), detail.rendererPriorityAtExit())
+                    }
+                    // This dead instance can never be reused. Every affected WebView owns
+                    // this handler; returning true prevents the default app termination.
+                    release(rendererGone = true)
+                    notify?.invoke()
+                    return true
+                }
+
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = true
+                override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                    if (request.isForMainFrame) return null
+                    val file = webView.localImages[request.url.toString()]
+                    val root = webView.localImageRoot
+                    val safe = runCatching {
+                        val canonicalRoot = root?.canonicalFile ?: return@runCatching null
+                        val canonicalFile = file?.canonicalFile ?: return@runCatching null
+                        val prefix = canonicalRoot.path + File.separator
+                        canonicalFile.takeIf { canonicalRoot.isDirectory && it.isFile && it.path.startsWith(prefix) }
+                    }.getOrNull()
+                    if (safe != null) {
+                        runCatching { FileInputStream(safe) }.getOrNull()?.let { stream ->
+                            return WebResourceResponse(illustrationMimeType(safe), null, stream)
+                        }
+                    }
+                    return WebResourceResponse("text/plain", "UTF-8", ByteArrayInputStream(ByteArray(0)))
+                }
             }
-        },
-        onReset = null,
-        onRelease = { view ->
-            view.stopLoading()
-            view.loadUrl("about:blank")
-            view.removeAllViews()
-            view.destroy()
-        },
-    )
+        }
+    }
+
+    fun release(rendererGone: Boolean = false) {
+        if (released) return
+        released = true
+        onFailure = null
+        webView.disposed = true
+        webView.onContentHeight = null
+        webView.documentState = null
+        webView.localImages = emptyMap()
+        webView.localImageRoot = null
+        removeView(webView)
+        if (!rendererGone) webView.stopLoading()
+        webView.destroy()
+    }
 }
 
 private class ContentSizedWebView(context: Context) : WebView(context) {
-    val defaultVerticalScrollBarEnabled = isVerticalScrollBarEnabled
-    val defaultHorizontalScrollBarEnabled = isHorizontalScrollBarEnabled
+    var onContentHeight: ((Dp) -> Unit)? = null
+    var documentState: HtmlDocumentState? = null
+    var disposed = false
+    @Volatile var localImages: Map<String, File> = emptyMap()
+    @Volatile var localImageRoot: File? = null
     val defaultOverScrollMode = overScrollMode
     var lockScrollToOrigin = false
         set(value) {
             field = value
-            if (value && (scrollX != 0 || scrollY != 0)) super.scrollTo(0, 0)
+            if (!disposed && value && (scrollX != 0 || scrollY != 0)) super.scrollTo(0, 0)
         }
 
+    fun acceptHeight(report: HtmlHeightReport) {
+        if (disposed) return
+        val state = documentState ?: return
+        val pageScale = scale
+        if (!state.ready || pageScale <= 0 || !pageScale.isFinite() ||
+            width != state.identity.widthPx ||
+            !report.matches(state.token, state.revision, width / pageScale)) return
+        state.lastReport = report
+        onContentHeight?.invoke(
+            (report.heightCss * pageScale / state.identity.density).dp.coerceIn(80.dp, 16000.dp))
+    }
+
+    fun requestHeight() {
+        if (disposed) return
+        val state = documentState?.takeIf { it.ready } ?: return
+        evaluateJavascript(
+            "(function(){if(document.documentElement.dataset.companionNavigation==='${state.token}'" +
+                "&&window.__companionReportHeight)window.__companionReportHeight();})();", null)
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        if (w != oldw) requestHeight()
+    }
+
     override fun scrollTo(x: Int, y: Int) {
+        if (disposed) return
         if (lockScrollToOrigin) super.scrollTo(0, 0) else super.scrollTo(x, y)
     }
 
     override fun onOverScrolled(scrollX: Int, scrollY: Int, clampedX: Boolean, clampedY: Boolean) {
+        if (disposed) return
         if (lockScrollToOrigin) super.onOverScrolled(0, 0, clampedX, clampedY)
         else super.onOverScrolled(scrollX, scrollY, clampedX, clampedY)
     }
 
     override fun onScrollChanged(l: Int, t: Int, oldl: Int, oldt: Int) {
         super.onScrollChanged(l, t, oldl, oldt)
-        if (lockScrollToOrigin && (l != 0 || t != 0)) super.scrollTo(0, 0)
+        if (!disposed && lockScrollToOrigin && (l != 0 || t != 0)) super.scrollTo(0, 0)
     }
 }
 
-// Measure a content wrapper, not document scrollHeight, whose minimum is the previous viewport height.
-private const val HEIGHT_SCRIPT = "new ResizeObserver(function(){document.title='companion-height:'+Math.ceil(document.getElementById('companion-content').getBoundingClientRect().height)}).observe(document.getElementById('companion-content'));"
+// Measure the wrapper, not scrollHeight (which cannot shrink below the previous viewport).
+// No measurement is published until native applies the intended DOM revision.
+private const val HEIGHT_SCRIPT = """(function(){
+var root=document.getElementById('companion-content');if(!root)return;
+window.__companionHeightRevision=0;
+var reportSerial=0;
+window.__companionReportHeight=function(){
+ var revision=window.__companionHeightRevision;if(!revision)return;
+ var token=document.documentElement.dataset.companionNavigation;if(!token)return;
+ document.title='companion-height:'+token+':'+revision+':'+window.innerWidth+':'+Math.ceil(root.getBoundingClientRect().height)+':'+(++reportSerial);
+};
+new ResizeObserver(window.__companionReportHeight).observe(root);
+window.addEventListener('resize',window.__companionReportHeight);
+})();"""
 private val HEIGHT_SCRIPT_HASH = android.util.Base64.encodeToString(
     java.security.MessageDigest.getInstance("SHA-256").digest(HEIGHT_SCRIPT.toByteArray(Charsets.UTF_8)),
     android.util.Base64.NO_WRAP)
@@ -181,33 +320,51 @@ private fun Color.cssColor(): String {
 
 private fun frozenBodyColor(value: String): Color? = if (Regex("#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?").matches(value)) runCatching { Color(AndroidColor.parseColor(value)) }.getOrNull() else null
 
-// The latest fragment remains queued while the initial document loads. Navigation tokens
-// prevent a stale page-finished callback from applying content to a replacement shell.
-private class IncrementalHtmlState(
-    val document: String,
+private fun illustrationMimeType(file: File): String = when (file.extension.lowercase()) {
+    "png" -> "image/png"
+    "webp" -> "image/webp"
+    "jpg", "jpeg" -> "image/jpeg"
+    else -> "application/octet-stream"
+}
+
+private class HtmlDocumentState(
+    val identity: HtmlLayoutIdentity,
     var fragment: String,
+    val incremental: Boolean,
     val targetId: String,
     var presentationKey: String?,
     var presentationStreaming: Boolean,
 ) {
-    val url = "https://companion.invalid/styled-body/${java.util.UUID.randomUUID()}/"
+    val token = java.util.UUID.randomUUID().toString()
+    val url = "https://companion.invalid/html-tile/$token/"
     var ready = false
+    var revision = 1L
+    var appliedRevision = 0L
     var applied: String? = null
     var appliedStreaming = false
+    var lastReport: HtmlHeightReport? = null
 }
 
-private fun WebView.applyLatestFragment(state: IncrementalHtmlState, animateGrowthAllowed: Boolean = false) {
-    if (animateGrowthAllowed && state.applied == state.fragment &&
-        state.appliedStreaming == state.presentationStreaming
-    ) return
-    val fragment = state.fragment
+private fun ContentSizedWebView.applyLatestFragment(state: HtmlDocumentState, animateGrowthAllowed: Boolean = false) {
+    if (disposed || documentState !== state || state.appliedRevision == state.revision) return
     val animateGrowth = animateGrowthAllowed && state.applied != null &&
         state.appliedStreaming && state.presentationStreaming
-    evaluateJavascript(BodyAppearanceScripts.replaceFragment(fragment, state.targetId, animateGrowth), null)
-    state.applied = fragment
+    val replace = if (state.incremental)
+        BodyAppearanceScripts.replaceFragment(state.fragment, state.targetId, animateGrowth) else ""
+    val quotedTarget = JsonPrimitive(if (state.incremental) state.targetId else "companion-content").toString()
+    // The guard is executed in Chromium, so a queued script from an earlier navigation
+    // cannot mutate its replacement document. Version publication follows the DOM write.
+    evaluateJavascript("""(function(){
+if(document.documentElement.dataset.companionNavigation!=='${state.token}')return;
+if(!document.getElementById($quotedTarget)||!window.__companionReportHeight)return;
+$replace
+window.__companionHeightRevision=${state.revision};
+window.__companionReportHeight();
+})();""", null)
+    state.applied = state.fragment
     state.appliedStreaming = state.presentationStreaming
+    state.appliedRevision = state.revision
 }
-
 internal object BodyAppearanceScripts {
     fun replaceFragment(fragment: String, targetId: String = "companion-content", animateGrowth: Boolean = false): String {
         // JSON string encoding prevents content from becoming executable JavaScript.

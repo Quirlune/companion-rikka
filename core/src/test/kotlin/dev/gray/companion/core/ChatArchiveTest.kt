@@ -5,6 +5,31 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ChatArchiveTest {
+    @Test fun oneClickCollectionOwnsSnapshotAfterSourceDeletion() {
+        val base = LibraryDefaults.create()
+        val source = base.sessions.single().copy(messages = listOf(ChatMessage(id = "body", text = "saved body")),
+            state = mapOf("place" to "saved place"))
+        val image = IllustrationImage(source.id, "body", "revision", "p1", "immutable-image.png")
+        val saved = ChatArchive.saveCurrentCopy(base.copy(sessions = listOf(source),
+            illustrationImages = listOf(image)), source.id)
+        val archive = saved.savedChats.single()
+        assertNotEquals(source.id, archive.snapshot.id)
+        assertEquals(source, saved.sessions.single())
+        assertEquals(source.id, saved.selectedSessionId)
+        assertEquals("收藏", saved.chatFolders.single { it.id == archive.folderId }.name)
+        val withoutSource = saved.copy(sessions = emptyList(), selectedSessionId = null,
+            illustrationImages = saved.illustrationImages.filterNot { it.sessionId == source.id })
+        val restored = ChatArchive.restore(withoutSource, archive.id)
+        val editable = restored.sessions.single()
+        assertNotEquals(archive.snapshot.id, editable.id)
+        assertEquals(source.messages, editable.messages)
+        assertEquals(source.state, editable.state)
+        assertEquals(image.copy(sessionId = editable.id), restored.illustrationImages.single { it.sessionId == editable.id })
+        val changed = restored.copy(sessions = listOf(editable.copy(messages = emptyList(), state = emptyMap())))
+        assertEquals(archive, changed.savedChats.single())
+        assertEquals(source.messages, changed.savedChats.single().snapshot.messages)
+    }
+
     @Test fun restoredBreakpointKeepsAcceptedIdentityAndCanContinue() = runBlocking {
         val before = Session(id = "source", characterId = "character", mainCallId = "main",
             messages = listOf(ChatMessage(id = "turn", text = "hello")))
@@ -39,7 +64,8 @@ class ChatArchiveTest {
         val continued = MessageOperations.continuePartialTurn(chat, resumed).session!!
         assertEquals(chat.id, continued.id)
         assertEquals(first.replies.single().id, continued.messages.first { it.nodeId == "kept" }.id)
-        assertEquals(paused, restored.savedChats.single().snapshot)
+        assertEquals(saved.savedChats.single().snapshot, restored.savedChats.single().snapshot)
+        assertNotEquals(paused.id, saved.savedChats.single().snapshot.id)
 
         val candidateId = "historical-candidate"
         val historical = originalJournal.copy(regenerating = true, sessionId = candidateId,
@@ -57,7 +83,8 @@ class ChatArchiveTest {
         assertTrue(historicalJournal.environments.all { it.session.id == historicalJournal.sessionId })
         assertEquals(historical.accepted, historicalJournal.accepted)
         assertEquals(historical.id, historicalJournal.id)
-        assertEquals(historicalSource, historicalSaved.savedChats.single().snapshot)
+        assertEquals(historicalSource.messages, historicalSaved.savedChats.single().snapshot.messages)
+        assertNotEquals(historicalSource.id, historicalSaved.savedChats.single().snapshot.id)
     }
 
     @Test fun sourceChangesNeverAlterSnapshotAndRestoringAlwaysCreatesIndependentSession() {

@@ -16,6 +16,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CompanionChatProjectionTest {
+    @Test fun illustrationsOnlyProjectTheExactActiveBodyAndEnabledPolicy() {
+        val reply = ChatMessage(id = "picture-body", role = Role.ASSISTANT, text = "One.\n\nTwo.")
+        val chat = Session(id = "image-chat", messages = listOf(reply))
+        val image = dev.gray.companion.core.IllustrationImage(chat.id, reply.id,
+            dev.gray.companion.core.IllustrationCore.sourceKey(reply), "p1", "unused.png")
+        val projected = projectCompanionHistory(chat, listOf(image), true)
+        assertEquals(listOf(image), projected.inlineIllustrations.values.flatten())
+        assertEquals(reply.text, projected.nodes.single().currentMessage.toText())
+        assertTrue(projectCompanionHistory(chat, listOf(image), false).inlineIllustrations.isEmpty())
+        val changed = chat.copy(messages = listOf(reply.copy(text = "Changed.", activeTextRevisionId = "changed")))
+        assertTrue(projectCompanionHistory(changed, listOf(image), true).inlineIllustrations.isEmpty())
+    }
+
     private val user = ChatMessage(id = "user", role = Role.USER, text = "prompt", createdAt = 1)
     private val oldReply = ChatMessage(id = "old", role = Role.ASSISTANT, text = "old answer", turnId = user.id, createdAt = 2)
     private val freshReply = oldReply.copy(id = "fresh", text = "journal answer", createdAt = 3)

@@ -92,6 +92,7 @@ internal fun PromptTemplateField(
     minLines: Int = 3,
     transformMacro: (String) -> String = { it },
     owner: ExtensionFieldRef? = null,
+    maxLines: Int = Int.MAX_VALUE,
 ) {
     val navigation = LocalSourceNavigation.current
     val previewMacro = rememberPromptMacroPreview()
@@ -264,6 +265,7 @@ internal fun PromptTemplateField(
                 }
             },
             minLines = minLines,
+            maxLines = maxLines,
             shape = MaterialTheme.shapes.large,
         )
         if (popupOpen && fieldBounds != Rect.Zero) {
@@ -404,7 +406,7 @@ internal fun PromptTemplateField(
         val issues = plan?.issues.orEmpty()
         AlertDialog(onDismissRequest = { separateTarget = null }, title = { Text("仅这一处独立使用") }, text = {
             Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("复制所选词条，并且只替换这一处引用。其他引用仍读取原词条。")
+                Text("只替换当前引用；其他引用保留原词条。")
                 if (source == null) Text("当前引用没有唯一的静态词条来源；历史、动态结果及多来源引用不能在此独立。", color = MaterialTheme.colorScheme.error)
                 issues.forEach { Text(it.message, color = MaterialTheme.colorScheme.error) }
                 plan?.changes.orEmpty().forEach { Text(it, style = MaterialTheme.typography.bodySmall) }

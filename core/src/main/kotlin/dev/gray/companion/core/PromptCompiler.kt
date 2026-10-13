@@ -212,7 +212,7 @@ internal class TemplateRenderer(
                 issues += Issue(path, "此恢复版本不支持 History 原说话人筛选")
                 return ""
             }
-            if (executionVersion < 26 && compiled.fields.any { it.name == "as" }) {
+            if (executionVersion < 26 && compiled.fields.any { it.name in setOf("as", "prefixes") }) {
                 issues += Issue(path, "此恢复版本不支持 History 文本读取方式")
                 return ""
             }
@@ -375,7 +375,7 @@ internal class TemplateRenderer(
             issues += projection.issues.map { it.copy(path = path) }
             recordHistory(projection.sourceIds)
             return if (executionVersion >= 26 && selection.readMode == HistoryReadMode.TEXT)
-            HistoryReferences.plainText(projection.messages) else projection.messages.joinToString("\n") { it.text }
+            HistoryReferences.plainText(projection.messages, selection.textPrefixes) else projection.messages.joinToString("\n") { it.text }
         }
         val main = macroView.library.mainCalls.firstOrNull { it.id == currentSession.mainCallId } ?: return ""
         val projection = if (renderingHistory) HistoryViews.project(macroView.library, currentSession, main, selection,
@@ -387,7 +387,7 @@ internal class TemplateRenderer(
         }
         issues += projection.issues.map { it.copy(path = path) }
         return if (executionVersion >= 26 && selection.readMode == HistoryReadMode.TEXT)
-            HistoryReferences.plainText(projection.messages) else projection.messages.joinToString("\n") { it.text }
+            HistoryReferences.plainText(projection.messages, selection.textPrefixes) else projection.messages.joinToString("\n") { it.text }
     }
 
     private fun unversioned(address: String): String? = when {

@@ -252,7 +252,7 @@ private suspend fun importAssistantFromUri(
     context: Context,
     uri: Uri,
     onImport: (Assistant) -> Unit,
-    toaster: ToasterState,
+    toaster: me.rerere.rikkahub.ui.context.UiToaster,
     filesManager: FilesManager,
 ) {
     try {

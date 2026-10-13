@@ -8,6 +8,7 @@ import dev.gray.companion.core.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.builtins.ListSerializer
 
 /** Resource records stay indexed by type and stable ID; sessions are independent records. */
 class SqliteLibraryRepository(context: Context) : LibraryRepository {
@@ -67,6 +68,8 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
             user = meta["user"]?.let { json.decodeFromString(UserIdentity.serializer(), it) } ?: UserIdentity(),
             titleConfig = meta["title_config"]?.let { json.decodeFromString(ChatTitleConfig.serializer(), it) } ?: ChatTitleConfig(),
             automaticOptions = meta["automatic_options"]?.let { json.decodeFromString(AutomaticOptionsConfig.serializer(), it) } ?: AutomaticOptionsConfig(),
+            illustration = meta["illustration"]?.let { json.decodeFromString(IllustrationConfig.serializer(), it) } ?: IllustrationConfig(),
+            illustrationImages = meta["illustration_images"]?.let { json.decodeFromString(ListSerializer(IllustrationImage.serializer()), it) } ?: emptyList(),
             memoryConfig = meta["memory_config"]?.let { json.decodeFromString(GlobalMemoryConfig.serializer(), it) }
         )
         val library = LibraryFormat.upgrade(decoded)
@@ -193,6 +196,8 @@ class SqliteLibraryRepository(context: Context) : LibraryRepository {
             putMeta(db, "user", json.encodeToString(UserIdentity.serializer(), library.user))
             putMeta(db, "title_config", json.encodeToString(ChatTitleConfig.serializer(), library.titleConfig))
             putMeta(db, "automatic_options", json.encodeToString(AutomaticOptionsConfig.serializer(), library.automaticOptions))
+            putMeta(db, "illustration", json.encodeToString(IllustrationConfig.serializer(), library.illustration))
+            putMeta(db, "illustration_images", json.encodeToString(ListSerializer(IllustrationImage.serializer()), library.illustrationImages))
             putMeta(db, "memory_config", library.memoryConfig?.let { json.encodeToString(GlobalMemoryConfig.serializer(), it) })
             putMeta(db, "reasoning_parsing", json.encodeToString(ReasoningParsingConfig.serializer(), library.reasoningParsing))
             db.setTransactionSuccessful()

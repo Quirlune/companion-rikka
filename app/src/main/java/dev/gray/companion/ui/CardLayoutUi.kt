@@ -10,6 +10,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -70,14 +71,19 @@ internal fun CardRegionDisplay(library: Library, session: Session, region: CardR
 @Composable
 private fun CardSnapshotPanel(resolved: ResolvedCard, collapsed: Boolean, forceCompact: Boolean) {
     val snapshot = resolved.snapshot
-    Surface(Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerLow) {
+    val markup = remember(snapshot, collapsed, resolved.error, forceCompact) {
+        snapshot?.takeUnless { collapsed || resolved.error != null }
+            ?.let { CardMarkup.render(it, compact = forceCompact) }
+    }
+    Surface(Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium, color = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onSurface) {
         Column(Modifier.fillMaxWidth().padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             when {
                 collapsed -> Text(snapshot?.title ?: resolved.card.title, style = MaterialTheme.typography.titleSmall)
                 resolved.error != null -> Text(resolved.error.orEmpty(), color = MaterialTheme.colorScheme.error)
                 snapshot == null -> Text("等待首次生成", style = MaterialTheme.typography.bodySmall)
-                else -> InertHtmlView(CardMarkup.render(snapshot, compact = forceCompact), MaterialTheme.colorScheme.onSurface,
-                    MaterialTheme.colorScheme.surfaceContainerLow, if (forceCompact) 13 else 14, snapshot.nodeId)
+                else -> InertHtmlView(markup.orEmpty(), MaterialTheme.colorScheme.onSurface,
+                    Color.Transparent, if (forceCompact) 13 else 14, snapshot.nodeId)
             }
         }
     }

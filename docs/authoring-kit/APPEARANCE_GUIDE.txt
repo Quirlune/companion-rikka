@@ -1,0 +1,66 @@
+velune 卡片与正文外观作者指南
+0.75-preview / code243 · 源码修订93 · wire37 / execution28
+
+本页讲两种不同的美化入口：CallGroup 卡片的结构化字段与静态 CSS，以及 MainCall 的助手正文 HTML/<style> 模板。它们不共用字段、占位符或校验器；先选对象再写样式。系统架构看 architecture-guide，资源 JSON 外壳和导入流程看 resource-guide，实际类型字段与枚举看 schema-reference。
+
+1. 卡片：数据、结构、样式分开
+
+在 CallGroup.cards 中定义 CardResource，sourceTemplate 指向字面文本或现有宏，definition 为 CardDefinition。XML 模式必须写 dataMode="XML"、xmlRoot、完整 xmlSample；fields 的 key/xmlPath 与样例实际叶路径相符，elements 通过 fieldKey 引用它们，sections 可折叠分组。同一字段可有多个显示元素。导入器不会按样例替作者补 fields/elements；卡片 XML 解析与记忆摘要、自动选项的 XML 合同不同。
+
+卡片由宿主生成结构，字段值做 HTML 转义，CSS 只改外观，不能把字段内容当 HTML/JS 或在 CSS 中做 {{宏}} 插值。常用生成结构选择器：.card、.card-title、.card-element、.field-title、.field-value、.field-list、.field-progress、.field-more、.card-section、.card-section-title、.card-section-content。#实际element.id 与 #实际section.id 可用于定点样式，例如：
+
+  .card { box-sizing:border-box; padding:16px; border-radius:14px; }
+  #mood .field-value { font-size:20px; }
+  #details .card-section-title { font-weight:600; }
+
+卡片 CSS 最长 65536 字符；不允许标签、反斜杠转义、url()/image-set()、@import、@font-face、expression()、外部地址或其它加载资源的构造。不是网页脚本运行环境。CSS 中可用的 selector 应指向真正生成的类或 ID，元素 ID 以配置中实际值为准。不要凭中文标题推断 ID。
+
+卡片 presentation=CARD 可放 CHAT/SIDEBAR/INPUT/MENU，SIDE_PANEL 可放 SIDEBAR/MENU，STRIP 可放 CHAT/INPUT/MENU。这里的 INPUT/STRIP 是兼容枚举，不表示作者应占据漂浮半透明输入栏。重要且要用户主动打开的扩展前端，用既有支持 MENU 的组合并设 defaultRegion="MENU"；用户从聊天右上角省略号选择后，悬浮卡片在当前页面显示。普通状态和低重要性进度不要做常驻横条或遮住输入；生图进度横条移除不代表它自动成为菜单项。没有 importance、overlay、menuAction 等资源字段。
+
+2. 主助手正文：一个可见占位符
+
+MainCall.bodyAppearanceTemplate 默认是字面 {{正文}}，空白或仅 {{正文}} 使用原生 Markdown 正文路径。自定义模板要在普通 HTML 文本节点恰好出现一次 {{正文}}，不能放属性、<style>、注释或不允许的元素内。它不调用项目宏，也不用于卡片、USER 消息、思考折叠或辅助输出。模板最长 100000 字符。编辑器预览有语法检查；导入时还需真实资源预览。改变模板只改变显示，不改保存的 BODY、History 或 CoT。
+
+自定义模板允许常见文本/布局标签，如 article、section、div、span、p、标题、列表、表格、blockquote、pre/code、details/summary 与 <style>，也允许受控 class/id/inline style。模板经 Jsoup safelist 清理，再在禁止外部请求和脚本的本地显示环境呈现。不要放 <script>、<iframe>、<img>、表单、外链字体、url() 图片或可执行事件属性；这些不会构成受支持的作者 API。正文 Markdown 的原生 HTML 标签被当文本转义，输出还会被清理；由宿主生成的插图是独立安全来源。自定义 HTML 模式不保证原生 Markdown 的全部数学、交互图、引用跳转等能力。
+
+{{正文}} 在运行时成为一个 .companion-markdown 容器。宿主插图会以其直接子元素 .companion-generated-illustration 出现在对应段落后，里面有宿主生成的 img。若想文字较窄、插图尽量铺满可用宽度，须只限制文字子元素，不能让共同父层变窄。
+
+可直接贴入“正文外观”编辑器的例子：
+
+<style>
+  .body-note {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0;
+    border: 1px solid #9b91a5;
+    border-radius: 16px;
+  }
+  .body-note .companion-markdown { width: 100%; box-sizing: border-box; }
+  .body-note .companion-markdown > :not(.companion-generated-illustration) {
+    width: 88%;
+    max-width: 680px;
+    margin-left: auto;
+    margin-right: auto;
+    box-sizing: border-box;
+  }
+  .body-note .companion-generated-illustration { width: 100%; }
+  .body-note .companion-generated-illustration img {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: none;
+    border-radius: 14px;
+  }
+</style>
+<article class="body-note">{{正文}}</article>
+
+调文字宽度时把 88% 改为 94% 等，只改上述文字子元素规则。不要通过缩小 .body-note 或 .companion-markdown 的 width/max-width、增大共同父层 padding 来收紧文字；图片也是它们的子元素，会一起变窄。需要背景、边框或圆角时放在外层，但保持外层 width:100%、box-sizing:border-box、padding:0，图片宽度由 wrapper 和 img 独立控制。宿主默认插图会设 width:100%、height:auto、max-height:none，并保留渐隐与圆角；上例显式写出宽度意图，后续细调可保留宿主默认特效。
+
+CSS 只能作用于当前模板的可见 DOM。既有旧模板若在更上层祖先设了 92% 宽、680px 最大宽或大 padding，后代的 img {width:100%} 只会填满那个窄祖先，系统不会自动突破作者祖先约束。先去掉或调整祖先约束，再用直子选择器缩文字。宿主聊天列表/气泡本身的可用宽度仍是上界，100% 不是屏幕物理宽度的承诺。原生 Markdown 路径不读取这里的自定义 CSS；想要这套窄文字宽图布局，先启用自定义正文外观模板。
+
+3. 排查与交付
+
+- 图片仍窄：检查每一层祖先 .body-note、.companion-markdown 和其它自定义容器的 width/max-width/padding；再检查是否在文字选择器之外写了全局 img 或 wrapper 限宽。正文插图须由内置功能实际生成并与当前 BODY 来源匹配；没有图片时模板预览只能说明文字布局。
+- 文字规则未命中：确认 {{正文}} 位于 article 普通文本节点、模板保存成功，且选择器指向运行时的 .companion-markdown 直接子元素。默认原生 Markdown 路径不使用 bodyAppearanceTemplate 的 CSS。
+- 内容消失或格式变化：核对被清理的 HTML 标签、占位符数量与位置；卡片则核对 dataMode、xmlSample、fields/elements、真实 fieldKey 和 CSS 的实际 ID。不要靠脚本、外链图片或隐藏提示词补救。
+- 交付时说明是卡片 CSS 还是正文模板、实际改了哪个资源、做过何种预览。导入成功不证明不同屏幕宽度、真实模型内容与插图的最终观感；交由用户在实际聊天中体验。

@@ -31,11 +31,12 @@ import dev.gray.companion.core.RunRecovery
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
-/** Small footer for the latest saved run. The retry, skip, and manual decisions stay in the host. */
+/** Shown only after a user-requested continuation leaves the same run pending. */
 @Composable
-internal fun RecoveryFooter(
-    recovery: RunRecovery?,
+internal fun RecoveryDialog(
+    recovery: RunRecovery,
     busy: Boolean,
+    onDismiss: () -> Unit,
     onRetry: suspend (RecoveryFailure, String?) -> Boolean,
     onSkip: suspend (RecoveryFailure) -> Boolean,
     onManual: suspend (RecoveryFailure, String, String?) -> Boolean,
@@ -43,14 +44,12 @@ internal fun RecoveryFooter(
     onFinish: suspend () -> Boolean,
     onRollbackUser: suspend () -> String?,
 ) {
-    val failures = recovery?.failures.orEmpty().filterNot { busy && it.provisional }
-    if (recovery == null) return
+    val failures = recovery.failures.filterNot { busy && it.provisional }
     if (failures.isEmpty()) {
-        if (!busy) PausedRunExit(recovery, onFinish, onRollbackUser)
+        PausedRunDialog(recovery, busy, onDismiss, onFinish, onRollbackUser)
         return
     }
 
-    var showDetails by remember(recovery.id) { mutableStateOf(false) }
     var selectedKey by remember(recovery.id) { mutableStateOf(failures.first().nodeKey) }
     val selected = failures.firstOrNull { it.nodeKey == selectedKey } ?: failures.first()
     var candidate by remember(recovery.id, selected.nodeKey) { mutableStateOf("") }
@@ -67,7 +66,7 @@ internal fun RecoveryFooter(
             actionPending = true
             actionError = null
             try {
-                if (action()) showDetails = false else actionError = message
+                if (action()) onDismiss() else actionError = message
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Throwable) {
@@ -76,19 +75,9 @@ internal fun RecoveryFooter(
         }
     }
 
-    OutlinedCard(onClick = { showDetails = true }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("${if (busy) "正在处理" else "运行已暂停"} · ${recovery.acceptedCount} 项已保存 · ${failures.size} 项待处理", style = MaterialTheme.typography.labelLarge)
-            Text(failures.first().title.ifBlank { recoveryFailureKindLabel(failures.first().kind) } + "：" + failures.first().reason,
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("查看恢复选项", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-        }
-    }
-
-    if (showDetails) AlertDialog(
-        onDismissRequest = { if (!actionPending) showDetails = false },
-        title = { Text("恢复未完成的运行") },
+    AlertDialog(
+        onDismissRequest = { if (!actionPending) onDismiss() },
+        title = { Text(if (busy) "正在继续运行" else "处理未完成的运行") },
         text = {
             Column(
                 Modifier.fillMaxWidth().heightIn(max = 500.dp).verticalScroll(rememberScrollState()),
@@ -157,21 +146,24 @@ internal fun RecoveryFooter(
                     modifier = Modifier.fillMaxWidth(),
                     enabled = candidate.isNotBlank() && !busy && !actionPending,
                 ) { Text("校验候选并继续") }
-                TextButton(onClick = { showDetails = false; onEditPrompt(selected) }, enabled = !busy && !actionPending) {
+                TextButton(onClick = { onDismiss(); onEditPrompt(selected) }, enabled = !busy && !actionPending) {
                     Text("编辑此调用的提示词")
                 }
                 TextButton(
                     onClick = { runAction("跳过未完成，请重试。") { onSkip(selected) } },
                     enabled = !busy && !actionPending,
                 ) { Text("跳过失败路径并继续") }
-                if (selected.kind == RecoveryFailureKind.CONFLICT) {
-                    Text("只会放弃尚未完成的部分，已保存结果会保留。",
+                if (recovery.regenerating) {
+                    Text("结束后会放弃这次尚未发布的新候选，原回答与原状态会保留。",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    TextButton(
-                        onClick = { runAction("无法结束本轮，请稍后重试。", onFinish) },
-                        enabled = !busy && !actionPending,
-                    ) { Text("结束本轮，保留已保存结果") }
+                } else {
+                    Text("结束后会清除本轮断点；已保存结果保留，未完成的路径不再继续。",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                TextButton(
+                    onClick = { runAction("无法结束本轮，请稍后重试。", onFinish) },
+                    enabled = !busy && !actionPending,
+                ) { Text(if (recovery.regenerating) "放弃新候选，保留原回答" else "结束本轮，保留已保存结果") }
                 if (!recovery.regenerating) {
                     Text("删除触发本轮的用户消息后，会撤销本轮已保存结果，回到发送前。",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -182,7 +174,7 @@ internal fun RecoveryFooter(
                                 actionError = null
                                 try {
                                     val issue = onRollbackUser()
-                                    if (issue == null) showDetails = false else actionError = issue
+                                    if (issue == null) onDismiss() else actionError = issue
                                 } catch (cancelled: CancellationException) {
                                     throw cancelled
                                 } catch (failure: Throwable) {
@@ -195,46 +187,40 @@ internal fun RecoveryFooter(
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { if (!actionPending) showDetails = false }) { Text("关闭") } },
+        confirmButton = { TextButton(onClick = onDismiss, enabled = !actionPending) { Text("关闭") } },
     )
 }
 
 /** An interrupted final publication can leave saved receipts without a failed node to retry. */
 @Composable
-private fun PausedRunExit(recovery: RunRecovery, onFinish: suspend () -> Boolean,
+private fun PausedRunDialog(recovery: RunRecovery, busy: Boolean, onDismiss: () -> Unit,
+    onFinish: suspend () -> Boolean,
     onRollbackUser: suspend () -> String?) {
-    var showDialog by remember(recovery.id) { mutableStateOf(false) }
     var pending by remember(recovery.id) { mutableStateOf(false) }
     var error by remember(recovery.id) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    OutlinedCard(onClick = { showDialog = true }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("运行已暂停 · 等待结束", style = MaterialTheme.typography.labelLarge)
-            Text("没有可重试的失败调用，点此查看结束选项。", style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-    if (showDialog) AlertDialog(
-        onDismissRequest = { if (!pending) showDialog = false },
-        title = { Text("结束暂停的运行？") },
+    AlertDialog(
+        onDismissRequest = { if (!pending) onDismiss() },
+        title = { Text(if (busy) "正在继续运行" else "继续未完成") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(if (recovery.regenerating)
-                    "这次重新生成尚未发布的新候选及其运行结果会被放弃，原回答与原状态会保留。结束后可以重新生成。"
-                else "结束后会清除本轮断点，已经保存到会话的结果会保留，未完成的部分不再继续。")
-                if (!recovery.regenerating) Text("也可删除触发本轮的用户消息，撤销本轮已保存结果并回到发送前。")
+                Text(if (busy) "正在尝试继续；请等待运行结束。" else
+                    "自动继续后仍有断点，日志中没有可单独重试的失败调用。可以关闭窗口，稍后再继续；也可以结束本轮。")
+                if (!busy) Text(if (recovery.regenerating)
+                    "结束会放弃这次尚未发布的新候选，原回答与原状态会保留。"
+                else "结束会清除本轮断点，已保存结果会保留；删除触发消息则撤销本轮结果。")
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             }
         },
         confirmButton = {
             Column {
-                if (!recovery.regenerating) TextButton(enabled = !pending, onClick = {
+                if (!recovery.regenerating) TextButton(enabled = !busy && !pending, onClick = {
                     pending = true
                     error = null
                     scope.launch {
                         try {
                             val issue = onRollbackUser()
-                            if (issue == null) showDialog = false else error = issue
+                            if (issue == null) onDismiss() else error = issue
                         } catch (cancelled: CancellationException) {
                             throw cancelled
                         } catch (failure: Throwable) {
@@ -242,13 +228,13 @@ private fun PausedRunExit(recovery: RunRecovery, onFinish: suspend () -> Boolean
                         } finally { pending = false }
                     }
                 }) { Text("删除触发消息，撤回本轮") }
-                TextButton(enabled = !pending, onClick = {
+                TextButton(enabled = !busy && !pending, onClick = {
                     if (!pending) {
                         pending = true
                         error = null
                         scope.launch {
                             try {
-                                if (onFinish()) showDialog = false else error = "无法结束本轮，请稍后重试。"
+                                if (onFinish()) onDismiss() else error = "无法结束本轮，请稍后重试。"
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
                             } catch (_: Throwable) {
@@ -259,7 +245,7 @@ private fun PausedRunExit(recovery: RunRecovery, onFinish: suspend () -> Boolean
                 }) { Text(if (pending) "处理中…" else if (recovery.regenerating) "放弃新候选，保留原回答" else "结束本轮") }
             }
         },
-        dismissButton = { TextButton(enabled = !pending, onClick = { showDialog = false }) { Text("暂不结束") } },
+        dismissButton = { TextButton(enabled = !pending, onClick = onDismiss) { Text("关闭") } },
     )
 }
 

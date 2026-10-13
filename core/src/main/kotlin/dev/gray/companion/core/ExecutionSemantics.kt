@@ -54,8 +54,13 @@ data class ExecutionSemantics(val version: Int) {
     val userInputMacros: Boolean get() = version >= 25
     val perBlockMessageMerging: Boolean get() = version >= 26
 
+    val pluginHostCapabilities: Boolean get() = version >= 27
+
+    /** Older captures always recorded a model's own result, ignoring its trajectory switch. */
+    val modelTrajectoryControl: Boolean get() = version >= 28
+
     companion object {
-        const val CURRENT = 26
+        const val CURRENT = 28
         fun supports(version: Int): Boolean = version in 1..CURRENT
     }
 }

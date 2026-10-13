@@ -20,6 +20,8 @@ import androidx.navigation3.ui.NavDisplay
 import com.dokar.sonner.Toaster
 import com.dokar.sonner.rememberToasterState
 import dev.gray.companion.AppController
+import dev.gray.companion.AppEventLog
+import dev.gray.companion.AppLogLevel
 import dev.gray.companion.core.*
 import kotlinx.coroutines.launch
 import me.rerere.hugeicons.HugeIcons
@@ -51,16 +53,21 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
     val library by controller.library.collectAsStateWithLifecycle()
     val state by controller.state.collectAsStateWithLifecycle()
     val automaticOptions by controller.automaticOptions.collectAsStateWithLifecycle()
+    val illustrationActivity by controller.illustrationActivity.collectAsStateWithLifecycle()
     val importPreview by controller.configurationImport.collectAsStateWithLifecycle()
     val usage by controller.usage.collectAsStateWithLifecycle()
     val usageError by controller.usageError.collectAsStateWithLifecycle()
     val settings by rememberUserSettingsState()
     val stack = rememberNavBackStack(Screen.Chat(library.selectedSessionId ?: "active"))
     val navigator = remember(stack) { Navigator(stack) }
+    LaunchedEffect(stack.lastOrNull()) {
+        AppEventLog.record("导航", "打开 ${stack.lastOrNull()?.javaClass?.simpleName ?: "页面"}")
+    }
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-    val snackbar = remember { SnackbarHostState() }
+
     val toaster = rememberToasterState()
+    val notices = remember(toaster) { UiToaster(toaster, logNotices = true) }
     var usageDays by remember { mutableIntStateOf(7) }
     var usageRefreshedAt by remember { mutableLongStateOf(0L) }
     val usageAsOf = remember(usage, usageRefreshedAt) { System.currentTimeMillis() }
@@ -70,8 +77,8 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
     var configurationIssues by remember { mutableStateOf<List<Issue>>(emptyList()) }
 
     suspend fun report(issues: List<Issue>): Boolean {
-        if (issues.any { it.error } && stack.lastOrNull() !is Screen.CompanionEditor && stack.lastOrNull() !is Screen.CompanionMemory) configurationIssues = issues
-        issues.firstOrNull()?.let { snackbar.showSnackbar(it.message) }
+        if (issues.any { it.error && ResourceLocations.resolveIssue(library, it) != null } && stack.lastOrNull() !is Screen.CompanionEditor && stack.lastOrNull() !is Screen.CompanionMemory) configurationIssues = issues
+        issues.forEach { AppEventLog.record("配置", it.message, if (it.error) AppLogLevel.ERROR else AppLogLevel.WARNING) }
         return issues.none { it.error }
     }
     fun update(transform: (Library) -> Library) { scope.launch { report(controller.updateLibrary(transform)) } }
@@ -165,6 +172,22 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
             finally { saving = false }
         }
     }
+    fun setIllustrationEnabled(enabled: Boolean) {
+        if (saving) return
+        saving = true
+        scope.launch {
+            try { report(controller.saveIllustration(library.illustration.copy(enabled = enabled))) }
+            finally { saving = false }
+        }
+    }
+    fun saveIllustration(config: IllustrationConfig) {
+        if (saving) return
+        saving = true
+        scope.launch {
+            try { if (report(controller.saveIllustration(config))) navigator.popBackStack() }
+            finally { saving = false }
+        }
+    }
     fun selectCharacter(id: String) { scope.launch {
         if (report(if (library.sessions.firstOrNull { it.id == library.selectedSessionId }?.characterId == id) controller.newSession() else controller.selectCharacter(id))) { drawer.close(); navigator.clearAndNavigate(Screen.Chat(controller.library.value.selectedSessionId ?: "active")) }
     } }
@@ -188,7 +211,7 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
     }
     var cardLayoutOpen by remember { mutableStateOf(false) }
     var cardLayoutSaving by remember { mutableStateOf(false) }
-    LaunchedEffect(externalError) { externalError?.let { snackbar.showSnackbar(it) } }
+    LaunchedEffect(externalError) { externalError?.let { AppEventLog.record("资源文件", it, AppLogLevel.ERROR) } }
 
     @Composable
     fun CurrentDrawer() {
@@ -219,7 +242,7 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
     }
 
     if (cardLayoutOpen) library.sessions.firstOrNull { it.id == library.selectedSessionId }?.let { current ->
-        CardLayoutPanel(library, current, canEdit = !state.busy && current.pendingRun == null && !cardLayoutSaving,
+        CardLayoutPanel(library, current, canEdit = !state.busy && !cardLayoutSaving,
             onChange = { next ->
                 if (!cardLayoutSaving) {
                     cardLayoutSaving = true
@@ -231,12 +254,12 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
             }, onDismiss = { cardLayoutOpen = false })
     }
 
-    SharedTransitionLayout {
-        CompositionLocalProvider(
+    // No screen in this host uses heroAnimation. SharedTransitionLayout creates a
+    // LookaheadScope around the entire chat LazyColumn, including ordinary scrolls.
+    CompositionLocalProvider(
             LocalNavController provides navigator,
-            LocalSharedTransitionScope provides this,
             LocalSettings provides settings,
-            LocalToaster provides toaster,
+            LocalToaster provides notices,
         ) {
             Toaster(state = toaster, darkTheme = LocalDarkMode.current, richColors = true, alignment = Alignment.TopCenter, showCloseButton = true)
             Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }.background(MaterialTheme.colorScheme.background)) {
@@ -259,7 +282,8 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                         if (pending != null) open(Screen.CompanionRecoveryPrompt(key.id, pending.id, failure.nodeKey))
                                     }, optionsState = automaticOptions,
                                     onGenerateOptions = controller::generateAutomaticOptions,
-                                    onOpenOptionsSettings = { open(Screen.CompanionAutomaticOptions) })
+                                    onOpenOptionsSettings = { open(Screen.CompanionAutomaticOptions) },
+                                    onOpenSavedChats = { open(Screen.History) })
                             }
                             entry<Screen.MessageSearch> {
                                 CompanionSearchPage(controller) { sessionId, messageId -> scope.launch {
@@ -281,8 +305,8 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                         if (!importBusy) { importBusy = true; scope.launch {
                                             try {
                                                 val issues = controller.undoConfigurationImport(receiptId)
-                                                if (issues.any { it.error }) snackbar.showSnackbar(issues.first { it.error }.message)
-                                                else snackbar.showSnackbar("配置已撤回")
+                                                if (issues.any { it.error }) AppEventLog.record("配置", issues.first { it.error }.message, AppLogLevel.ERROR)
+                                                else AppEventLog.record("配置", "配置已撤回")
                                             } finally { importBusy = false }
                                         } }
                                     }, { navigator.popBackStack() })
@@ -296,6 +320,15 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                             entry<Screen.CompanionChatDisplay> { CompanionChatDisplaySettingsPage { cardLayoutOpen = true } }
                             entry<Screen.CompanionAutomaticOptions> {
                                 AutomaticOptionsSettingsPage(library, ::saveAutomaticOptions, { navigator.popBackStack() }, saving)
+                            }
+                            entry<Screen.CompanionAgent> {
+                                AgentPage(controller.agent, onBack = { navigator.popBackStack() }, onOpenWorkbench = { open(Screen.CompanionConfigurationWorkspace) })
+                            }
+                            entry<Screen.CompanionIllustration> {
+                                IllustrationSettingsPage(library, illustrationActivity, controller.bizyAirConfigured(),
+                                    onSave = ::saveIllustration, onSetBizyAirCredential = controller::setBizyAirCredential,
+                                    onAcknowledgeRemoteStatus = controller::acknowledgeIllustrationRemoteStatus,
+                                    onBack = { navigator.popBackStack() }, saving = saving)
                             }
                             entry<Screen.CompanionMemory> { memoryKey ->
                                 LaunchedEffect(library.memoryConfig) {
@@ -340,7 +373,7 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                         onManageTags = if (kind == ResourceKind.PACKAGE) ({ navigator.navigate(Screen.CompanionTags) }) else null,
                                         onSelectMainCall = if (kind == ResourceKind.MAIN) ({ id ->
                                             val session = library.sessions.firstOrNull { it.id == library.selectedSessionId }
-                                            if (session == null) scope.launch { snackbar.showSnackbar("请先创建对话。") }
+                                            if (session == null) scope.launch { AppEventLog.record("配置", "请先创建对话。", AppLogLevel.WARNING) }
                                             else if (session.mainCallId == id) navigator.popBackStack()
                                             else save { current -> current.copy(sessions = current.sessions.map { latest ->
                                                 if (latest.id == session.id) latest.copy(mainCallId = id, updatedAt = System.currentTimeMillis()) else latest
@@ -384,7 +417,13 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                                     onOpenMemory = { navigator.navigate(Screen.CompanionMemory()) }, onOpenLocation = ::openLocation,
                                     onSetMemoryEnabled = ::setMemoryEnabled, onOpenAutomaticOptions = { open(Screen.CompanionAutomaticOptions) },
                                     onSetAutomaticOptionsEnabled = ::setAutomaticOptionsEnabled,
-                                    onSetExtensionEnabled = ::setExtensionEnabled)
+                                    onOpenIllustration = { open(Screen.CompanionIllustration) },
+                                    onSetIllustrationEnabled = ::setIllustrationEnabled,
+                                    onSetExtensionEnabled = ::setExtensionEnabled,
+                                    pluginAccessStatus = controller::pluginAccessStatus,
+                                    onGrantPluginAccess = controller::grantPluginAccess,
+                                    onRevokePluginAccess = controller::revokePluginAccess,
+                                    onSetPluginCredential = controller::setPluginCredential)
                             }
                             entry<Screen.CompanionRecoveryPrompt> { key ->
                                 val node = controller.recoveryNode(key.sessionId, key.runId, key.nodeKey)
@@ -487,7 +526,7 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                             }
                         }
                 )
-                SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+
             }
             if (configurationIssues.isNotEmpty()) SourceIssuesSheet(library, configurationIssues, ::openLocation) { configurationIssues = emptyList() }
             importPreview?.let { preview ->
@@ -496,15 +535,14 @@ fun OriginalFrontendHost(controller: AppController, onExport: () -> Unit, onImpo
                         if (!importBusy) { importBusy = true; scope.launch {
                             try {
                                 val issues = controller.applyConfigurationImport(preview.id)
-                                if (issues.any { it.error }) snackbar.showSnackbar(issues.first { it.error }.message)
-                                else snackbar.showSnackbar("导入完成")
+                                if (issues.any { it.error }) AppEventLog.record("配置", issues.first { it.error }.message, AppLogLevel.ERROR)
+                                else AppEventLog.record("资源文件", "导入完成")
                             } finally { importBusy = false }
                         } }
                     },
                     onCancel = { if (!importBusy) controller.dismissConfigurationImport() })
             }
         }
-    }
 }
 
 private fun <T> List<T>.replaceOrAdd(value: T, id: (T) -> String): List<T> =
@@ -525,30 +563,32 @@ private fun sourceEditorScreen(location: ResourceLocation, library: Library): Sc
 @Composable
 private fun CompanionSettingsPage(onExport: () -> Unit, onImport: () -> Unit, undoCount: Int, onOpenMainCall: () -> Unit) {
     val navigator = LocalNavController.current
+    var showCrashDiagnostics by remember { mutableStateOf(false) }
+    if (showCrashDiagnostics) CrashDiagnosticsDialog { showCrashDiagnostics = false }
     SettingPageLayout {
             item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("运行方案") }) {
-                item(onClick = { navigator.navigate(Screen.CompanionSession) }, headlineContent = { Text("当前对话配置") }, supportingContent = { Text("本段对话的身份、额外资源与状态") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
-                item(onClick = { navigator.navigate(Screen.CompanionPromptPreview) }, headlineContent = { Text("提示词预览") }, leadingContent = { Icon(HugeIcons.Search01, null) })
-                item(onClick = onOpenMainCall, headlineContent = { Text("主调用") }, leadingContent = { Icon(HugeIcons.Brain02, null) })
-                item(onClick = { navigator.navigate(Screen.CompanionResources(ResourceKind.PACKAGE.routeIndex)) }, headlineContent = { Text("提示词包") }, leadingContent = { Icon(HugeIcons.Book03, null) })
-                item(onClick = { navigator.navigate(Screen.CompanionResources(ResourceKind.GROUP.routeIndex)) }, headlineContent = { Text("调用组") }, leadingContent = { Icon(HugeIcons.Package, null) })
-                item(onClick = { navigator.navigate(Screen.CompanionExtensions()) }, headlineContent = { Text("扩展") }, leadingContent = { Icon(HugeIcons.Package, null) })
+                item(onClick = { navigator.navigate(Screen.CompanionSession) }, headlineContent = { Text("当前对话配置") }, leadingContent = { Icon(CompanionIcons.Session, null) })
+                item(onClick = onOpenMainCall, headlineContent = { Text("主调用") }, leadingContent = { Icon(CompanionIcons.MainCall, null) })
+                item(onClick = { navigator.navigate(Screen.CompanionResources(ResourceKind.PACKAGE.routeIndex)) }, headlineContent = { Text("提示词包") }, leadingContent = { Icon(CompanionIcons.PromptPackage, null) })
+                item(onClick = { navigator.navigate(Screen.CompanionResources(ResourceKind.GROUP.routeIndex)) }, headlineContent = { Text("调用组") }, leadingContent = { Icon(CompanionIcons.CallGroup, null) })
+                item(onClick = { navigator.navigate(Screen.CompanionExtensions()) }, headlineContent = { Text("扩展") }, leadingContent = { Icon(CompanionIcons.Extensions, null) })
             } }
             item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("配置工具") }) {
+                item(onClick = { navigator.navigate(Screen.CompanionAgent) }, headlineContent = { Text("Agent") }, leadingContent = { Icon(CompanionIcons.Agent, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionConfigurationWorkspace) },
                     headlineContent = { Text("配置工作台") },
-                    supportingContent = { Text("隔离暂存、检查累计差异后再应用") },
-                    leadingContent = { Icon(HugeIcons.Settings03, null) })
+                    leadingContent = { Icon(CompanionIcons.Workspace, null) })
             } }
             item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("连接与界面") }) {
-                item(onClick = { navigator.navigate(Screen.SettingProvider) }, headlineContent = { Text("模型与 API") }, leadingContent = { Icon(HugeIcons.ServerStack01, null) })
-                item(onClick = { navigator.navigate(Screen.CompanionChatDisplay) }, headlineContent = { Text("聊天与显示") }, supportingContent = { Text("思考解析、输入、卡片与界面偏好") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
+                item(onClick = { navigator.navigate(Screen.SettingProvider) }, headlineContent = { Text("模型与 API") }, leadingContent = { Icon(CompanionIcons.Models, null) })
+                item(onClick = { navigator.navigate(Screen.CompanionChatDisplay) }, headlineContent = { Text("聊天与显示") }, leadingContent = { Icon(CompanionIcons.ChatDisplay, null) })
+                item(onClick = { showCrashDiagnostics = true }, headlineContent = { Text("日志") }, leadingContent = { Icon(CompanionIcons.Logs, null) })
             } }
             item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("资源备份") }) {
-                item(onClick = onImport, headlineContent = { Text("导入资源") }, leadingContent = { Icon(HugeIcons.ImageUpload, null) })
+                item(onClick = onImport, headlineContent = { Text("导入资源") }, leadingContent = { Icon(CompanionIcons.Import, null) })
                 item(onClick = { navigator.navigate(Screen.CompanionImportHistory) }, headlineContent = { Text("配置撤回") },
-                    supportingContent = { Text("$undoCount 次可检查的配置导入") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
-                item(onClick = onExport, headlineContent = { Text("导出 JSON") }, leadingContent = { Icon(HugeIcons.Share04, null) })
+                    supportingContent = { Text("$undoCount 次可检查的配置导入") }, leadingContent = { Icon(CompanionIcons.Undo, null) })
+                item(onClick = onExport, headlineContent = { Text("导出 JSON") }, leadingContent = { Icon(CompanionIcons.Export, null) })
             } }
     }
 }
@@ -558,17 +598,16 @@ private fun CompanionChatDisplaySettingsPage(onOpenCardLayout: () -> Unit) {
     val navigator = LocalNavController.current
     SettingPageLayout(title = "聊天与显示") {
         item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("聊天") }) {
-            item(onClick = { navigator.navigate(Screen.CompanionReasoning) }, headlineContent = { Text("思考解析") }, leadingContent = { Icon(HugeIcons.Brain02, null) })
-            item(onClick = { navigator.navigate(Screen.QuickMessages) }, headlineContent = { Text("快捷输入") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
-            item(onClick = { navigator.navigate(Screen.CompanionAutomaticOptions) }, headlineContent = { Text("自动选项") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
+            item(onClick = { navigator.navigate(Screen.CompanionReasoning) }, headlineContent = { Text("思考解析") }, leadingContent = { Icon(CompanionIcons.Reasoning, null) })
+            item(onClick = { navigator.navigate(Screen.QuickMessages) }, headlineContent = { Text("快捷输入") }, leadingContent = { Icon(CompanionIcons.QuickInput, null) })
+            item(onClick = { navigator.navigate(Screen.CompanionAutomaticOptions) }, headlineContent = { Text("自动选项") }, leadingContent = { Icon(CompanionIcons.Options, null) })
         } }
         item { CardGroup(modifier = Modifier.padding(horizontal = 8.dp), title = { Text("显示与偏好") }) {
-            item(onClick = { navigator.navigate(Screen.SettingPreferencesGeneral) }, headlineContent = { Text("通用偏好") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
-            item(onClick = onOpenCardLayout, headlineContent = { Text("卡片布局") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
-            item(onClick = { navigator.navigate(Screen.SettingPreferencesUI) }, headlineContent = { Text("界面显示") }, leadingContent = { Icon(HugeIcons.Settings03, null) })
-            item(onClick = { navigator.navigate(Screen.SettingPreferencesTheme) }, headlineContent = { Text("主题") }, leadingContent = { Icon(HugeIcons.Sun01, null) })
-            item(onClick = { navigator.navigate(Screen.SettingPreferencesNetwork) }, headlineContent = { Text("网络") }, leadingContent = { Icon(HugeIcons.ServerStack01, null) })
+            item(onClick = { navigator.navigate(Screen.SettingPreferencesGeneral) }, headlineContent = { Text("通用偏好") }, leadingContent = { Icon(CompanionIcons.Preferences, null) })
+            item(onClick = onOpenCardLayout, headlineContent = { Text("卡片布局") }, leadingContent = { Icon(CompanionIcons.CardLayout, null) })
+            item(onClick = { navigator.navigate(Screen.SettingPreferencesUI) }, headlineContent = { Text("界面显示") }, leadingContent = { Icon(CompanionIcons.Display, null) })
+            item(onClick = { navigator.navigate(Screen.SettingPreferencesTheme) }, headlineContent = { Text("主题") }, leadingContent = { Icon(CompanionIcons.Theme, null) })
+            item(onClick = { navigator.navigate(Screen.SettingPreferencesNetwork) }, headlineContent = { Text("网络") }, leadingContent = { Icon(CompanionIcons.Network, null) })
         } }
     }
 }
-

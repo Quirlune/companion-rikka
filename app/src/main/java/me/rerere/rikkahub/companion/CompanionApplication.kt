@@ -14,6 +14,7 @@ import me.rerere.rikkahub.utils.JsonInstant
 import okhttp3.OkHttpClient
 import me.rerere.ai.provider.ProviderManager
 import dev.gray.companion.data.createCompanionNetworkClient
+import dev.gray.companion.AppEventLog
 import me.rerere.rikkahub.ui.pages.extensions.QuickMessagesVM
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.context.startKoin
@@ -24,6 +25,9 @@ import org.koin.dsl.module
 class CompanionApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        AppEventLog.install(this)
+        me.rerere.rikkahub.utils.CrashHandler.install(this)
+        AppEventLog.record("应用", "启动")
         startKoin {
             androidContext(this@CompanionApplication)
             modules(module {

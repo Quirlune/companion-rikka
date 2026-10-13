@@ -51,16 +51,37 @@ class WorkflowEngine(
         decision: RecoveryDecision,
         onUpdate: suspend (RunUpdate) -> Unit = {}
     ): RunResult {
+        return resumeChecked(library, currentSession, gateway, recovery, decision, onUpdate)
+    }
+
+    /** Continue an interrupted journal that has no failed node to select. */
+    suspend fun continueInterrupted(
+        library: Library,
+        currentSession: Session,
+        gateway: ModelGateway,
+        recovery: RunRecovery,
+        onUpdate: suspend (RunUpdate) -> Unit = {}
+    ): RunResult = resumeChecked(library, currentSession, gateway, recovery, null, onUpdate)
+
+    private suspend fun resumeChecked(
+        library: Library,
+        currentSession: Session,
+        gateway: ModelGateway,
+        recovery: RunRecovery,
+        decision: RecoveryDecision?,
+        onUpdate: suspend (RunUpdate) -> Unit
+    ): RunResult {
         if (recovery.formatVersion != 1 || !ExecutionSemantics.supports(recovery.executionVersion))
             return conflict(recovery, "恢复断点版本不受支持；已接受的数据可保留，请结束此断点后开始新一轮")
-        if (decision.nodeKey !in recovery.failures.map { it.nodeKey } ||
+        if ((decision == null && recovery.failures.isNotEmpty()) ||
+            (decision != null && decision.nodeKey !in recovery.failures.map { it.nodeKey }) ||
             currentSession.pendingRun?.id != recovery.id ||
             (currentSession.id != recovery.sessionId && !recovery.regenerating))
             return conflict(recovery, "恢复断点与当前会话不一致")
-        val revised = if (ExecutionSemantics(recovery.executionVersion).scopedMemoryResources) recovery.frozenResources
+        val revised = if (ExecutionSemantics(recovery.executionVersion).scopedMemoryResources || decision == null) recovery.frozenResources
             else repairedResources(recovery.frozenResources, library, decision.nodeKey, recovery.initialSession.mainCallId)
                 ?: return conflict(recovery, "调用结构或环境已变化；只能编辑失败调用的提示词块")
-        if (decision.kind != RecoveryDecisionKind.SKIP) {
+        if (decision != null && decision.kind != RecoveryDecisionKind.SKIP) {
             val target = (revised.mainCalls.flatMap { it.configuredWorkflows() } +
                 revised.groups.flatMap { it.workflows })
                 .firstOrNull { it.id == decision.nodeKey.substringBefore('/') }
@@ -1160,6 +1181,9 @@ class WorkflowEngine(
         }
 
         try {
+        // Persist the empty execution journal before dispatch so a manual stop remains resumable
+        // even when no node has yet failed or published a result.
+        progress()
         suspend fun abortDispatch(): RunResult {
             if (!semantics.independentEventLanes) return failed()
             val paused = partialResult()

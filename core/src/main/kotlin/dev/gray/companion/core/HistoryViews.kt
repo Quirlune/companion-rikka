@@ -9,7 +9,7 @@ object HistoryViews {
         if (!semantics.historySources && result.fields.any { it.name == "source" }) return null
         if (!semantics.localHistoryFormats && result.fields.any { it.name == "format" }) return null
         if (!semantics.historySourceRoleSelection && result.fields.any { it.name == "speaker" }) return null
-        if (executionVersion < 26 && result.fields.any { it.name == "as" }) return null
+        if (executionVersion < 26 && result.fields.any { it.name in setOf("as", "prefixes") }) return null
         return when (ref) {
             is PromptReferenceLanguage.LegacyReference -> when (ref.expression) {
                 "history", "history.raw", "history.text" -> HistorySelection(

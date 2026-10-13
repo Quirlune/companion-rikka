@@ -11,6 +11,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.gray.companion.PluginAccessStatus
 import dev.gray.companion.core.*
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Add01
@@ -38,7 +39,13 @@ internal fun ConfigurationExtensionsPage(
     onOpenLocation: (ResourceLocation) -> Unit = {},
     onOpenAutomaticOptions: () -> Unit = {},
     onSetAutomaticOptionsEnabled: (Boolean) -> Unit = {},
+    onOpenIllustration: () -> Unit = {},
+    onSetIllustrationEnabled: (Boolean) -> Unit = {},
     onSetExtensionEnabled: (ConfigurationExtension, Boolean) -> Unit = { _, _ -> },
+    pluginAccessStatus: (ConfigurationExtension) -> PluginAccessStatus = { PluginAccessStatus(false, "", emptySet()) },
+    onGrantPluginAccess: (ConfigurationExtension) -> List<Issue> = { emptyList() },
+    onRevokePluginAccess: (String) -> List<Issue> = { emptyList() },
+    onSetPluginCredential: (ConfigurationExtension, String, String) -> List<Issue> = { _, _, _ -> emptyList() },
 ) {
     var selectedExtensionId by rememberSaveable { mutableStateOf<String?>(null) }
     val pages = remember {
@@ -71,6 +78,8 @@ internal fun ConfigurationExtensionsPage(
                 Text("额外扩展", style = MaterialTheme.typography.titleMedium)
                 ExtensionDefinitionRow("自动选项", "设置模型、数量与回复方向", busy, onClick = onOpenAutomaticOptions,
                     checked = library.automaticOptions.enabled, onCheckedChange = onSetAutomaticOptionsEnabled)
+                ExtensionDefinitionRow("插图", "BizyAir · 在助手正文段落间生成图片", busy, onClick = onOpenIllustration,
+                    checked = library.illustration.enabled, onCheckedChange = onSetIllustrationEnabled)
                 ExtensionDefinitionRow("记忆", "全局设置 · 各聊天分别保存摘要", busy, onClick = onOpenMemory,
                     checked = library.memoryConfig?.enabled == true, onCheckedChange = onSetMemoryEnabled,
                     switchEnabled = library.memoryConfig?.extensionId != null)
@@ -85,7 +94,9 @@ internal fun ConfigurationExtensionsPage(
             }
             else ExtensionDetailPage(library, definition, busy, onApply, ::back,
                 onEdit = { editDefinition(definition) }, onOpenResource = onOpenResource,
-                onOpenLocation = onOpenLocation)
+                onOpenLocation = onOpenLocation, pluginAccessStatus = pluginAccessStatus,
+                onGrantPluginAccess = onGrantPluginAccess, onRevokePluginAccess = onRevokePluginAccess,
+                onSetPluginCredential = onSetPluginCredential)
         }
         is ExtensionPage.Definition -> key(page.initial.id) {
             ExtensionDefinitionEditor(library, page.baseline, page.initial, busy, onApply, ::back)
@@ -133,7 +144,11 @@ private fun ExtensionDefinitionRow(title: String, detail: String, busy: Boolean,
 private fun ExtensionDetailPage(library: Library, definition: ConfigurationExtension,
     busy: Boolean, onApply: ((Library) -> ExtensionEditResult) -> Unit, onBack: () -> Unit,
     onEdit: () -> Unit, onOpenResource: (ExtensionResourceRef) -> Unit,
-    onOpenLocation: (ResourceLocation) -> Unit) {
+    onOpenLocation: (ResourceLocation) -> Unit,
+    pluginAccessStatus: (ConfigurationExtension) -> PluginAccessStatus,
+    onGrantPluginAccess: (ConfigurationExtension) -> List<Issue>,
+    onRevokePluginAccess: (String) -> List<Issue>,
+    onSetPluginCredential: (ConfigurationExtension, String, String) -> List<Issue>) {
     var menu by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<ConfigurationExtension?>(null) }
     var pendingCardGroupId by remember(definition.id) { mutableStateOf<String?>(null) }
@@ -161,11 +176,14 @@ private fun ExtensionDetailPage(library: Library, definition: ConfigurationExten
             style = MaterialTheme.typography.bodySmall) }
         definition.code?.let { code ->
             Text("代码 · ${code.runtime} v${code.version}", style = MaterialTheme.typography.titleMedium)
-            Text("由普通调用的 plugin.run 行为执行；入口 execute(context) 返回文本。导入和开启不会直接执行代码。",
+            Text(if (code.version == 2) "由普通调用的 plugin.run 行为执行；入口 async execute(context, host) 可使用明确声明并获准的宿主能力。导入和开启不会直接执行代码。"
+                else "由普通调用的 plugin.run 行为执行；入口 execute(context) 返回文本。v1 不使用联网或宿主权限。导入和开启不会直接执行代码。",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("插件 ID：${definition.id}", style = MaterialTheme.typography.bodySmall)
             Text(code.source, style = MaterialTheme.typography.bodySmall, maxLines = 12, overflow = TextOverflow.Ellipsis)
             TextButton(onClick = onEdit, enabled = !busy) { Text("编辑代码") }
+            PluginAccessPanel(definition, busy, pluginAccessStatus, onGrantPluginAccess,
+                onRevokePluginAccess, onSetPluginCredential)
             OutlinedButton(enabled = !busy, onClick = {
                 val node = WorkflowNode(title = "运行插件", actionId = "plugin.run", includeHistory = false,
                     arguments = mapOf("pluginId" to definition.id), outputKey = "plugin_${newId().replace("-", "")}", recordTrajectory = false)
@@ -177,8 +195,6 @@ private fun ExtensionDetailPage(library: Library, definition: ConfigurationExten
             }) { Text("添加代码调用") }
         }
         Text("资产与完整编辑", style = MaterialTheme.typography.titleMedium)
-        Text("以下入口直接打开资产的原生编辑器。调用中可编辑完整提示词顺序、历史引用、模型参数和输出处理；提示词包中可编辑被引用的文本。修改写回同一份共享资源。",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (definition.resources.isEmpty()) Text("尚未添加资产，点击右上角编辑扩展定义。", style = MaterialTheme.typography.bodySmall)
         definition.resources.forEach { ref -> key(ref.kind, ref.id) {
             val exists = extensionResourceChoices(library, ref.kind).any { it.first == ref.id }
@@ -221,7 +237,6 @@ private fun ExtensionDetailPage(library: Library, definition: ConfigurationExten
         } }
         if (definition.parameters.isNotEmpty()) {
             Text("字段快捷入口", style = MaterialTheme.typography.titleMedium)
-            Text("旧参数映射直接定位原生编辑器，保留字段所在的完整上下文。", style = MaterialTheme.typography.bodySmall)
             definition.parameters.forEach { parameter -> key(parameter.id) {
                 val descriptor = ExtensionFieldRegistry.describe(library, parameter.target)
                 ExtensionDefinitionRow(parameter.title, descriptor?.title ?: "目标字段已不可用，请编辑扩展映射",
@@ -262,6 +277,8 @@ private fun ExtensionDefinitionEditor(library: Library, baseline: ConfigurationE
     var mapping by remember { mutableStateOf<ExtensionParameter?>(null) }
     var addMapping by remember { mutableStateOf(false) }
     var proposedResources by remember { mutableStateOf<List<ExtensionResourceRef>?>(null) }
+    var confirmRemoveCode by remember { mutableStateOf(false) }
+    var confirmReplaceTemplate by remember { mutableStateOf(false) }
     val current = library.extensions.firstOrNull { it.id == initial.id }
     val stale = current != baseline
     LaunchedEffect(current, submitted, busy) {
@@ -288,12 +305,41 @@ private fun ExtensionDefinitionEditor(library: Library, baseline: ConfigurationE
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("JavaScript 代码入口", modifier = Modifier.weight(1f))
             Switch(checked = draft.code != null, enabled = !busy,
-                onCheckedChange = { enabled -> draft = draft.copy(code = if (enabled) PluginCode(source = "function execute(context) {\n  return context.input;\n}") else null) })
+                onCheckedChange = { enabled ->
+                    if (enabled) draft = draft.copy(code = PluginCode(source = pluginTemplate(1)))
+                    else confirmRemoveCode = true
+                })
         }
         draft.code?.let { code ->
-            TextFieldLine("execute(context)", code.source, { draft = draft.copy(code = code.copy(source = it)) }, minLines = 8)
-            Text("JavaScript v1 · UTF-8 代码最多 64 KiB。可读取 input/state/results/messages，返回字符串或 {text:字符串}；没有文件、网络或主机 API，不支持时间和随机数。其他作用通过普通调用行为组合。",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            ChoiceLine("JavaScript 版本", code.version, listOf(1 to "v1 · 本地转换", 2 to "v2 · 异步宿主能力")) {
+                draft = draft.copy(code = code.copy(version = it))
+            }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(if (code.version == 2) "async execute(context, host)" else "execute(context)",
+                    style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                TextButton(enabled = !busy, onClick = {
+                    if (code.source.isBlank()) draft = draft.copy(code = code.copy(source = pluginTemplate(code.version)))
+                    else confirmReplaceTemplate = true
+                }) { Text("插入模板") }
+            }
+            TextFieldLine(if (code.version == 2) "JavaScript v2 源码" else "JavaScript v1 源码", code.source,
+                { draft = draft.copy(code = code.copy(source = it)) }, minLines = 8)
+            if (code.version == 2) {
+                PluginPermissionEditor(code.permissions, busy) { permissions ->
+                    draft = draft.copy(code = code.copy(permissions = permissions))
+                }
+            } else {
+                if (code.permissions.isNotEmpty()) {
+                    Text("v1 不支持能力声明；保留这些声明时无法保存。请切回 v2，或明确清除声明。",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    code.permissions.forEach { permission ->
+                        Text(permissionSummary(permission), style = MaterialTheme.typography.bodySmall)
+                    }
+                    TextButton(enabled = !busy, onClick = {
+                        draft = draft.copy(code = code.copy(permissions = emptyList()))
+                    }) { Text("清除全部能力声明") }
+                }
+            }
         }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("组成资源", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
@@ -308,7 +354,6 @@ private fun ExtensionDefinitionEditor(library: Library, baseline: ConfigurationE
             val descriptor = ExtensionFieldRegistry.describe(library, parameter.target)
             ExtensionDefinitionRow(parameter.title, descriptor?.title ?: "目标字段已不可用", busy, onClick = { mapping = parameter })
         } }
-        Text("字段快捷入口定位到原生编辑器中的实际字段，不另设简化参数编辑器。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     if (resourcesOpen) ExtensionResourcePicker(library, draft.resources, onSave = { resourcesOpen = false; applyResources(it) }, onDismiss = { resourcesOpen = false })
     if (addMapping || mapping != null) ExtensionMappingEditor(library, draft.resources, mapping,
@@ -325,6 +370,21 @@ private fun ExtensionDefinitionEditor(library: Library, baseline: ConfigurationE
                 draft = draft.copy(resources = next, parameters = draft.parameters.filterNot { it in removed }); proposedResources = null
             }) { Text("移除组成与映射") } }, dismissButton = { TextButton(onClick = { proposedResources = null }) { Text("取消") } })
     }
+    if (confirmRemoveCode) AlertDialog(onDismissRequest = { if (!busy) confirmRemoveCode = false },
+        title = { Text("移除 JavaScript 代码入口？") },
+        text = { Text("这会从当前草稿中移除代码与全部能力声明；保存后才会提交。") },
+        confirmButton = { TextButton(enabled = !busy, onClick = {
+            draft = draft.copy(code = null); confirmRemoveCode = false
+        }) { Text("移除代码入口") } },
+        dismissButton = { TextButton(enabled = !busy, onClick = { confirmRemoveCode = false }) { Text("保留") } })
+    if (confirmReplaceTemplate) AlertDialog(onDismissRequest = { if (!busy) confirmReplaceTemplate = false },
+        title = { Text("替换代码正文？") },
+        text = { Text("将用 JavaScript v${draft.code?.version ?: 1} 模板替换当前代码正文；能力声明会保留。") },
+        confirmButton = { TextButton(enabled = !busy, onClick = {
+            draft.code?.let { code -> draft = draft.copy(code = code.copy(source = pluginTemplate(code.version))) }
+            confirmReplaceTemplate = false
+        }) { Text("替换代码") } },
+        dismissButton = { TextButton(enabled = !busy, onClick = { confirmReplaceTemplate = false }) { Text("取消") } })
 }
 
 @Composable
@@ -332,7 +392,6 @@ private fun ExtensionResourcePicker(library: Library, initial: List<ExtensionRes
     onSave: (List<ExtensionResourceRef>) -> Unit, onDismiss: () -> Unit) {
     var selected by remember { mutableStateOf(initial) }
     ExtensionSheet("组成资源", onDismiss) {
-        Text("调用组提供普通调用与宏，提示词包提供可复用文本。按需选择组成资源。", style = MaterialTheme.typography.bodySmall)
         listOf(ExtensionResourceKind.GROUP, ExtensionResourceKind.PACKAGE,
             ExtensionResourceKind.CHARACTER, ExtensionResourceKind.MAIN).forEach { kind ->
             val optional = kind == ExtensionResourceKind.CHARACTER || kind == ExtensionResourceKind.MAIN
@@ -347,6 +406,86 @@ private fun ExtensionResourcePicker(library: Library, initial: List<ExtensionRes
             Button(onClick = { onSave(selected) }) { Text("采用选择") }
         }
     }
+}
+
+@Composable
+private fun PluginPermissionEditor(permissions: List<PluginPermission>, busy: Boolean, onChange: (List<PluginPermission>) -> Unit) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("能力声明", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            TextButton(enabled = !busy, onClick = {
+                onChange(permissions + PluginPermission(capability = "network.http"))
+            }) { Text("添加网络规则") }
+        }
+        Text("能力声明需单独取得本机授权；HTTP 仅支持精确 HTTPS 源站和方法。",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (permissions.isEmpty()) Text("尚未声明宿主能力。", style = MaterialTheme.typography.bodySmall)
+        permissions.forEachIndexed { index, permission ->
+            key(index) {
+                OutlinedCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text("规则 ${index + 1}", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                            TextButton(enabled = !busy, onClick = { onChange(permissions.filterIndexed { i, _ -> i != index }) }) { Text("移除") }
+                        }
+                        TextFieldLine("能力（例如 network.http）", permission.capability, { value ->
+                            onChange(permissions.mapIndexed { i, item -> if (i == index) item.copy(capability = value.trim()) else item })
+                        })
+                        PermissionListField("HTTPS 源站（每行或逗号分隔，例如 https://api.example.com）",
+                            permission.origins, separator = "\n", minLines = 2) { values ->
+                            onChange(permissions.mapIndexed { i, item -> if (i == index) item.copy(origins = values) else item })
+                        }
+                        PermissionListField("HTTP 方法（例如 GET, POST）", permission.methods, separator = ", ") { values ->
+                            onChange(permissions.mapIndexed { i, item -> if (i == index) item.copy(methods = values) else item })
+                        }
+                        PermissionListField("凭据别名（可选，每行或逗号分隔）",
+                            permission.credentials, separator = "\n", minLines = 2) { values ->
+                            onChange(permissions.mapIndexed { i, item -> if (i == index) item.copy(credentials = values) else item })
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PermissionListField(
+    label: String,
+    values: List<String>,
+    separator: String,
+    minLines: Int = 1,
+    onChange: (List<String>) -> Unit,
+) {
+    var raw by remember { mutableStateOf(values.joinToString(separator)) }
+    LaunchedEffect(values) {
+        if (parsePermissionList(raw) != values) raw = values.joinToString(separator)
+    }
+    TextFieldLine(label, raw, { value ->
+        raw = value
+        onChange(parsePermissionList(value))
+    }, minLines = minLines)
+}
+
+private fun parsePermissionList(value: String): List<String> = value.split(',', '\n', '\r')
+    .map { it.trim() }.filter { it.isNotEmpty() }
+
+private fun permissionSummary(permission: PluginPermission): String = buildString {
+    append(permission.capability)
+    if (permission.origins.isNotEmpty()) append(" · 源站：${permission.origins.joinToString()}")
+    if (permission.methods.isNotEmpty()) append(" · 方法：${permission.methods.joinToString()}")
+    if (permission.credentials.isNotEmpty()) append(" · 凭据别名：${permission.credentials.joinToString()}")
+}
+
+private fun pluginTemplate(version: Int): String = if (version == 2) {
+    """async function execute(context, host) {
+  const capabilities = await host.invoke("capabilities.describe", {});
+  return JSON.stringify(capabilities);
+}"""
+} else {
+    """function execute(context) {
+  return context.input;
+}"""
 }
 
 @Composable

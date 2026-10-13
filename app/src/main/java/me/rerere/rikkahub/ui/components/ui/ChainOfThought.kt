@@ -18,6 +18,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardColors
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -73,6 +74,7 @@ fun <T> ChainOfThought(
     steps: List<T>,
     collapsedVisibleCount: Int = 2,
     collapsedAdaptiveWidth: Boolean = false,
+    onCollapse: (() -> Unit)? = null,
     content: @Composable ChainOfThoughtScope.(T) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -91,6 +93,18 @@ fun <T> ChainOfThought(
                     animationSpec = MaterialTheme.motionScheme.defaultSpatialSpec()
                 ),
         ) {
+            if (onCollapse != null) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    IconButton(onClick = onCollapse, modifier = Modifier.size(28.dp)) {
+                        Icon(
+                            imageVector = HugeIcons.ArrowUp01,
+                            contentDescription = "收起思考",
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            }
             val visibleSteps = if (expanded || !canCollapse) {
                 steps
             } else {

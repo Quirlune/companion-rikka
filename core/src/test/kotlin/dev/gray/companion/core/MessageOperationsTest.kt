@@ -4,6 +4,7 @@ import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -145,9 +146,9 @@ class MessageOperationsTest {
                 MacroVersion(2, "beta", origin, turn = 2, turnId = nextUser.id)))
         )
         val paused = MessageOperations.recordPartialTurn(staged, partial).session!!
-        assertFalse(MessageOperations.capabilities(paused, user.id).canDeleteText)
+        assertTrue(MessageOperations.capabilities(paused, user.id).canDeleteText)
         assertTrue(MessageOperations.capabilities(paused, nextUser.id).canDeleteText)
-        assertNull(MessageOperations.deleteMessage(paused, user.id).session)
+        assertNotNull(MessageOperations.deleteMessage(paused, user.id).session)
         val restored = MessageOperations.deleteMessage(paused, nextUser.id).session!!
         assertEquals(first.copy(updatedAt = restored.updatedAt), restored)
         assertEquals(first.id, restored.id)

@@ -45,7 +45,6 @@ internal fun ActionArgumentForm(node: WorkflowNode, action: ActionDescriptor?, o
         Text(if (advanced) "收起其他参数${if (extraKeys.isNotEmpty()) "（${extraKeys.size}）" else ""}" else "其他参数${if (extraKeys.isNotEmpty()) "（${extraKeys.size}）" else ""} · 展开")
     }
     if (advanced) {
-        Text("保留导入的参数；修改名称前请确认行为类型支持它。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         extraKeys.forEach { argumentKey -> key(argumentKey) {
             AdvancedArgumentLine(argumentKey, node.arguments[argumentKey].orEmpty(), node.arguments.keys) { newKey, newValue ->
                 val arguments = if (newKey == null) node.arguments - argumentKey

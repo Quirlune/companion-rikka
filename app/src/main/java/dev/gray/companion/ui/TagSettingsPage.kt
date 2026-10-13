@@ -13,8 +13,6 @@ internal fun TagSettingsPage(library: Library, onSave: (List<PromptTag>) -> Unit
     var renameId by remember { mutableStateOf<String?>(null) }
     var pendingTag by remember { mutableStateOf<PromptTag?>(null) }
     EditorPage("标签", onBack, { onSave(tags) }, dirty = tags != library.promptTags, saving = saving) {
-        Text("标签可用于词条、角色基础设定、提示词块、节点结果和用户身份。",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         tags.forEach { tag -> key(tag.id) {
             EditorTitleRow("${tag.name} / ${tag.slug}", { renameId = tag.id })
         } }

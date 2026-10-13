@@ -95,6 +95,7 @@ import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.ArrowUp02
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Fullscreen
+import me.rerere.hugeicons.stroke.Play
 import me.rerere.hugeicons.stroke.Zap
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.BackgroundEffectType
@@ -143,6 +144,8 @@ fun ChatInput(
     onCancelClick: () -> Unit,
     onSendClick: () -> Unit,
     onLongSendClick: (() -> Unit)?,
+    onContinueClick: (() -> Unit)? = null,
+    continueEnabled: Boolean = true,
     messageQueue: MessageQueueState = MessageQueueState(),
     onRemoveQueuedMessage: (Uuid) -> Unit = {},
     onBeginEditQueuedMessage: (Uuid) -> QueuedMessage? = { null },
@@ -152,6 +155,8 @@ fun ChatInput(
     voiceState: VoiceSessionState = VoiceSessionState(),
     onStopVoiceMode: () -> Unit = {},
     textOnly: Boolean = false,
+    translucentBackground: Boolean = false,
+    showModelSelector: Boolean = true,
     editDescription: String = "修改文本不会重算世界状态",
     outputTransformation: OutputTransformation? = null,
 ) {
@@ -181,13 +186,17 @@ fun ChatInput(
     fun sendMessage() {
         focusManager.clearFocus(force = true)
         keyboardController?.hide()
-        if (loading && state.isEmpty()) onCancelClick() else onSendClick()
+        when {
+            loading -> onCancelClick()
+            state.isEmpty() && !state.isEditing() && onContinueClick != null && continueEnabled -> onContinueClick()
+            !state.isEmpty() -> onSendClick()
+        }
     }
 
     fun sendMessageWithoutAnswer() {
         focusManager.clearFocus(force = true)
         keyboardController?.hide()
-        if (loading && state.isEmpty()) onCancelClick() else onLongSendClick?.invoke()
+        if (loading) onCancelClick() else if (!state.isEmpty()) onLongSendClick?.invoke()
     }
 
     val asr = if (textOnly) null else LocalASRState.current
@@ -270,7 +279,11 @@ fun ChatInput(
                 shape = containerShape,
                 tonalElevation = 0.dp,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-                color = if (settings.displaySetting.enableBlurEffect) Color.Transparent else hazeTintColor,
+                color = when {
+                    settings.displaySetting.enableBlurEffect -> Color.Transparent
+                    translucentBackground -> hazeTintColor.copy(alpha = 0.80f)
+                    else -> hazeTintColor
+                },
             ) {
                 Column(
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -297,7 +310,7 @@ fun ChatInput(
                         textOnly = textOnly,
                         editDescription = editDescription,
                         outputTransformation = outputTransformation,
-                        compactLeadingIcon = if (textOnly) {
+                        compactLeadingIcon = if (textOnly && showModelSelector) {
                             { ModelSelectorButton(state = modelListState, onlyIcon = true) }
                         } else null,
                         compactTrailingIcon = if (textOnly) {
@@ -305,8 +318,10 @@ fun ChatInput(
                                 SendButton(
                                     loading = loading,
                                     empty = state.isEmpty(),
+                                    continueAvailable = onContinueClick != null && !state.isEditing(),
+                                    continueEnabled = continueEnabled,
                                     onClick = { sendMessage() },
-                                    onLongClick = if (onLongSendClick == null) null else ({ sendMessageWithoutAnswer() }),
+                                    onLongClick = if (onLongSendClick == null || state.isEmpty() || loading) null else ({ sendMessageWithoutAnswer() }),
                                 )
                             }
                         } else null,
@@ -328,7 +343,7 @@ fun ChatInput(
                             horizontalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
                             // Model Picker
-                            ModelSelectorButton(
+                            if (showModelSelector) ModelSelectorButton(
                                 state = modelListState,
                                 onlyIcon = true,
                                 modifier = Modifier,
@@ -415,8 +430,10 @@ fun ChatInput(
                             SendButton(
                                 loading = loading,
                                 empty = state.isEmpty(),
+                                continueAvailable = onContinueClick != null && !state.isEditing(),
+                                continueEnabled = continueEnabled,
                                 onClick = { sendMessage() },
-                                onLongClick = if (onLongSendClick == null) null else ({ sendMessageWithoutAnswer() }),
+                                onLongClick = if (onLongSendClick == null || state.isEmpty() || loading) null else ({ sendMessageWithoutAnswer() }),
                             )
                         }
                     }
@@ -426,7 +443,7 @@ fun ChatInput(
         }
     }
 
-    ModelListSheet(
+    if (showModelSelector) ModelListSheet(
         state = modelListState,
         onSelect = onUpdateChatModel,
     )
@@ -436,18 +453,23 @@ fun ChatInput(
 private fun SendButton(
     loading: Boolean,
     empty: Boolean,
+    continueAvailable: Boolean,
+    continueEnabled: Boolean,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
-    val showStop = loading && empty
+    val showStop = loading
+    val showContinue = !loading && empty && continueAvailable
     val containerColor = when {
         showStop -> MaterialTheme.colorScheme.errorContainer
+        showContinue -> MaterialTheme.colorScheme.primary
         empty -> MaterialTheme.colorScheme.surfaceContainerHigh
         else -> MaterialTheme.colorScheme.primary
     }
     val contentColor = when {
         showStop -> MaterialTheme.colorScheme.onErrorContainer
+        showContinue -> MaterialTheme.colorScheme.onPrimary
         empty -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
         else -> MaterialTheme.colorScheme.onPrimary
     }
@@ -458,7 +480,7 @@ private fun SendButton(
             .testTag("chat_send_button")
             .clip(CircleShape)
             .combinedClickable(
-                enabled = showStop || !empty,
+                enabled = showStop || (showContinue && continueEnabled) || !empty,
                 onClick = onClick,
                 onLongClick = onLongClick,
             )
@@ -470,8 +492,8 @@ private fun SendButton(
             content = {},
         )
         Icon(
-            imageVector = if (showStop) HugeIcons.Cancel01 else HugeIcons.ArrowUp02,
-            contentDescription = stringResource(if (showStop) R.string.stop else R.string.send),
+            imageVector = when { showStop -> HugeIcons.Cancel01; showContinue -> HugeIcons.Play; else -> HugeIcons.ArrowUp02 },
+            contentDescription = if (showContinue) "继续运行" else stringResource(if (showStop) R.string.stop else R.string.send),
             tint = contentColor,
             modifier = Modifier.size(18.dp)
         )

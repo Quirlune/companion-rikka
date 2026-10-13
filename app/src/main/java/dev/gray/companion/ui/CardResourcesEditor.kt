@@ -15,7 +15,6 @@ internal fun CardResourcesEditor(cards: List<CardResource>, references: List<Pro
     val card = cards.firstOrNull { it.id == selected }
     BackHandler(enabled = card != null) { selected = null }
     if (card == null) {
-        Text("卡片独立于调用。选择一个模型输出作为来源，提取为命名字段，再在多个显示元素中引用。", style = MaterialTheme.typography.bodySmall)
         cards.forEach { value ->
             EditorDestinationRow(value.definition.title, "${value.definition.fields.size} 个字段 · ${value.definition.elements.size} 个显示元素${if (value.enabled) "" else " · 已停用"}") { selected = value.id }
         }
@@ -42,7 +41,6 @@ internal fun CardPresentationEditor(definition: CardDefinition, update: (CardDef
         Text("显示元素与 CSS", style = MaterialTheme.typography.titleSmall)
         TextFieldLine("卡片标题", definition.title, { update(definition.copy(title = it)) })
         CardSectionsEditor(definition, update)
-        Text("元素只引用已提取的字段。留空时按字段顺序显示；CSS 可使用 .card 与 #元素标识。", style = MaterialTheme.typography.bodySmall)
         var selectedElement by remember { mutableStateOf<Int?>(null) }
         val selectedIndex = selectedElement?.takeIf { it in definition.elements.indices }
         BackHandler(enabled = selectedIndex != null) { selectedElement = null }
@@ -84,7 +82,6 @@ internal fun CardPresentationEditor(definition: CardDefinition, update: (CardDef
         HorizontalDivider()
         OutlinedTextField(definition.css, { update(definition.copy(css = it)) }, label = { Text("CSS 样式") }, modifier = Modifier.fillMaxWidth(), minLines = 5)
         CardMarkup.validate(definition.css)?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-        Text("仅本地样式；内容由字段生成，无需编写 HTML。", style = MaterialTheme.typography.bodySmall)
     }
     if (placement) Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("位置与可见性", style = MaterialTheme.typography.titleSmall)

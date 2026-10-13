@@ -24,8 +24,8 @@ android {
         applicationId = "dev.gray.companion"
         minSdk = 26
         targetSdk = 37
-        versionCode = 234
-        versionName = "0.66-preview"
+        versionCode = 243
+        versionName = "0.75-preview"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -100,6 +100,7 @@ android {
         buildConfig = true
     }
     sourceSets {
+        getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/agentKnowledgeAssets").get().asFile)
         getByName("androidTest").assets.srcDirs("$projectDir/schemas")
     }
     androidResources {
@@ -124,6 +125,23 @@ android {
         compilerOptions.optIn.add("kotlinx.coroutines.ExperimentalCoroutinesApi")
         compilerOptions.optIn.add("androidx.navigation3.runtime.ExperimentalNavigation3Api")
     }
+}
+
+// Keep the APK's offline Agent reference files in sync with the canonical docs.
+val syncAgentKnowledge by tasks.registering(Sync::class) {
+    val knowledgeFiles = listOf("AGENT_GUIDE.txt", "AI_IMPORT_GUIDE.txt", "PLUGIN_API.md", "AI_IMPORT_API_REFERENCE.json", "AUTHORING_ARCHITECTURE.txt", "APPEARANCE_GUIDE.txt")
+    val knowledgeRoot = rootProject.file("docs")
+    from(knowledgeRoot) {
+        include(*knowledgeFiles.toTypedArray())
+    }
+    into(layout.buildDirectory.dir("generated/agentKnowledgeAssets/agent-knowledge"))
+    doFirst {
+        val missing = knowledgeFiles.filterNot { knowledgeRoot.resolve(it).isFile }
+        check(missing.isEmpty()) { "Agent offline reference missing: ${missing.joinToString()}" }
+    }
+}
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+    dependsOn(syncAgentKnowledge)
 }
 
 composeCompiler {

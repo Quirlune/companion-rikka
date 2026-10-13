@@ -11,9 +11,17 @@ import kotlinx.serialization.json.Json
     val speakers: List<HistorySpeakerRule> = emptyList()
 )
 
+/** Literal replacements for the complete role prefix; blank keeps the original label. */
+@Serializable data class HistoryTextPrefixes(
+    val assistant: String = "", val user: String = "", val system: String = ""
+)
+
 object HistoryReferences {
     private val json = Json { ignoreUnknownKeys = false }
     private val wrapperToken = Regex("\\{\\{([^{}]*)\\}\\}")
+
+    internal fun decodeTextPrefixes(text: String): HistoryTextPrefixes =
+        json.decodeFromString(HistoryTextPrefixes.serializer(), text)
 
     internal fun decodeFormat(text: String): HistoryReferenceFormat =
         json.decodeFromString(HistoryReferenceFormat.serializer(), text).also(::validate)
@@ -47,6 +55,10 @@ object HistoryReferences {
             append(".through:").append(point(selection.range.through))
         }
         if (selection.readMode == HistoryReadMode.TEXT) append(".as:text")
+        if (selection.textPrefixes != HistoryTextPrefixes()) {
+            val encoded = json.encodeToString(HistoryTextPrefixes.serializer(), selection.textPrefixes)
+            append(".prefixes:\"").append(encoded.replace("\\", "\\\\").replace("\"", "\\\"")).append('"')
+        }
         selection.format?.let { format ->
             validate(format)
             val encoded = json.encodeToString(HistoryReferenceFormat.serializer(), format)
@@ -64,12 +76,12 @@ object HistoryReferences {
         HistoryViews.selection(expression, executionVersion)?.readMode == HistoryReadMode.TEXT
 
     /** The returned value is inserted as text under the containing prompt block's role. */
-    fun plainText(messages: List<ChatMessage>): String = messages.joinToString("\n") { message ->
-        val speaker = when (message.role) {
-            Role.SYSTEM -> "System"
-            Role.USER -> "User"
-            Role.ASSISTANT -> "Assistant"
+    fun plainText(messages: List<ChatMessage>, prefixes: HistoryTextPrefixes = HistoryTextPrefixes()): String = messages.joinToString("\n") { message ->
+        val prefix = when (message.role) {
+            Role.SYSTEM -> prefixes.system.ifBlank { "System: " }
+            Role.USER -> prefixes.user.ifBlank { "User: " }
+            Role.ASSISTANT -> prefixes.assistant.ifBlank { "Assistant: " }
         }
-        "$speaker: ${message.text}"
+        "$prefix${message.text}"
     }
 }

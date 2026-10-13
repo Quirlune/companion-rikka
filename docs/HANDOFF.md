@@ -1,3 +1,155 @@
+## Revision93 · 0.75-preview / code243 · 2026-10-13
+
+- 汇总修订79–93，wire37 / execution28 / SQLite1。恢复半透明悬浮输入框，移除生图进度条；横三点直接显示 MENU 卡片，保留收藏、收藏夹和日志。最终使用可聚焦 Popup + 有界滚动 Surface，避免 DropdownMenu 对 BoxWithConstraints 的 intrinsic measurement 闪退；模拟器复现后修复并用同一 MENU 卡片复验通过，返回关闭正常。
+- 正文美化示例只限制文本宽度（默认88%），插图100%铺满外层卡片；取消图片480dp高度上限。外层不要加入约束图片的水平padding或max-width，旧自定义模板需按指南调整。
+- 内置与外部Agent共享六份知识资料，新增整体创作架构和美化语法指南；docs/authoring-kit 含单文件完整说明、构建脚本、机器目录与五种完整可导入示例。资料工具包本身不是扩展导入ZIP。
+- 实际检查：最终APK构建成功、同签名覆盖安装成功；BodyAppearanceMarkupTest 10项、AgentKnowledgeTest 2项、生图质量前缀定向用例1项通过。五个示例ZIP均经真实ResourceArchiveImport和ConfigurationCommands preview/apply验证通过。复用Rev91收藏4项与Rev92历史10项结果，未重复广泛回归。
+- API36隔离模拟器：收藏当前副本、收藏夹打开为新对话、日志、历史前缀面板/预览/保存通过；数据库核对副本与源独立、正文语义保持、前缀持久化。合成本地插图核对文字58%而图片满宽、悬浮输入框透明、真实MENU卡片显示。结束后已按字节恢复原隔离数据库，移除合成图片。
+- 限制：最初冷启动HTML出现一次ANR，跟踪显示首次WebView初始化附近主线程绘制耗时；后续重启操作正常，根因未确证，不宣称已修复。最终菜单布局闪退是独立的确定问题，已修复。未做实体手机、真实模型或BizyAir付费请求；质量前缀由默认配置和请求构建的定向检查确认。
+- 交付：APK、单文件外部AI说明、作者资料ZIP、正文美化模板和SHA256校验；发布流程不包含本地work、密钥或签名材料。
+
+## Revision91 · 0.74-preview / code242源码（未打包） · 2026-10-13
+
+
+## Revision92 — 历史引用纯文本前缀（2026-10-13，未打包）
+- 完成：历史引用原有半屏上拉面板TEXT选项下增加Assistant/User/System完整文本前缀；留空/全空白保留原标签，自定义字面值不展开宏。只改当前引用，MESSAGES忽略映射但保留配置，源消息及外层API角色不变。
+- 契约：HistoryTextPrefixes/HistorySelection.textPrefixes，独立prefixes JSON字段；不通过format切断主历史继承。PromptCompiler普通与memoryScope入口均传入映射。旧as语义门控同步覆盖prefixes，旧引用无行为变化；wire37/execution28/0.74 code242不变。
+- 验证：HistoryTextReferenceTest 5项、ModelRequestMessagesTest 5项，共10项通过；覆盖转义/换行往返、空白回退、整段外层角色及结构化角色保留。:app:compileDebugKotlin通过（24s）；git diff --check通过。未打包、安装、真实模型或设备拖动体验验收。
+
+- 用户要求主界面收藏直接保存当前独立副本，删除原对话不影响收藏。横三点新增直接收藏与收藏夹入口，复用ChatArchive.saveCurrentCopy自动取得/创建“收藏”目录，不弹文件夹选择、不切换原聊天。普通保存成功只写日志，失败依Rev90记日志。
+- ChatArchive.save创建独立snapshot.id，重绑可继续断点（含历史再生成候选）；仍冻结保存时资源。restore再次分配会话ID，保留收藏本体。新增插图按副本owner复制显示记录，后续原聊天/恢复会话重绘互不覆盖；图片文件只作既有不可变资产引用。收藏页用“副本/打开为新对话”名称替代快照/恢复的含糊表述。
+- 最少验收：ChatArchiveTest四项与Android Kotlin编译成功（30s），包括新增源删除后恢复、状态/消息/插图独立与恢复后编辑不影响收藏；原断点继续/历史候选和多次恢复仍通过。旧断言更新为比较已捕获snapshot，不再把收藏等同源session。diff --check通过。证据work/revision90/archive-check.log；未打包、未安装、未Git发布，应用版本/wire/execution不变。
+
+## Revision90 · 0.74-preview / code242源码（未打包） · 2026-10-13
+
+- 用户确认输入栏左侧不显示模型；ChatInput新增showModelSelector默认true，Companion置false，同时隐藏对应sheet入口，其他模型设置保持。常驻“提示词预览”设置入口移除，预览实现与Agent工具保留；当前对话配置保留，它编辑本聊天身份、主调用、额外包/组与状态。
+- AppEventLog统一事件日志，最近256条/单条420字符，StateFlow与单线程后台AtomicFile持久化；读写使用独立diskGate，普通record不持有磁盘锁，错误序号clear后仍递增。启动和崩溃接线，启动早期崩溃先合并已有日志再同步落盘。URL、常见凭据字段、Bearer和长值脱敏，完整请求/模型响应不进入日志。
+- 记录主聊天执行/停止、workflow/node身份与状态、共享模型请求开始/完成/取消/失败（跨实例requestId+profile/model关联）、自动选项/插图、Agent模型/工具operation/status/code、配置及页面导航。错误保存受限可读原因，原始模型响应/工具参数正文不采集。工作流失败仍通过原恢复/回执契约；日志不参与执行准入与成功判定，也不是系统全量审计或无限历史存储。
+- UiToaster包装共享LocalToaster，所有复用UI的普通Toast只记日志，含实际action的Toast仍委托原Sonner；Provider导入helper参数及Export预览provider同步适配。主宿主普通Snackbar改日志；聊天仅留下可重试的交互Snackbar，原恢复/确认/可定位修复面板保留，无定位纯告知不自动弹。正文外观保存错误保留字段错误，移除仅关闭式弹框。
+- 横向三点始终可打开日志，原卡片菜单按能力显示；新错误短闪3次（170ms开/170ms关），单进程共享已提示序号，只在聊天页RESUMED时消费，导航返回能提醒新错误、同一序号不重复，取消finally复位。日志窗口倒序展示时间/级别/来源/内容，可复制、清空运行日志，原崩溃/系统退出诊断另保留。
+- 新CompanionIcons统一24dp、1.8dp圆线条，21个主要导航用途各有独立图形，扩展拼图、Agent机器人、主调用连接节点、调用组树形等；返回/保存/删除等相同动作继续一致。不依赖外部图片或新增图标库。
+- 验收：`:app:testDebugUnitTest --tests dev.gray.companion.AppEventLogTest`成功（1m32s），含最终Android Kotlin编译与一项脱敏/容量/错误序号用例。diff --check通过。未进行真实模型调用、APK打包、安装或设备视觉验收；磁盘跨进程恢复/实际闪烁与图标观感尚未实机验证。应用版本/wire37/execution28/SQLite1不变，不Git发布，保留此前全部dirty。证据在当前任务work/revision90/check.log。
+
+## Revision89 · 0.74-preview / code242源码（未打包） · 2026-10-13
+
+- 用户确认复用原有“文本产出即宏”设计，撤下调用组首页的“从记录创建宏”及未再使用的RecordMacroWizard，不删除此前创建的资源。行为下方以页面跳转按钮进入“输出宏”；默认模型页也可直接定位。显示原result地址，复用名称/slug编辑、可调记录变化、结果标签/分类、可追加的outputProcessing步骤和已有regexOutputCopy。稳定outputKey不重命名，返回先退出输出宏子页，草稿沿用原保存边界。
+- 新建模型行为recordTrajectory=true、其他false；切换行为类型采用新类型默认值，已有资源原样保留。execution28尊重模型recordTrajectory开关，旧冻结执行<=27保持强制模型留档。wire37/SQLite1/应用版本不变。关闭记录仍保留最新可引用结果、可见正文rawText、接受回执和trace；隐藏模型的逐版原文不再额外保存，不新增存储。已有live模型若原存false，新轮次也会尊重false；无可靠创建来源标记，不能猜测并覆盖用户配置。
+- 输入模板仍有效，改名“发送给模型的内容”收进输入折叠；原行为description常驻说明移除。标签用于结果查询筛选，移入输出宏；聊天历史选项控制提示词编译，合成“自动附加/仅由模板插入/不自动附加”，保留旧字段组合，不把结构化History块误称为宏。已显式写入的History块仍按原编译规则执行。
+- SharedModelGenerationEditor统一为每个调用自身的生成参数+思考解析底部面板，可半展开/上拉，复用现有EditorModalSheet。面板入口轻色边框与上拉图标区别页面跳转，EditorSection展开内容加左侧层级线与缩进。未改变参数所属调用，未合并多个调用。
+- 实际验证：Rev88–89共23个core定向用例最终通过（首次22通过，剩余RecoveryTest单项修正旧夹具后重跑通过），含MacroRetentionTest 7项；Rev88 LibraryEditPreparationTest 3项通过。最终Android Kotlin编译与diff --check通过，未新增UI自动化/真实模型请求。编译仍有既有实验API/弃用警告。输出目录未新增APK，未安装、未提高应用版本、未Git发布；实机面板/返回/正则配置体验待之后打包验收。
+- 失败与修正记录：MessageOperationsTest初始漏assertNotNull导入，未知版本硬编码9早已受支持改CURRENT+1；冻结提示词测试改RecoveryPromptEdits并移除仅live存在的标签；取消后的待执行节点有provisional失败，测试正确走RETRY并验证已接受good不重复。旧会话记忆开关夹具显式memoryConfig=null以测旧路径，不绕过全局记忆规则。没有为迎合旧断言改生产语义。
+- Agent知识与作者指南同步更新，AuthoringTools重新生成92类型/18行为目录，execution28正确。证据：当前任务work/revision88中的app.log、final-core.log、final-check.log等（日志沿用工作目录名）。此前所有未提交成果保留。
+
+## Revision88 · 可继续完成态与界面精简（未打包） · 2026-10-13
+
+- 平时隐藏断点卡；空输入、非编辑且有断点时原发送键换三角继续按钮，有文字仍发送，运行中仍停止。一次用户继续先自动处理同一日志；仍失败才显示可关闭处理框，停止/切源/编辑会撤销弹框意图。无失败日志可续跑；首节点前保存空检查点，快速停止也保留继续资料。
+- 断点不再全局锁roll、候选/路径切换、USER菜单编辑删除撤回和资源调整。成功变更在原事务中使过期日志失效；失败不先丢日志。普通暂停轮次删除触发USER仍准确撤销整轮已接受结果；暂停再生成保留旧候选。BUSY/CAS、来源与冻结执行校验仍有效，不重复执行已接受回执。
+- 自动选项默认小图标，点击展开、失焦关闭；重生成放消息三点菜单，移除右侧常驻按钮/纵向说明。全局清理设置、编辑器、Agent、插件、历史等辅助长文，保留操作标签、实际值、协议内容、错误与必要操作后果。
+- LibraryEditPreparation区分显示改动与执行上下文改动，前者保留日志，后者在保存时退役日志。记忆/扩展参与、卡片布局不再因pendingRun锁住；原有真正运行中保护保留。检查结果合并记录于上方Revision89。
+
+## Revision87 · 0.74-preview / code242 · 2026-10-13
+
+- 用户确认0.73上下滑动已修复；提供GT8Pro/RMX5200 Android16/WebView150实机mainThread NPE，栈为LookaheadPassDelegate.markNodeAndSubtreeAsNotPlaced/checkChildrenPlaceOrder及LazyLayoutBeyondBounds。OriginalFrontendHost移除未被其页面消费的SharedTransitionLayout/LocalSharedTransitionScope，保留导航动画、ChatList动画和Rev86页面缓存/双向预载。堆栈定位已明确，但同设备消失仍待复验，不把模拟器阴性当实机通过。
+- 自动选项可见性根因：chatList容器是Column，fillMaxSize列表后又放fillMaxSize浮层，浮层拿到零高度。改Box + matchParentSize；右下候选/错误区域限高滚动，生成/重生成按钮固定在下面，生成中禁用，未配提示词指向设置。配置禁用或输入编辑态仍按原契约隐藏。
+- AutomaticOptionsController保存已接受BODY的session/source/config授权。同源编译profile/contextKey更新取消旧请求后，按新的完整attempt调度一次；换会话/来源/配置撤销授权。旧结果发布校验保留，不盲重试同一失败。新增时序用例：最后BODY回调之后状态才更新，无第二次回调也生成新上下文结果。
+- 调用组首页新增RecordMacroWizard：选择同组启用来源节点、宏名、正则提取/替换、捕获组或替换文本；可按精确ResultOrigin载入当前记录或手填样本，使用现有TextProcessing预览。创建同workflow的macro.process SET，依赖来源节点并读result输出，独立唯一输出键；重复目标拒绝。无schema/runtime变动、无隐式主提示词注入、不回填旧历史；先保存组，下一次来源执行后产生宏。后续原MacroProcessEditor可改，现有引用目录发现{{macro.name}}。用户提供粉色状态包无需重新导入或改写；推荐选择其最终save节点作为来源。
+- 集中验收：2m7s构建成功；AutomaticOptionsControllerTest 1项通过。APK覆盖安装成功。API36隔离模拟器实际看到生成按钮，点击后明确显示缺模型错误；向导载入合成XML并以捕获组1预览Library；创建并保存组成功，提取持久库确认依赖、inputTemplate、macro目标、正则和捕获组准确。未调用付费模型；实际候选生成/填入、后续完整聊天触发宏、GT8Pro闪退仍待用户体验。
+- UI夹具初版误写profileId导致反序列化拒绝，修正为modelProfileId；继承的旧fixture含失效记忆ID和HTTP测试端点，曾阻止写入，随后修正为默认记忆与example.invalid HTTPS后完成保存。均为隔离合成数据问题，无产品代码绕过校验。检查结束已逐字节恢复原隔离模拟器数据库并停止应用。证据位于当前任务work/revision87（build.log、macro-preview.png、saved-macro-node.json）；不Git发布，保留此前dirty。
+
+## Revision86 · 0.73-preview / code241 · 2026-10-13
+
+- 用户确认真我GT8Pro的闪退是整个应用回桌面；快速上滑才卡顿/生成中跨轮跳顶，慢滑正常。回查Rev79：Haze重复采样WebView是当时有上游证据的候选原因，模拟器未复现，绝不是实机已修复证明。既有captureForBlur=false保留。
+- 本次源码证据：没有相邻预载；HTML仅行内remember(120dp)，离屏重建即压扁；onReset清空文档；onReceivedTitle不校验页身份；自动追尾只判断最后可见项而非真正末项；重生成锚点只在busy变化时尝试一次。统一修正这些显示/生命周期边界，core/wire37/execution27/SQLite1不变。
+- 页面高度LRU256项，仅存身份摘要及数值；BODY冷载按文本/宽度估高，卡片不使用长正文估高。普通/增量HTML均用navigation token + DOM revision + 宽度鉴别测高，空shell不发高度；有效测量可缩小。reset解绑回调并保留文档/图片授权，release才销毁。列表前后各2视窗缓存，这是距离预算，不是保证3轮WebView已完成加载。
+- 每会话独立LazyListState；自动追尾必须见ScrollBottomKey；重生成等目标USER进入generationPreview后只定位一次，失败清理，整次重生成仍关闭追尾。短内容受列表最大滚距限制，USER可见但不保证强制贴顶；未加结束时会回弹的尾部空白。
+- 发现原CrashHandler从未安装。现在入口安装仅类型/帧记录；设置→闪退诊断可查看/复制设备、WebView版本、异常类型/代码栈、渲染器退出和系统最近5次进程退出原因。不保存异常message/系统description/native trace/聊天正文/凭据，不上传。HTML渲染器死亡移除销毁视图并显示手动重载，不自动循环重建。此保护不等于证实手机闪退根因。
+- 验收：一次集成构建成功（2m14s）；HtmlRenderMemoryTest5、CrashHandlerTest1、BodyAppearanceMarkupTest10，共16项通过；APK同签名覆盖安装成功。API36/WebView133隔离模拟器使用12轮×22段离线正文，新版初次定位在最后一轮末尾，快速上滑跨到第10轮并向下返回，未出现直达顶部或应用退出；旧0.72同fixture初次定位停在第11轮。诊断页打开并复制按钮显示已复制。此静态离线检查未复现/验证BODY流式跨轮、真实重生成完成或GT8Pro帧率/闪退，renderer死亡恢复未主动注入测试。
+- 测试种子首轮ADB stdin传输被截断，隔离库启动报SQLite损坏；随即改用完整文件传输并逐字节确认，之后检查成功。最终原隔离库已按备份完整恢复；未操作实体机、未调用付费模型、未重试此前被拒的证书安装。无Git发布，保留79–85已有未提交工作。
+
+## Revision85 · 0.72-preview / code240 · 2026-10-13
+
+- 在0.71基础上保留独立Agent。wire37增加可空IllustrationConfig.blocks，execution27/SQLite1不变。通用PromptBlocksEditor提供插图任务、结构化BODY历史和外观块；旧null请求保持兼容。
+- 普通HTML状态卡与正文共用外层滚动和测高，16000dp上限保留内部回退；LazyColumn允许WebView复用，更新当前行回调/本地图片映射，卡片编译remember且折叠时不渲染。实际手机快速滚动帧率没有测量，不将优化等同于性能已完全解决。
+- 自动选项按source+config+profile+编译contextKey去重，后到状态变化取消旧请求时最终BODY提交会重新调度。定向测试复现并覆盖原漏触发时序。
+- 候选重生成补齐准备阶段协程异常边界，失败显示错误并保留原候选；以对应USER定位且暂停自动追尾。用户报告的闪退未取得堆栈、未稳定复现，不能宣称确定根因或已彻底解决。
+- 三点菜单删除移到分支/编辑同行且仅图标，下排支持真实扩展动作图标。当前接入最新BODY自动选项与插图重绘；插图按source互斥、不确定交付禁止再投递、首张新图成功才替换整条旧图，同批发布串行。第三方任意消息动作注册接口未开放，规范不虚构资源字段。
+- Agent离线knowledge.list/read/search，固定4文档ID、分段读取/有限搜索；构建从docs同步assets，运行时schema/资源仍权威。新增AGENT_GUIDE并更新AGENTS/DEVELOPMENT/作者指南与92类型18行为目录。
+- 实际检查：IllustrationCoreTest 4项（其中旧wire断言更新后单独重跑该项）、AutomaticOptionsControllerTest 1、IllustrationControllerTest 4、AgentKnowledgeTest 2，共11项最终通过；build4.log BUILD SUCCESSFUL 3m4s，APK同签名覆盖安装通过；ZIP内4份离线文档且schema-reference wire37确认。模拟器实际打开菜单与插图完整提示词编辑器，截图已查看。
+- 端到端限制：旧0.71点新候选到缺密钥恢复未崩溃，放弃后原答保留；新0.72未完成联网生成→新候选验收。本地HTTP种子被现有HTTPS校验拒绝；向隔离模拟器安装临时测试证书的命令遭自动审批 blocked by policy，未执行。未绕过验证；已停止本地服务、去掉ADB reverse、恢复pre-fixture.db并清除合成凭据。未用真实模型/BizyAir额度，未做实体手机体验验收。
+- APK SHA256 9ef6838d0cb20b6e28506c8883a129c44b492cd26e09a70b560c55d0b15688eb；applicationId保持dev.gray.companion。无Git发布。此前79–84未提交工作保留。
+
+### Revision84 独立资源 Agent（2026-10-13，0.71-preview / code239）
+
+- 已实现设置→配置工具→Agent：独立会话/历史、流式回复、工具记录、停止、账号登录/退出、模型/思考与可编辑工作指令；私有UTF-8文件新建/读写/替换/移动/删除及系统文本导入导出；配置草稿查看、暂存、预览、应用和跨重启恢复。可按真实schema编写受限JS插件；写文件不等于安装插件，设备网络授权仍须原生扩展页操作。
+- AgentController 独立Job/客户端，不调用主聊天send/stop，不使用其busy标志；配置工具复用既有workspaceMutex及commit的BUSY/CAS检查。查看既有卡片/聊天、切换页面不会取消Agent。Android杀进程后不自动续跑付费任务。
+- prompt.preview 复用编译器及冻结资源世界；mode=recent为最近32条进程内ModelGateway已编译消息（有界、无headers/key，不声称是最终HTTP）。文件系统仅各Agent会话的files根，凭据/状态/核心/APK/数据库/shell均未开放。
+- 登录原生移植官方 SIWC 动态客户端/PKCE/state/nonce/loopback，独立Keystore token，严格ID token验证；直接Responses OAuth套餐推理。实际可用模型/权限和额度依账号返回，无桌面Codex凭据读取或私有后端代用。
+- 9项定向测试通过：AgentAuthTest2、AgentFilesTest2、AgentResponsesClientTest3、AgentToolHostTest2。首轮UI编译与测试字符串错误均已修复；build2及后续APK构建通过，不做全量回归。
+- 隔离API36模拟器实际检查：创建plugin-draft.js并保存合成文本；新建/暂存tag草稿；重启后恢复到新workspace，预览通过、确认应用，状态COMMITTED，savedDrafts清零；文件跨重启内容一致。正式OpenAI登录页已从应用打开，但未输入用户账号。修复底部系统栏遮挡、恢复列表重复和已提交草稿误提示。
+- 未完成的体验验收：真实账号完整授权/刷新/撤销/模型与套餐推理，以及Agent与主聊天真实并发。尝试复用本地合成HTTPS端点时主调用网络失败，未形成并行成功证据；已恢复隔离测试库并删除临时合成密钥。未影响用户手机，未使用真实付费模型测试。不要把静态任务隔离/构建当作并行端到端通过。
+- 交付APK SHA-256：3ae543997d49e4cc978cfcafedb54146afce7a025460d449df1dbdea5321d4ce；与0.70签名SHA-256一致（8501445a…60ba43）。
+- 未发布Git；此前79–83的未提交修改保留。交付APK与截图/简要说明见本轮outputs。
+
+### Revision83 Android 应用内补验（2026-10-13）
+
+- 用户明确验收须包括应用内真实生成与上下边缘淡化，因此在隔离 Android 模拟器 velune_r78 / emulator-5560 安装 APK，使用合成角色/对话及用户提供的临时凭据进行真实流程验证；未操作用户手机。
+- 首次应用调用文本和规划成功，但 BizyAir DNS 返回本机代理 Fake-IP 198.18.0.13，被通用插件 SSRF 地址规则挡下。仅内置 api.bizyair.ai 和 storage.bizyair.ai 增加 198.18/15 兼容；通用插件默认仍拒绝该范围，TLS、重定向及其他保留地址限制保持。随后修正请求作用域连接池清理到 NonCancellable + IO，避免 Android 主线程网络收尾异常；修正后的应用完整生成成功。异常诊断只记录类型与调用栈，不记录请求/响应/凭据。
+- 发现原状态条放在聊天内容顶部会被遮挡，且失败时消失；已移到输入框上方，并持续显示失败原因。实际观察到“规划 0 · 排队 0 · 生成中 1”，随后一张真实图片落到 p1 与 p2 之间。1024×1280 PNG 保存于应用私有目录，数据库附注与正文来源一致。
+- 原生 Markdown 与自定义粉色正文卡片均截图确认：图片正确显示，上下约 8% 渐隐衔接，下一段保留；重启后同一图片在自定义卡片中仍可显示。未逐帧测量 .32s 淡入动画，未做实体手机验收或新的付费双并发压测。并发逻辑沿用已通过的队列定向测试。
+- 应用内新增验证发现并修复了上述问题，不能将早先桌面 API 检查当作本次端到端证据。最终 build2.log 构建通过；check.log 的 IllustrationControllerTest 3 与 PluginHostRuntimeTest 3 共 6 项通过；不重复全量回归。测试机临时提供商/BizyAir 安全存储条目均已删除。
+- 当前交付 APK SHA256 b940c034f6fe38f17c1e60de8a4de90f405f0921889dc3c9aec95ac139a3bb9d，覆盖此前 0.70 产物；outputs/0.70-应用内插图-原生.png 和 outputs/0.70-应用内插图-自定义.png 为实际 Android 截图。证据在本聊天 work/revision83-device/{build2.log,check.log,live.db,native-inline.png,custom-inline.png}。以下为先前阶段记录，其未安装说明已被本段补验更新。
+
+### Revision83 / 0.70-preview (2026-10-13)
+
+- 用户要求完成 BizyAir 主回复后并行插图，提供两个规划模型与 BizyAir 的临时 Key 做必要测试；明确 BizyAir 最多两并发，并要求前端并发设置与排队/拥堵状态。源码 code238 / wire36 / execution27 / SQLite1；内建额外扩展，不是可导入的 JavaScript 插件。此前插件 v2 底座保持。
+- Library.illustration 保存全局配置（仅列表总开关），包括模型/显式生成参数、四个可编辑提示词框、按角色 ID 绑定的外观、app57992 和七项应用输入映射。原生 MacroResolver 提供临时 state.illustration_body/appearance/paragraphs/max_images。规划只读最近两轮主回复 BODY，最新助手正文有 p1 等段落定位；严格 illustrations/image/prompt XML，数量0..配置上限1–4，非法结构/锚点拒绝且不调用图片服务。
+- Library.illustrationImages 是会话执行世界之外的显示附注，SQLite metadata 保存；绑定 sessionId/messageId/正文精确 SHA256 与文本版本，正文/History/回执不改。冻结资源捕获清空插图设置和附注。AppController 在既有 accepted BODY 发布后启动后台任务，图片发布通过同一 mutex 合并最新 Library，不增加主调用 revision。
+- 运行时并发1..2，显示规划/本地排队/生成/拥堵。关闭或来源改变清理未提交队列，已经提交的远端任务继续查询并占位到终态，过期结果不发布。未知提交/查询状态锁住后续提交，仅用户核对 BizyAir 后显式继续；POST不盲重试，GET有限重试。明确4xx拒绝与未知传输结果区分。密钥用 PLUGIN_SECRET 安全存储，不入 Library/示例/APK；本轮临时 Key 仅用于内存中的真实请求，未预装到用户设备。
+- PNG保存于本机私有 illustrations 目录；普通Markdown与自定义正文均显示圆角、淡入和上下边缘淡化。HTML只放行宿主映射且目录校验后的本地图片，不开放任意文件/网络。正文仍可复制，展示投影额外比较候选正文/版本，避免图片套到不匹配候选。图片出现时按定位段落渲染，复杂跨段Markdown结构可能改变呈现，手机视觉/触控仍待用户体验。
+- 归属：core_contract82负责核心配置/来源/段落/XML/请求/测试；host_runtime82负责BizyAir与队列/测试；plugin_ui82负责设置与显示；root负责持久化/控制器/导航/冻结隔离、真实API、来源防护、构建集成和文档。保留79–82未提交修改，无Git发布。
+- 验证：17项不同定向检查通过（IllustrationCoreTest3、IllustrationControllerTest3、BodyAppearanceMarkupTest10、CompanionChatProjectionTest新插图投影1）。初轮编译修正Brush/Coil3导入；队列测试最初早于任务实际进入假服务读取计数，修正等待后仅重跑失败项；最后补验投影与最终APK。core.log/integration2.log/final.log及first-results保留过程；final.log BUILD SUCCESSFUL，git diff --check通过。字段目录更新92类型/18行为。未跑全套回归。
+- 真实检查：合成两轮对话，Google gemini-3.8-flash HTTP200有效XML；DeepSeek Flash首次200漏prompt子标签，真实IllustrationCore拒绝，明确可见协议后的第二次200有效XML。实际解析器复核三份输出通过。BizyAir app57992仅提交1个真实任务，POST202、查询Success、输出HTTP200，PNG1024×1280/1728025bytes（octet-stream）。桌面原生REST探测，并非Android应用到云端端到端验证；无生产聊天内容或数据库变更。
+- 限制：未安装/手机验收；没有跨进程远端任务账本与恢复，不统计其他设备/客户端任务；重启后须自行确认远端未完成任务。图片二进制未加入跨设备导出/同步，只保存本机路径附注。输入映射适用于相同七参数结构的应用，不是任意ComfyUI图形编辑器。
+- 交付：outputs/velune-0.70-preview.apk，SHA256 e932f2352705c9ec5743b36e2fd46e5792a1fef759836b0a8bba2c9c6dcb2e1c；签名8501445aff7bae47a3b69a8576a289aadfcd56a38a0ea38c28d548af2a60ba43与0.69一致；dev.gray.companion/minSdk26/arm64-v8a+x86_64。附BizyAir-插图实测.png与0.70-插图使用说明.txt。
+
+### Revision82 / 0.69-preview (2026-10-13)
+
+- 用户确认先完成插件底座：联网、权限、凭据引用、Agent可查询接口及后续能力入口；BizyAir插图扩展随后接入。本轮未实现插图、常驻Agent、跨进程远端任务续跑或任意文件/系统访问。
+- code237 / wire35 / execution27 / SQLite1，包名与签名保留。JavaScript v1保持原纯文本/历史语义；v2通过async execute(context,host)使用network.http、runtime.sleep、capabilities.describe。能力目录包含参数/结果schema、错误、限额和示例；ConfigurationToolGateway增加pluginCapabilities与只读pluginAccess。
+- 网络声明按精确HTTPS origin、方法及凭据别名约束，本机授权按插件ID和完整代码/声明摘要保存。导入/Agent提交不授权；原生扩展详情提供授权、撤销和写入凭据，总启停仍只在列表卡片。修改代码或声明后新版本需重授权。密钥使用既有Keystore适配器的PLUGIN_SECRET命名空间，不进入资源/导出/JS输入；提供商凭据提交入口明确拒绝此命名空间。
+- v2接受结果保留在既有回执/分支快照，即使recordTrajectory=false也不生成纯重算配方；BranchReplay拒绝v2配方。旧execution<=26不执行v2。HTTP独立直连（不继承应用代理）、公开地址DNS检查与固定、无自动重定向/重试、响应大小/请求次数/执行时间限制及取消；结果不确定时不声明可安全重试。尚未接受的外部副作用无法随本地回滚，未实现恰好一次语义。
+- 归属：core_contract82完成core契约/版本/重放；host_runtime82完成QuickJS/HTTP/权限边界测试；plugin_ui82完成权限与声明UI；root完成Keystore授权存储、controller/工作台接线、文档及构建集成。初期集成修正了Kotlin schema字符串转义、测试夹具括号及UI尾随lambda参数顺序；启动阶段恢复了被旧Gradle daemon引用的已缺失临时目录。没有reset/clean、覆盖旧未提交工作或Git发布。
+- 验证：PluginCapabilitiesTest3 + CompletedWorldReplayTest5 + PluginHostRuntimeTest3 + QuickJsPluginExecutorTest3，共14项通过，0跳过。包含真实QuickJS异步等待/能力发现、v1边界与中断、离线HTTP替身权限拒绝和精确origin/方法/别名、受限地址/认证头、v2接受结果的分支保留。没有实际HTTPS服务请求，不能把替身检查当DNS/TLS端到端证据。真实ZIP/JSON导入读取→预览→内存应用通过（plugin-v2-http.config.json，5项资源变化）；作者参考重生成89类型/18行为，含插件能力schema。最终:app:assembleDebug通过，git diff --check通过（仅既有换行规范提示）。
+- 未验证：手机权限页、Android Keystore实机写入、真实网络/DNS/TLS/断网体验、真实BizyAir；未安装或修改用户数据库。此前79–81的手机动画/全展开触控/静态闪烁仍待用户体验；真实恢复结束和删除写入不冒充重测。
+- 交付：当前聊天outputs/velune-0.69-preview.apk；SHA256 5b648a3d1d5480808626e131d339fa122cf051f56567a2b30ee6fb1c1046f028；签名SHA256 8501445aff7bae47a3b69a8576a289aadfcd56a38a0ea38c28d548af2a60ba43，与0.68一致；minSdk26、arm64-v8a/x86_64。另提供velune-plugin-api-v2.zip（作者指南、机器参考、默认关闭的HTTP示例）。构建/测试日志在当前聊天work/revision82/integration6.log；早期失败日志保留，仅重做尚未通过的集成阶段。
+
+### Revision81 / 0.68-preview (2026-10-12)
+
+- code236; wire34/execution26/SQLite1 and signer contract unchanged. The user confirmed the dynamic reply design and the editor reorganization, then added direct paused-run exit, message deletion, and removal of runtime card bases. No core/storage/engine changes.
+- Native Canvas draws three dots in a rotating orbital plane (5.8s vs the 7.2s preview); real trace titles label waiting, and waiting disappears when primary reasoning/body arrives. First reasoning opens across the available width, then transitions to a 28dp character avatar; click reopens it. Body width, composition position and physical-output keys are preserved. Existing archived reasoning remains available. The motion is an approximation, not Claude source.
+- Shared EditorSheetButton/EditorModalSheet give bindings and main-call generation/parsing one lifting-panel affordance. Sheets preserve parent drafts and stable top safe padding. Character basic settings is a child page with seven initially collapsed fields; source focus opens its target. Regex output-copy is a direct switch. Parent Save owns publication and dirty protection.
+- Every nonbusy paused failure now offers finish via the existing controller: preserve accepted results, clear the checkpoint; regeneration discards only the unpublished candidate. Ordinary delete requests confirm selected-text-version behavior; generation candidates retain their existing dependent-branch confirmation. Toolbar exposes delete and keeps its compact intrinsic width. Pending-run mutation guards remain.
+- CardSnapshotPanel Surface and default WebView background are transparent across runtime regions; user CSS and spacing/clipping remain. Management screens/dialog surfaces keep their own styling. Revision79 Haze exclusion and revision80 history-sheet inset fix are preserved.
+- Verification: integration build initially found interpolation, stale brace and empty-list inference errors; these were corrected. Final `:app:assembleDebug` succeeded (7m10s); `git diff --check` passed. APK dev.gray.companion/code236 has the prior signer and installed over 0.67 in the isolated API36 emulator. Actual UI checks passed: settings sheet partial→full drag and expanded Add parameter click; seven collapsed character basics, field expansion, draft retained on child return, and parent dirty-exit prompt; message menu Delete selected version opens the ordinary-message confirmation (cancelled, no deletion executed). No runtime crash was logged. Dynamic reply streaming, actual recovery finish and delete mutation were not exercised this round. No new unit tests, real model requests, production database changes or Git publication. Physical-phone animation, full-sheet touch and static HTML flicker remain user acceptance items.
+- Delivered APK: `velune-0.68-preview.apk`, SHA256 `0c0865bc67ad3de7f62b162ecc7d93444b5df9f3393e3d55bc048a4690f8806b`; signer SHA256 `8501445aff7bae47a3b69a8576a289aadfcd56a38a0ea38c28d548af2a60ba43`. Build logs and synthetic UI XML/screenshots are local in the task workspace `work/revision81`, outside Git.
+
+### Revision80 / historical sheet candidate and avatar design preview (2026-10-12, superseded by Revision81)
+
+- HistoryReferenceEditor now uses bottom-only Material3 contentWindowInsets and fixed content top safe padding. This removes top offset/inset feedback from the sheet anchor while preserving partial/full dragging and IME handling. Upstream alpha28 source supports the risk; the old emulator did not reliably reproduce the user's full-expansion click freeze. No repaired APK/device acceptance yet.
+- ChatMessage/ChatMessageAvatar/CompanionChatProjection contain the initial always-visible character-avatar candidate. User then requested an interactive comparison before selecting permanent behavior. Do not treat that static implementation as final approval or automatically ship it. Dynamic alternative is preview-only: orbit dots and actual action before reasoning, full-width reasoning without avatar, collapse into avatar after reasoning, avatar reopens reasoning.
+- User supplied four Claude screenshots; the three-dot preview approximates spatial motion, not original Claude source. Production loading remains unchanged pending design integration; remove the rabbit and show real execution-stage text when implementing the selected flow.
+- `:app:compileDebugKotlin` passed once (35s); existing ExperimentalNavigation3Api opt-in warning remains. No new automated tests, APK packaging, real-model requests, production data writes, or Git publication. Local A/B preview playback and avatar reopening were exercised in browser. Runtime/serialized contracts unchanged.
+- Recommended sheet contexts: macro selection/source location, injection source/receiver-slot choice, import/removal impact review. Recommendations only; not a broad editor rewrite. Preserve revision79 Haze fix below.
+
+### Revision79 / 0.67-preview static-flicker candidate (2026-10-12)
+
+- code235, wire34/execution26/SQLite1 unchanged. User reports persistent flashing after stopping a fling or reaching the top, in completed HTML bodies on a realme GT 8 Pro. Their recording confirms alternating whole-body visibility, including CSS background, with native title/input/options intact. This is separate from the revision78 completion-handoff fix.
+- Strong causal candidate: the entire reading LazyColumn was a Haze source, while the compact top edge always consumed it for blur. Haze 2.0.0-rc02 records source subtrees into a graphics layer; upstream issues #99/#583/#745 describe closely matching WebView/RenderEffect flashing. Physical-device A/B remains necessary; neither the device brand nor emulator results prove causality.
+- ChatList now accepts captureForBlur (default true); CompanionChatPage sets it false so embedded HTML bodies and cards are excluded from ancestor Haze capture. The separate page-background source remains. Visible tradeoff: top/input effects no longer sample chat text. CSS, WebView height/scroll behavior, content rendering and execution/data contracts are unchanged. No software WebView layer or extra preraster workaround was added.
+- Validation: :app:assembleDebug succeeded; git diff --check passed; package dev.gray.companion/code235 and existing signer verified. The exact APK installed over the prior version and launched in the isolated API36 emulator. No new unit tests, broad regression, cloud request or production database mutation. The prior emulator was unable to reproduce the user's original persistent flicker, so startup/render checks cannot establish the fix on the phone.
+- Candidate APK: velune-0.67-preview.apk; SHA256 1e77d998a487cccd6fbd836c04e581bdc329226706eeceac141fab06f964bce4. Signer SHA256 8501445aff7bae47a3b69a8576a289aadfcd56a38a0ea38c28d548af2a60ba43. Build and video-analysis evidence retained locally outside Git under work/revision79; user recording and extracted chat frames must not be committed. No Git publication this round.
+- Next acceptance: install candidate on the affected phone and repeat rapid scrolling followed by touch-stop, and scroll-to-top, in the same conversation/CSS. Mark resolved only after the user confirms. Upstream evidence: https://github.com/chrisbanes/haze/issues/99 and https://github.com/chrisbanes/haze/issues/745.
+
 ### Revision78 / 0.66-preview (2026-10-12)
 
 - code234, wire34/execution26/SQLite1; applicationId `dev.gray.companion`. User authorized packaging, actual application verification, fixes for the prior three reported UI failures and all formal nine-domain audit findings, then publishing the accumulated completed work to origin GitHub.

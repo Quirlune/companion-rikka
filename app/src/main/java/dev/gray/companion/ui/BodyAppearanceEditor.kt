@@ -18,20 +18,18 @@ internal fun BodyAppearanceEditor(
     onRegisterBack: ((() -> Unit) -> Unit)? = null,
 ) {
     val issue = remember(template) { BodyAppearanceMarkup.issue(template) }
-    var saveIssue by remember { mutableStateOf<String?>(null) }
     var colorsExpanded by remember { mutableStateOf(false) }
     CallEditorPage("正文外观", template != original, onBack,
-        onSave = { if (issue == null) onSave() else saveIssue = issue },
+        onSave = { if (issue == null) onSave() else dev.gray.companion.AppEventLog.record(
+            "正文外观", issue, dev.gray.companion.AppLogLevel.ERROR) },
         onRegisterBack = onRegisterBack) {
-        EditorDestinationRow("正文颜色 · 全局显示偏好", if (colorsExpanded) "收起颜色设置" else "粗体、斜体与引号颜色 · 修改立即生效") {
+        EditorDestinationRow("正文颜色 · 全局显示偏好") {
             colorsExpanded = !colorsExpanded
         }
         if (colorsExpanded) {
             BodyColorsSettingsContent()
             HorizontalDivider()
         }
-        Text("在同一个模板中编写 HTML 与 <style> CSS，将 {{正文}} 放在正文显示的位置，仅保留一处。",
-            style = MaterialTheme.typography.bodyMedium)
         OutlinedTextField(
             value = template,
             onValueChange = onChange,
@@ -42,18 +40,16 @@ internal fun BodyAppearanceEditor(
             minLines = 8,
             maxLines = 18,
             isError = issue != null,
-            supportingText = { Text(issue ?: "仅写 {{正文}} 或留空，使用默认正文样式。") },
+            supportingText = issue?.let { message -> { Text(message) } },
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = { onChange(BodyAppearanceTemplates.DEFAULT) }) { Text("恢复默认") }
             TextButton(onClick = { onChange(bodyAppearanceExample) }) { Text("填入示例") }
         }
-        Text("只调整助手正文的显示，不改动消息内容。此处的 {{正文}} 是本地占位符，不解析项目宏。",
+        Text("文字与图片分宽：示例只用 width: 88% 收窄文字；插图保留卡片全宽。要调整文字宽度，修改排除 .companion-generated-illustration 的文字选择器，不要收窄两者共用的外层容器。",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         HorizontalDivider()
         Text("预览", style = MaterialTheme.typography.titleSmall)
-        Text("使用示例正文；保存本页后，再保存主调用以应用。",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (issue == null) {
             Box(Modifier.fillMaxWidth()) {
                 StyledBody(template = template, markdown = bodyAppearanceSampleMarkdown, messageId = "body-appearance-preview")
@@ -61,30 +57,34 @@ internal fun BodyAppearanceEditor(
         } else Text("修正模板后显示预览。", style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error)
     }
-    saveIssue?.let { message ->
-        AlertDialog(onDismissRequest = { saveIssue = null }, title = { Text("模板需要修正") },
-            text = { Text(message) },
-            confirmButton = { TextButton(onClick = { saveIssue = null }) { Text("继续编辑") } })
-    }
 }
 
-private val bodyAppearanceExample = """
+internal val bodyAppearanceExample = """
     <style>
       .body-note {
         box-sizing: border-box;
-        width: 92%;
-        max-width: 680px;
+        width: 100%;
         margin: 0 auto;
-        padding: 16px;
+        padding: 16px 0;
         border: 1px solid #a8a1b3;
         border-radius: 16px;
         line-height: 1.8;
+      }
+      /* Only text is narrowed. Generated illustrations keep the card width. */
+      .body-note .companion-markdown > :not(.companion-generated-illustration),
+      .body-note > header, .body-note > footer, .body-note > hr {
+        box-sizing: border-box;
+        width: 88%;
+        max-width: 680px;
+        margin-left: auto;
+        margin-right: auto;
+        overflow-wrap: anywhere;
       }
       .body-note p:first-child { margin-top: 0; }
       .body-note p:last-child { margin-bottom: 0; }
       .story-heading { text-align: center; font-weight: bold; }
       .story-ending { text-align: center; font-size: 12px; opacity: .6; }
-      .body-note hr { border: 0; border-top: 1px solid #a8a1b3; margin: 16px 0; }
+      .body-note hr { border: 0; border-top: 1px solid #a8a1b3; margin: 16px auto; }
     </style>
     <article class="body-note">
       <header class="story-heading">故事正文</header>

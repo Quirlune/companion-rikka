@@ -41,8 +41,6 @@ internal fun PersonasScreen(
             }
         }
         item {
-            Text("点选身份可编辑名称、头像与设定。角色绑定的身份优先作为新聊天身份。",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         item {
             ChoiceLine("未绑定角色时的新聊天默认", library.selectedPersonaId, defaultChoices) { id ->
@@ -63,14 +61,10 @@ internal fun PersonasScreen(
                     onClick = { onEdit(Editing(EditorKind.USER, "user")) },
                     leadingContent = { PersonaAvatar(library.user.name, library.user.avatar) },
                     headlineContent = { Text("旧版用户资料 · ${library.user.name}") },
-                    supportingContent = { Text("点击编辑原有昵称与头像") },
                 )
             }
         }
         if (library.personas.isEmpty()) item {
-            Text("创建身份后，可分别填写名称、头像与身份设定。",
-                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 12.dp))
         }
         items(library.personas, key = { it.id }) { persona ->
             val useCount = references[persona.id] ?: 0
@@ -141,14 +135,11 @@ internal fun PersonaEditor(
                 onClick = { avatarOpen = !avatarOpen },
                 leadingContent = { PersonaAvatar(persona.name, persona.avatar) },
                 headlineContent = { Text("头像") },
-                supportingContent = { Text("点击更换或移除头像") },
             )
         }
         if (avatarOpen) CharacterAvatarEditor(CharacterCard(id = "persona-avatar:${persona.id}", name = persona.name, avatar = persona.avatar),
             { avatarBusy = it }) { persona = persona.copy(avatar = it) }
         TextFieldLine("身份设定（{{user.prompt}}）", persona.prompt, { persona = persona.copy(prompt = it) }, minLines = 5)
-        Text("在调用的提示词中引用 {{user.prompt}}，才会把这段设定发送给模型。",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (useCount > 0) Text("$useCount 处角色、对话或收藏引用此身份；修改后的资料供后续读取，已有消息的称呼保留。",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }

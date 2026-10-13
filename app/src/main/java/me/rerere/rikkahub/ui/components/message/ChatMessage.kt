@@ -2,6 +2,7 @@ package me.rerere.rikkahub.ui.components.message
 
 import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -10,6 +11,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,7 +19,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.CardDefaults
@@ -88,6 +92,7 @@ import me.rerere.rikkahub.ui.components.richtext.ZoomableAsyncImage
 import me.rerere.rikkahub.ui.components.richtext.buildMarkdownPreviewHtml
 import me.rerere.rikkahub.ui.components.webview.WebViewContentCache
 import me.rerere.rikkahub.ui.components.ui.ChainOfThought
+import me.rerere.rikkahub.ui.components.ui.ChainOfThoughtScope
 import me.rerere.rikkahub.ui.components.ui.Favicon
 import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.modifier.shimmer
@@ -124,14 +129,26 @@ fun ChatMessage(
     readOnly: Boolean = false,
     enableTts: Boolean = true,
     assistantTextContent: (@Composable () -> Unit)? = null,
+    assistantTextContentSelectable: Boolean = false,
     branchSelectionEnabled: Boolean = true,
     onBranchSelectionDisabled: () -> Unit = {},
     compactBranchActions: Boolean = false,
     messageActionsEnabled: Boolean = true,
     compactActionsExpanded: Boolean = false,
     onCompactActionsExpandedChange: (Boolean) -> Unit = {},
+    rerollActions: List<CompanionToolbarAction> = emptyList(),
 ) {
     val message = node.messages[node.selectIndex]
+    val companionAssistantMessage = compactBranchActions && message.role == MessageRole.ASSISTANT
+    val hasThinkingBlock = companionAssistantMessage && message.parts.any {
+        it is UIMessagePart.Reasoning || it is UIMessagePart.Tool || it is UIMessagePart.ServerTool
+    }
+    val hasBody = message.parts.any { it is UIMessagePart.Text && it.text.isNotBlank() }
+    val thinkingActive = companionAssistantMessage && loading && !hasBody && message.parts.any {
+        (it is UIMessagePart.Reasoning && it.finishedAt == null) ||
+            it is UIMessagePart.Tool || it is UIMessagePart.ServerTool
+    }
+    var reopenedThinking by remember(node.id, message.id) { mutableStateOf(false) }
     val settings = LocalSettings.current.displaySetting
     val chatFontFamily = LocalChatFontFamily.current ?: rememberChatFontFamily(settings)
     val textStyle = LocalTextStyle.current.copy(
@@ -149,7 +166,7 @@ fun ChatMessage(
         horizontalAlignment = if (message.role == MessageRole.USER) Alignment.End else Alignment.Start,
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        if (!message.parts.isEmptyUIMessage()) {
+        if ((!message.parts.isEmptyUIMessage() || companionAssistantMessage) && !hasThinkingBlock) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth(),
@@ -161,7 +178,8 @@ fun ChatMessage(
                     model = model,
                     assistant = assistant,
                     loading = loading,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    showCharacterAvatar = companionAssistantMessage,
                 )
                 ChatMessageUserAvatar(
                     message = message,
@@ -207,6 +225,11 @@ fun ChatMessage(
                             onToolAnswer = onToolAnswer,
                             onUserMessageClick = if (!compactBranchActions && !readOnly && message.role == MessageRole.USER) onEdit else null,
                             assistantTextContent = assistantTextContent,
+                            assistantTextContentSelectable = assistantTextContentSelectable,
+                            showCompanionAvatarOnThinking = hasThinkingBlock,
+                            companionThinkingActive = thinkingActive,
+                            companionThinkingReopened = reopenedThinking,
+                            onCompanionThinkingReopenedChange = { reopenedThinking = it },
                         )
                     }
 
@@ -231,6 +254,8 @@ fun ChatMessage(
                         onRegenerate = onRegenerate,
                         onEdit = onEdit,
                         onFork = onFork,
+                        onDelete = onDelete,
+                        rerollActions = rerollActions,
                     )
                 }
             }
@@ -336,6 +361,11 @@ private fun MessagePartsBlock(
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
     onUserMessageClick: (() -> Unit)? = null,
     assistantTextContent: (@Composable () -> Unit)? = null,
+    assistantTextContentSelectable: Boolean = false,
+    showCompanionAvatarOnThinking: Boolean = false,
+    companionThinkingActive: Boolean = false,
+    companionThinkingReopened: Boolean = false,
+    onCompanionThinkingReopenedChange: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
@@ -377,19 +407,17 @@ private fun MessagePartsBlock(
 
     // Render parts in original order (group thinking/tool as chain-of-thought)
     val groupedParts = remember(parts) { parts.groupMessageParts() }
-    groupedParts.fastForEach { block ->
+    val firstThinkingBlockIndex = if (showCompanionAvatarOnThinking) {
+        groupedParts.indexOfFirst { it is MessagePartBlock.ThinkingBlock }
+    } else {
+        -1
+    }
+    groupedParts.fastForEachIndexed { blockIndex, block ->
         when (block) {
             is MessagePartBlock.ThinkingBlock -> {
                 if (block.steps.isNotEmpty()) {
                     val isReasoningOnlyBlock = block.steps.fastAll { it is ThinkingStep.ReasoningStep }
-                    ChainOfThought(
-                        modifier = Modifier.animateContentSize(),
-                        steps = block.steps,
-                        collapsedAdaptiveWidth = isReasoningOnlyBlock,
-                        cardColors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = settings.displaySetting.bubbleOpacity),
-                        ),
-                    ) { step ->
+                    val renderThinkingStep: @Composable ChainOfThoughtScope.(ThinkingStep) -> Unit = { step ->
                         when (step) {
                             is ThinkingStep.ReasoningStep -> {
                                 key(step.reasoning.createdAt) {
@@ -398,6 +426,7 @@ private fun MessagePartsBlock(
                                         model = model,
                                         assistant = assistant,
                                         collapsedAdaptiveWidth = isReasoningOnlyBlock,
+                                        companionExpanded = blockIndex == firstThinkingBlockIndex,
                                     )
                                 }
                             }
@@ -419,6 +448,51 @@ private fun MessagePartsBlock(
                                 }
                             }
                         }
+                    }
+                    val cardColors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = settings.displaySetting.bubbleOpacity),
+                    )
+                    if (blockIndex == firstThinkingBlockIndex) {
+                        // The message column reserves 48dp for Companion actions. Only the
+                        // thinking card escapes that width; the body keeps its existing measure
+                        // and composition identity throughout the transition.
+                        BoxWithConstraints {
+                            val thoughtWidth = maxWidth + 48.dp
+                            AnimatedContent(
+                                targetState = companionThinkingActive || companionThinkingReopened,
+                                label = "CompanionThoughtToAvatar",
+                            ) { showThought ->
+                                if (showThought) {
+                                    ChainOfThought(
+                                        modifier = Modifier
+                                            .wrapContentSize(align = Alignment.TopStart, unbounded = true)
+                                            .width(thoughtWidth),
+                                        steps = block.steps,
+                                        collapsedVisibleCount = Int.MAX_VALUE,
+                                        collapsedAdaptiveWidth = false,
+                                        cardColors = cardColors,
+                                        onCollapse = if (!companionThinkingReopened) null else {
+                                            { onCompanionThinkingReopenedChange(false) }
+                                        },
+                                        content = renderThinkingStep,
+                                    )
+                                } else {
+                                    ChatMessageCompanionAvatar(
+                                        assistant = assistant,
+                                        loading = false,
+                                        onClick = { onCompanionThinkingReopenedChange(true) },
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        ChainOfThought(
+                            modifier = Modifier.animateContentSize(),
+                            steps = block.steps,
+                            collapsedAdaptiveWidth = isReasoningOnlyBlock,
+                            cardColors = cardColors,
+                            content = renderThinkingStep,
+                        )
                     }
                 }
             }
@@ -486,7 +560,7 @@ private fun MessagePartsBlock(
                         // 生成结束后内容稳定，再启用文本选择。
                         // HTML owns its own selection. Moving its AndroidView into a new
                         // SelectionContainer when generation ends destroys the loaded page.
-                        if (loading || assistantTextContent != null) {
+                        if (loading || (assistantTextContent != null && !assistantTextContentSelectable)) {
                             textContent()
                         } else {
                             SelectionContainer {

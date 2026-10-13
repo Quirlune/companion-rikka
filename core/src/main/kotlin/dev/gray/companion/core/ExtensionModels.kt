@@ -16,7 +16,16 @@ import kotlinx.serialization.Serializable
     val blockId: String? = null, val argDescriptorKey: String? = null
 )
 @Serializable data class ExtensionParameter(val id: String = newId(), val title: String, val target: ExtensionFieldRef)
-@Serializable data class PluginCode(val runtime: String = "javascript", val version: Int = 1, val source: String = "")
+@Serializable data class PluginPermission(
+    val capability: String,
+    val origins: List<String> = emptyList(),
+    val methods: List<String> = listOf("GET"),
+    val credentials: List<String> = emptyList()
+)
+@Serializable data class PluginCode(
+    val runtime: String = "javascript", val version: Int = 1, val source: String = "",
+    val permissions: List<PluginPermission> = emptyList()
+)
 /** Native Memory owns rules; its actual calls remain ordinary referenced group workflows. */
 @Serializable data class MemoryPluginRules(
     val groupId: String,

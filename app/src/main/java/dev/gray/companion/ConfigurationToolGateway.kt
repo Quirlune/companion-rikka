@@ -22,6 +22,8 @@ class ConfigurationToolGateway(private val controller: AppController) {
             "describe" -> success(buildJsonObject {
                 put("manifest", json.encodeToJsonElement(ConfigurationContext.manifest()))
                 put("tools", json.encodeToJsonElement(toolExamples))
+                put("pluginCapabilities", PluginCapabilities.manifest())
+                put("pluginAccess", "插件声明随资源编辑；设备授权和密钥仅由原生扩展设置管理。工具可查询状态，不能授权或读取密钥。")
                 put("contract", "读取可不带 workspaceId，表示活资源；带 workspaceId 表示隔离草稿。修改必须携带当前 expectedRevision。preview 返回累计差异，commit 仅接受同版本预览。BUSY/STALE 可在等待或重读后重试。")
             })
             "open" -> operation(controller.openConfigurationWorkspace(request.string("label") ?: "配置工作台"))
@@ -66,6 +68,10 @@ class ConfigurationToolGateway(private val controller: AppController) {
             "readField" -> ConfigurationContext.readField(library,
                 json.decodeFromJsonElement<ExtensionFieldRef>(requireNotNull(request["target"])))?.let { json.encodeToJsonElement(it) }
             "actions" -> json.encodeToJsonElement(controller.actionDescriptors)
+            "pluginCapabilities" -> PluginCapabilities.manifest()
+            "pluginAccess" -> library.extensions.firstOrNull { it.id == request.string("id") }?.let {
+                json.encodeToJsonElement(controller.pluginAccessStatus(it))
+            }
             "models" -> json.encodeToJsonElement(ConfigurationContext.models(library))
             // Conversation reads use a current live snapshot; resource reads explicitly expose its frozen world.
             "sessions" -> json.encodeToJsonElement(ConfigurationContext.sessions(controller.library.value))
@@ -132,6 +138,8 @@ class ConfigurationToolGateway(private val controller: AppController) {
         /** Executable shapes; IDs and stable field targets come from discovery responses. */
         val toolExamples: List<JsonObject> = listOf(
             """{"op":"describe"}""",
+            """{"op":"pluginCapabilities"}""",
+            """{"op":"pluginAccess","id":"<扩展ID>"}""",
             """{"op":"open","label":"调整语气"}""",
             """{"op":"list"}""",
             """{"op":"schema"}""",

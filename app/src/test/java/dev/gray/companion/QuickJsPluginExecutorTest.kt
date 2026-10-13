@@ -37,4 +37,22 @@ class QuickJsPluginExecutorTest {
         }
         assertEquals("hello", executor.execute(context("function execute(context) { return context.input; }")))
     }
+
+    @Test(timeout = 15_000) fun awaitsVersionTwoHostBridge() = runBlocking {
+        val captured = context("""async function execute(context, host) {
+            const slept = await host.invoke('runtime.sleep', {milliseconds: 5});
+            const described = await host.invoke('capabilities.describe', {});
+            return slept.ok && described.ok ? context.input + '|' + described.data.apiVersion : 'failed';
+        }""").copy(code = PluginCode(version = 2, source = """async function execute(context, host) {
+            const slept = await host.invoke('runtime.sleep', {milliseconds: 5});
+            const described = await host.invoke('capabilities.describe', {});
+            return slept.ok && described.ok ? context.input + '|' + described.data.apiVersion : 'failed';
+        }"""))
+        val access = object : PluginHostAccess {
+            override fun isGranted(context: PluginExecutionContext) = false
+            override fun credential(pluginId: String, alias: String): String = error("unexpected secret read")
+        }
+        val executor = QuickJsPluginExecutor(hostRuntimeFactory = { PluginHostRuntime(it, access) })
+        assertEquals("hello|2", executor.execute(captured))
+    }
 }

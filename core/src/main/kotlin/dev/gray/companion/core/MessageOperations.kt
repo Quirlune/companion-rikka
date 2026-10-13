@@ -26,6 +26,13 @@ data class MessageCapabilities(
 )
 
 object MessageOperations {
+    /** A stopped round is complete as displayed; only its optional continuation journal is retired. */
+    fun discardRecovery(session: Session): Session {
+        val pending = session.pendingRun ?: return session
+        return session.copy(pendingRun = null,
+            unavailableResultKeys = if (pending.regenerating) session.unavailableResultKeys else pending.unavailableKeys)
+    }
+
     /** Save accepted progress under one stable variant while the user round is unfinished. */
     fun recordPartialTurn(before: Session, result: RunResult): MessageOperationResult {
         val recovery = result.recovery ?: return unavailable("turn", "缺少恢复断点")
@@ -87,12 +94,6 @@ object MessageOperations {
         if (index < 0) return MessageCapabilities(false, false, false, false, false,
             "消息不存在", "消息不存在")
         val message = session.messages[index]
-        if (session.pendingRun != null) return MessageCapabilities(
-            canEditText = false,
-            canDeleteText = message.id == session.pendingRun.turnId && rollbackPendingUserTurn(session, message.id).succeeded,
-            canRegenerate = false, canSelectGenerationVariant = false, canFork = false,
-            regenerateReason = "请先结束当前断点", forkReason = "请先结束当前断点"
-        )
         val userId = if (message.role == Role.USER) message.id else message.turnId
         val record = session.turnRecords.firstOrNull { it.userMessageId == userId }
         val latest = latestUser(session)?.id == userId
@@ -364,7 +365,7 @@ object MessageOperations {
     }
 
     fun canSelectOpening(session: Session, messageId: String): Boolean =
-        session.pendingRun == null && session.messages.none { it.role == Role.USER } &&
+        session.messages.none { it.role == Role.USER } &&
             session.messages.any { it.id == messageId && it.authoredOpening && !it.deleted }
 
     fun selectOpeningRevision(session: Session, messageId: String, revisionId: String): MessageOperationResult =
@@ -390,7 +391,8 @@ object MessageOperations {
 
     /** Delete the selected text candidate; the final deletion leaves a logical tombstone. */
     fun deleteMessage(session: Session, messageId: String): MessageOperationResult =
-        if (session.pendingRun != null) rollbackPendingUserTurn(session, messageId)
+        if (session.pendingRun?.let { !it.regenerating && it.turnId == messageId } == true)
+            rollbackPendingUserTurn(session, messageId)
         else changeText(session, messageId) { current ->
         val replacement = current.textRevisions.maxWithOrNull(compareBy<TextRevision> { it.createdAt }.thenBy { it.id })
         if (replacement == null) current.copy(

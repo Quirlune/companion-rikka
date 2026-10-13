@@ -10,6 +10,7 @@ object LibraryValidator {
         checkMetadata(library, issues)
         issues += ExtensionCommands.validate(library)
         issues += PluginCodes.validateCode(library)
+        issues += IllustrationCore.validate(library.illustration)
         if (semantics.nativeMemoryPlugins) issues += MemoryPlugins.validate(library)
         if (semantics.globalMemory) issues += GlobalMemory.validate(library)
         library.sessions.forEach { session -> session.enabledExtensionIds.forEach { id ->

@@ -1,0 +1,51 @@
+{
+  "format": "companion.config.v1",
+  "label": "velune 原生 XML 状态卡（无模型调用）",
+  "resources": {
+    "groups": [
+      {
+        "id": "example_xml_status_group",
+        "name": "XML 状态卡示例",
+        "slug": "example_xml_status_group",
+        "workflows": [],
+        "cards": [
+          {
+            "id": "example_xml_status_card",
+            "enabled": true,
+            "sourceTemplate": "<status><mood>平静</mood><notes><item>原生 XML 卡片</item><item>不调用模型</item></notes></status>",
+            "definition": {
+              "title": "状态",
+              "dataMode": "XML",
+              "xmlRoot": "status",
+              "xmlSample": "<status><mood>平静</mood><notes><item>第一条</item><item>第二条</item></notes></status>",
+              "fields": [
+                {"key": "mood", "title": "心情", "xmlPath": "mood", "kind": "TEXT"},
+                {"key": "notes.item", "title": "备注", "xmlPath": "notes.item", "kind": "LIST"}
+              ],
+              "elements": [
+                {"id": "mood", "fieldKey": "mood"},
+                {"id": "notes__item", "fieldKey": "notes.item", "sectionId": "details"}
+              ],
+              "sections": [{"id": "details", "title": "详细状态", "initiallyExpanded": true}],
+              "css": ".card{padding:16px} #mood .field-value{font-size:20px} #details{margin-top:12px}",
+              "presentation": "CARD",
+              "defaultRegion": "MENU",
+              "userAdjustable": true,
+              "autoAdapt": true,
+              "floorScope": "LATEST",
+              "hideWhenEmpty": true
+            }
+          }
+        ]
+      }
+    ],
+    "extensions": [
+      {
+        "id": "example_xml_status_extension",
+        "name": "XML 状态卡示例",
+        "enabled": false,
+        "resources": [{"kind": "GROUP", "id": "example_xml_status_group"}]
+      }
+    ]
+  }
+}

@@ -1,6 +1,8 @@
 # velune 代码维护与模型接手手册
 
-当前验收版本0.66-preview/code234（execution26 / wire34，SQLite1），文档修订78；九域审查修复与此前三项故障修复已纳入，原生输出平滑按用户授权的替代方案使用展示端逐帧合并与追加文字淡入（未找到适用的原版 Android 实现）。APK 构建、同签名安装及隔离 API36 模拟器中的应用到本地合成 HTTPS 请求和关键界面验收通过；真实云模型和实体手机体验未验证。先读根 AGENTS.md 和 ARCHITECTURE；制作可导入资源另读 AI_IMPORT_GUIDE.txt。本手册以仓库根为路径基准，可用于 Windows 或 Linux/Codex Cloud。
+当前版本0.75-preview/code243，修订93（wire37/execution28，SQLite1）。包含内置Agent、插件宿主、生图、独立收藏、历史前缀、日志与悬浮输入框；MENU插件前端直接在横三点浮层显示。APK及隔离模拟器验收结果、已知冷启动ANR和未验证范围见HANDOFF最新条目。
+
+先读根AGENTS.md和ARCHITECTURE.md。作者资料入口为docs/authoring-kit/START_HERE.txt，单文件说明VELUNE_EXTERNAL_AI_ONE_FILE.txt可交给外部AI；六份知识文档同时随APK打包供内置Agent读取。schema目录由docs/examples/AuthoringTools.java生成。更新知识后同步作者包和单文件合辑，再构建APK；不要把作者工具包ZIP当作可导入资源包。
 
 ## 接手流程
 
@@ -21,6 +23,7 @@
 | 提示词和宏 | PromptCompiler、MacroReferences、PromptReferenceLanguage、HistoryReferences | PromptBlocksEditor/提示词引用编辑器，必须显示实际发送结构 |
 | 用户输入宏 | UserInputMacros、Actions、RuntimeSnapshots | UserMacroBehaviorEditor/UserMacroInput；只在新USER消息准入时展开，显示变换不改草稿 |
 | 隔离配置工作台 | ConfigurationWorkspaces、ConfigurationContext、ConfigurationAuthoringSchema | ConfigurationToolGateway/ConfigurationWorkspacePage；独立草稿锁，提交才获取运行锁，BUSY不停止聊天 |
+| 插件宿主能力 | PluginCodeExecutor、PluginCapabilities、CompletedWorlds | QuickJsPluginExecutor/PluginHostRuntime/PluginHttpTransport；PluginAccessStore和原生权限面板管理本机授权与密钥，v2禁止纯重放 |
 | 资源导入与移除 | ResourceArchiveImport、ConfigurationCommands、ResourceEditCommands、ResourceUsageIndex、ResourceKindCatalog | ConfigurationAdmission/导入预览；原子保存和撤回 |
 | 卡片与 XML | CardModels、XmlCardData、CardDisplays、CardMarkup、CardLayoutCommands | ui/CardResourcesEditor、CardDefinitionEditor、CardLayoutUi |
 | 主正文外观 | BodyAppearanceTemplates | ui/BodyAppearanceEditor、BodyAppearanceMarkup、StyledBody |
@@ -106,3 +109,9 @@ Source wire33/execution26, no packaging. Focused tests: ModelRequestMessagesTest
 0.65-preview/code233, wire33/execution26, SQLite1. User-confirmed priority fixes: history-reference picker modal overlap; streamed HTML internal scrolling/DOM replacement/loading subtree and candidate-height callback; explicit “修复并重试” stores a visible editable USER prompt block before retrying automatic options. Existing customized blocks are preserved; no hidden prompt or load-time rewrite.
 Focused verification passed: AutomaticOptionsEditingTest5, BodyAppearanceMarkupTest9, PromptTemplateHistoryRoutingTest3 (17). External synthetic review probes passed3, reproducing two execution defects and one resource-deletion protection bypass; passing probes mean the unfixed defects were confirmed. APK assembleDebug passed in the same integration run. No repeated broad regression, real provider calls, production database access, installation or physical touch/visual verification.
 Independent multi-model review completed nine domains with root assessment: 1 P1 + 9 P2 remaining findings, plus two unquantified performance observations. Only the three user-confirmed faults were changed. Highest priority remains extension-policy overlay versus regeneration commit validation; privacy/credential copies and effective-provider HTTPS validation follow. Reports and synthetic probes are in the chat audit artifacts; device flicker and click feel remain user acceptance items.
+
+## 修订85维护约束
+内置Agent知识来自 docs/AGENT_GUIDE.txt、AI_IMPORT_GUIDE.txt、PLUGIN_API.md、AI_IMPORT_API_REFERENCE.json，由构建同步到assets。资料变化编辑源文件，不能手抄一份assets导致漂移。knowledge工具只允许固定ID和有界读取/搜索。插图提示词使用通用块编辑器，wire37保留null旧字段；execution27不变。
+HTML卡片与正文共用滚动/测高/复用边界；普通卡片没有内滚动条，超长回退保持可访问。菜单动作必须有图标与无障碍名称，最新BODY自动选项与按来源重绘插图接入真实控制器；第三方图标动作注册API仍未开放。自动选项去重包含编译上下文，不能被后到的其他调用取消后永久吞掉。候选重生成定位对应USER，保留原候选与控制器异常边界。
+
+修订90日志：AppEventLog是有界本机事件日志，最近256条、每条420字符，后台原子持久化；不采集完整提示词/模型响应/凭据。UiToaster适配共享LocalToaster，普通提示只记录，有实际action才保留toast。主聊天/模型/辅助调用/Agent/配置/导航接入，异常红闪由TopBar共享已提示序号控制。日志窗口保留CrashHandler系统退出与崩溃报告。

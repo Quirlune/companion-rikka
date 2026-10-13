@@ -459,7 +459,7 @@ private fun ExportedChatImage(
     RikkahubTheme {
         CompositionLocalProvider(
             LocalNavController provides navigator,
-            LocalToaster provides toasterState
+            LocalToaster provides remember(toasterState) { me.rerere.rikkahub.ui.context.UiToaster(toasterState) }
         ) {
             Surface(
                 modifier = Modifier.width(540.dp) // like 1080p but with density independence

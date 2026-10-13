@@ -44,7 +44,7 @@ class MemoryPluginCommandsTest {
     }
 
     @Test fun closingPendingNativeMemoryRetainsAcceptedRuntimeAndRestoreFlags() {
-        val base = LibraryDefaults.create()
+        val base = LibraryDefaults.create().copy(memoryConfig = null)
         val definition = base.extensions.single { it.memory != null }
         val message = ChatMessage(id = "source", role = Role.USER, text = "source")
         val segment = HistoryMemory.segment("saved", "accepted costly summary", listOf(message), definition.memory!!.workflowId)
@@ -59,8 +59,7 @@ class MemoryPluginCommandsTest {
             state = recorded.state, results = recorded.results, historyMemory = recorded.historyMemory)
         val session = recorded.copy(pendingRun = pending)
         val before = base.copy(sessions = listOf(session))
-        assertNull(MemoryPluginCommands.setParticipation(before, definition, session.id, false, true).library)
-        val after = admitted(MemoryPluginCommands.setParticipation(before, definition, session.id, false, true, endPending = true))
+        val after = admitted(MemoryPluginCommands.setParticipation(before, definition, session.id, false, true))
         val closed = after.sessions.single()
         assertNull(closed.pendingRun)
         assertFalse(definition.id in closed.enabledExtensionIds)

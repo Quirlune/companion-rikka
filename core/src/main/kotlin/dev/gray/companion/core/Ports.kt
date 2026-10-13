@@ -26,7 +26,7 @@ interface LibraryRepository {
 }
 
 /** Secrets have stable resource owners; slot namespaces belong to the storage adapter. */
-enum class CredentialKind { API_KEY, PRIVATE_KEY, MODEL_API_KEY, MODEL_PRIVATE_KEY }
+enum class CredentialKind { API_KEY, PRIVATE_KEY, MODEL_API_KEY, MODEL_PRIVATE_KEY, PLUGIN_SECRET }
 data class CredentialSlot(val ownerId: String, val kind: CredentialKind = CredentialKind.API_KEY)
 
 interface CredentialStore {

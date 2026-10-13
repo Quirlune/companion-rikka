@@ -33,12 +33,18 @@ internal fun HistoryReferenceEditor(
     val hasRange = selection.rangeExplicit || selection.range != HistoryRange()
     val textMode = selection.readMode == HistoryReadMode.TEXT
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    // Keep the sheet's measured height stable while moving between partial and full expansion.
+    // Material3 consumes the top inset according to the sheet offset; placing that inset on the
+    // sheet itself changes the expanded anchor as it reaches the top of the window.
+    val topSafePadding = WindowInsets.safeDrawing.asPaddingValues().calculateTopPadding()
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        contentWindowInsets = { WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom) },
+    ) {
         Column(Modifier.fillMaxWidth().heightIn(max = 720.dp).verticalScroll(rememberScrollState())
-            .imePadding().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            .imePadding().padding(start = 16.dp, end = 16.dp, top = topSafePadding + 8.dp, bottom = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("历史上下文", style = MaterialTheme.typography.titleLarge)
-            Text("只修改当前这一处历史引用；其他引用、原聊天楼层和主调用设置保持原样。",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             ChoiceLine("读取内容", selection.compressed, listOf(false to "原始楼层", true to "历史规则与摘要处理后")) {
                 selection = selection.copy(compressed = it)
             }
@@ -49,6 +55,21 @@ internal fun HistoryReferenceEditor(
             Text(if (textMode) "文本模式会把所选楼层写成一段带发言者前缀的正文，例如 Assistant: …\nUser: …。这些前缀只是普通文本；整段仍使用外层提示词块的 API 角色。"
                 else "结构化模式按消息分别输出，并保留每条消息的 API 角色。",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (textMode) {
+                Text("发言方文本前缀", style = MaterialTheme.typography.titleSmall)
+                val prefixes = selection.textPrefixes
+                TextFieldLine("Assistant 前缀（留空：Assistant: ）", prefixes.assistant, {
+                    selection = selection.copy(textPrefixes = prefixes.copy(assistant = it))
+                })
+                TextFieldLine("User 前缀（留空：User: ）", prefixes.user, {
+                    selection = selection.copy(textPrefixes = prefixes.copy(user = it))
+                })
+                TextFieldLine("System 前缀（留空：System: ）", prefixes.system, {
+                    selection = selection.copy(textPrefixes = prefixes.copy(system = it))
+                })
+                Text("按原始发言方替换完整前缀。留空保持原样；自定义时请包含需要的冒号、空格或换行，例如「角色名：」。只影响本引用的纯文本输出。",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             ChoiceLine("正文来源", selection.sourceKind, listOf(
                 HistorySourceKind.DISPLAY to "最终展示正文", HistorySourceKind.MODEL_RAW to "模型初始原文")) {
                 selection = selection.copy(sourceKind = it, viewId = null, revision = null)
@@ -102,7 +123,7 @@ internal fun HistoryReferenceEditor(
                 Text(if (textMode) "独立投影使用这里的逐楼包装；文本模式保留原发言方用于标签、忽略 API 角色映射，且不会继承主调用的整体前后缀、消息合并、指定消息覆盖或历史插入项；楼层范围仍由上方选择。"
                     else "独立投影使用这里的每楼与发言方规则，不再继承主调用的整体前后缀、消息合并、指定消息覆盖或历史插入项；楼层范围仍由上方选择。",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(if (textMode) "每楼前后缀默认留空；原发言方标签由历史楼层自动保留。"
+                Text(if (textMode) "每楼前后缀默认留空；发言方标签使用上方前缀映射，留空时保留原样。"
                     else "前后缀默认留空；原始发言者与发给模型的 API 角色分别设置。",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (!textMode) ChoiceLine("通用发送 API 角色", format.apiRole, listOf<Pair<Role?, String>>(

@@ -39,8 +39,35 @@ class LibraryEditPreparationTest {
         val pending = RunRecovery(id = "run", sessionId = session.id, turnId = userFloor.id, input = userFloor.text,
             checkpoint = TurnCheckpoint(RuntimeSnapshot()), initialSession = session, frozenResources = Library())
         val frozenBefore = before.copy(sessions = listOf(session.copy(pendingRun = pending)))
-        assertFalse(LibraryEditPreparation.changesFrozenSession(frozenBefore, frozenBefore.copy(user = UserIdentity(name = "新名字"))))
-        assertTrue(LibraryEditPreparation.changesFrozenSession(frozenBefore,
-            frozenBefore.copy(sessions = listOf(session.copy(pendingRun = pending, state = mapOf("mood" to "new"))))))
+        val renamedWhilePaused = LibraryEditPreparation.prepareRecoveryEdits(frozenBefore,
+            frozenBefore.copy(user = UserIdentity(name = "新名字")))
+        assertEquals(pending, renamedWhilePaused.sessions.single().pendingRun)
+        val editedWhilePaused = LibraryEditPreparation.normalize(frozenBefore,
+            frozenBefore.copy(sessions = listOf(session.copy(pendingRun = pending, state = mapOf("mood" to "new")))))
+        assertNull(editedWhilePaused.sessions.single().pendingRun)
+        assertEquals("new", editedWhilePaused.sessions.single().state["mood"])
+        assertFalse(editedWhilePaused.sessions.single().turnRecords.single().restoreAllowed)
+        assertEquals(pending, frozenBefore.sessions.single().pendingRun)
+    }
+
+    @Test fun displayEditsPreserveContinuationWhileEnvironmentChangesRetireOnlyTheJournal() {
+        val initial = Session(id = "session", mainCallId = "main", state = mapOf("accepted" to "kept"))
+        val pending = RunRecovery(id = "run", sessionId = initial.id, turnId = "turn", input = "input",
+            checkpoint = TurnCheckpoint(RuntimeSnapshot()), initialSession = initial, frozenResources = Library(),
+            unavailableKeys = setOf("unfinished"))
+        val session = initial.copy(pendingRun = pending)
+        val before = Library(sessions = listOf(session), selectedSessionId = session.id)
+        val layout = listOf(CardPlacement(nodeId = "card", region = CardRegion.CHAT))
+        val shown = LibraryEditPreparation.prepareRecoveryEdits(before,
+            before.copy(sessions = listOf(session.copy(title = "renamed", cardPlacements = layout))))
+        assertEquals(pending, shown.sessions.single().pendingRun)
+        assertEquals(pending, CardLayoutCommands.update(before, session.id, emptyList(), layout)
+            .library!!.sessions.single().pendingRun)
+        val rebound = LibraryEditPreparation.prepareRecoveryEdits(before,
+            before.copy(sessions = listOf(session.copy(mainCallId = "different"))))
+        assertNull(rebound.sessions.single().pendingRun)
+        assertEquals(session.state, rebound.sessions.single().state)
+        assertEquals(setOf("unfinished"), rebound.sessions.single().unavailableResultKeys)
+        assertEquals("different", rebound.sessions.single().mainCallId)
     }
 }

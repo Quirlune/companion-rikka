@@ -153,7 +153,6 @@ internal fun ConfigurationWorkspacePage(
                     }
                 }
             } else {
-                Text("还没有草稿。新建后可粘贴一批配置 JSON，在隔离副本中暂存并检查。", style = MaterialTheme.typography.bodyMedium)
             }
 
             if (operationMessage.isNotBlank()) Text(
@@ -361,8 +360,6 @@ private fun WorkspaceEditor(
         minLines = 8,
         maxLines = 16,
     )
-    Text("暂存只更新此草稿。无效 JSON 或校验错误会保留在输入框中；累计差异从打开草稿时的基线计算。",
-        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
     Text("草稿目录与读取", style = MaterialTheme.typography.titleSmall)
     OutlinedTextField(
@@ -382,8 +379,6 @@ private fun WorkspaceEditor(
             summary.id to "${summary.title}${if (summary.frozen) " · 已冻结" else ""}"
         },
     ) { contextSessionId = it }
-    Text("聊天目录仅提供 BODY 文本与资源名称摘要；选择对话后，资源读取优先使用该对话实际冻结的资源世界。",
-        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
     Text("${resources.size} 个匹配资源", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     LazyColumn(
@@ -498,8 +493,6 @@ private fun WorkspaceEditor(
                         },
                         enabled = operation == null && fieldChanged && !sourceChanged && pending != null,
                     ) { Text(if (operation == "暂存字段") "正在暂存…" else "暂存字段修改") }
-                    Text("字段修改会进入同一隔离草稿，并更新版本；请检查累计差异后再应用。",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -507,7 +500,6 @@ private fun WorkspaceEditor(
 
     Row(verticalAlignment = Alignment.CenterVertically) {
         Checkbox(checked = includeSelectedResource, onCheckedChange = { includeSelectedResource = it })
-        Text("复制安全上下文时附上当前读取资源的完整 JSON", style = MaterialTheme.typography.bodySmall)
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         TextButton(onClick = {
@@ -561,8 +553,6 @@ private fun WorkspaceEditor(
         Text(if (toolExpanded) "收起工具请求 JSON" else "展开工具请求 JSON")
     }
     if (toolExpanded) {
-        Text("默认请求为 describe；只有点击执行后才会运行你填写的操作。", style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
         OutlinedTextField(
             value = toolRequest,
             onValueChange = onToolRequestChange,

@@ -35,8 +35,6 @@ internal fun UserMacroBehaviorEditor(
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (node.outputProcessing.isNotEmpty() || node.regexOutputCopy.enabled) {
-            Text("这个行为仍保留了旧类型的输出处理，登记用户宏前需要清除。",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             TextButton(onClick = { onChange(node.copy(outputProcessing = emptyList(),
                 regexOutputCopy = node.regexOutputCopy.copy(enabled = false))) }) { Text("清除旧输出处理") }
         }
@@ -47,7 +45,6 @@ internal fun UserMacroBehaviorEditor(
             },
             label = { Text("快捷词") },
             placeholder = { Text("/抽天气") },
-            supportingText = { Text("在聊天输入快捷词并加 ASCII 空格后，会显示为待执行标签；对应行为运行并被接受后，才会登记到当前聊天。") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )

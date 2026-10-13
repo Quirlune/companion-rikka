@@ -160,6 +160,9 @@ object CompletedWorlds {
         }
         var recipeChars = 0L
         world.recipes.forEach { recipe ->
+            require(recipe.kind != PureReplayKind.PLUGIN_TEXT || recipe.pluginContext?.code?.version == 1) {
+                "宿主能力插件结果不能生成纯重算配方"
+            }
             val environmentSize = environmentSizes[recipe.environmentId] ?: error("分支缺少原始重算环境")
             val size = LibraryFormat.json.encodeToString(PureReplayRecipe.serializer(), recipe).length.toLong() + environmentSize
             require(size <= MAX_RECIPE_CHARS) { "分支重算配方超过限额" }
@@ -214,6 +217,9 @@ internal class CompletedWorldCapture(private val world: CompletedWorld) {
         if (canonical.length > CompletedWorlds.MAX_RECIPE_CHARS) return
         val plugin = if (kind == PureReplayKind.PLUGIN_TEXT) try { PluginCodeActions.prepare(context) }
             catch (_: IllegalArgumentException) { return } catch (_: IllegalStateException) { return } else null
+        // v2 may have made an external request. The publication already retains its accepted
+        // value in session results, even when recordTrajectory=false; never compact it away.
+        if (plugin?.code?.version == 2) return
         val recipe = PureReplayRecipe(kind, targets.first().origin.resourceId, ref.workflow.id, ref.node.id,
             environmentId, canonical, context.arguments, targets, plugin)
         // A source projection that needs data outside this bounded detached environment is not

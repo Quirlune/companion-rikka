@@ -84,8 +84,6 @@ internal fun UsageDetailScreen(records: List<ModelUsageRecord>, now: Long, days:
                 } }
                 item { UsageCard {
                     Text("每日用量", style = MaterialTheme.typography.titleMedium)
-                    Text("点击柱形查看当天，左右滑动查看其他日期。", style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                     DailyUsageChart(daily, selected.startedAt, zone) { selectedStart = it }
                     if (visible.isEmpty()) Text("这个期间还没有请求记录。", style = MaterialTheme.typography.bodySmall)
                 } }

@@ -39,7 +39,6 @@ internal fun CardDefinitionEditor(node: WorkflowNode, references: List<PromptRef
         EditorSectionTabs(listOf("数据", "外观", "放置", "预览"), section) { focus.clearFocus(); section = it }
         if (section == 0) {
             PromptTemplateField("卡片来源", node.inputTemplate, references, { onChange(node.copy(inputTemplate = it)) }, minLines = 2)
-            Text("一个来源只需提取一次；下方命名字段可在多个显示元素中重复使用。", style = MaterialTheme.typography.bodySmall)
             if (!independent) TextProcessingEditor("来源处理", node.inputProcessing, references) { onChange(node.copy(inputProcessing = it)) }
             ChoiceLine("解析方式", definition.dataMode, listOf(CardDataMode.XML to "XML 自动生成", CardDataMode.MANUAL to "手动字段 / 正则")) { mode ->
                 xmlMessage = null
@@ -53,7 +52,6 @@ internal fun CardDefinitionEditor(node: WorkflowNode, references: List<PromptRef
                 OutlinedTextField(definition.xmlSample, {
                     xmlPending = true; xmlMessage = null; update(definition.copy(xmlSample = it))
                 }, label = { Text("标准 XML 示例") }, modifier = Modifier.fillMaxWidth(), minLines = 6)
-                Text("按标准示例生成字段和显示元素；重复路径生成列表。模型输出只填充已有字段，不会改变卡片结构。", style = MaterialTheme.typography.bodySmall)
                 Button(onClick = {
                     runCatching { XmlCardData.infer(definition) }.onSuccess {
                         update(it); xmlPending = false; xmlMessage = null; previewSource = null
@@ -61,7 +59,6 @@ internal fun CardDefinitionEditor(node: WorkflowNode, references: List<PromptRef
                 }) { Text("生成 / 更新字段与显示元素") }
                 if (xmlPending) Text("示例或解析方式已修改，请生成 / 更新后保存。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                 (xmlMessage ?: xmlSchemaProblem)?.let { CardFieldIssue(it) }
-                Text("下方列出字段及其 CSS 选择器；生成后可直接到“外观”调整样式。", style = MaterialTheme.typography.bodySmall)
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("字段 · ${definition.fields.size}", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
@@ -121,7 +118,6 @@ internal fun CardDefinitionEditor(node: WorkflowNode, references: List<PromptRef
                 if (isXml) {
                     Text("XML 路径：${field.xmlPath}", style = MaterialTheme.typography.bodySmall)
                     Text("字段标识：${field.key}", style = MaterialTheme.typography.bodySmall)
-                    Text("路径与标识由标准示例生成；修改结构请返回数据页更新示例。", style = MaterialTheme.typography.bodySmall)
                 } else TextFieldLine("字段标识", field.key, { newKey ->
                     update(definition.copy(fields = definition.fields.mapIndexed { i, old -> if (i == index) field.copy(key = newKey) else old },
                         elements = definition.elements.map { if (it.fieldKey == field.key) it.copy(fieldKey = newKey) else it }))

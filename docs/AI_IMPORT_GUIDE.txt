@@ -1,6 +1,5 @@
 velune 扩展与资源作者指南
-适用：当前验收版本0.66-preview / versionCode234，revision78，2026-10-12，wire34/execution26，SQLite1；APK 构建、同签名安装及隔离 API36 模拟器中的应用到本地合成 HTTPS 请求与关键界面验收通过，真实云模型和实体手机体验未验证。九域审查修复与此前三项故障修复已纳入；原生输出平滑采用用户授权的展示端逐帧合并与追加文字淡入，未找到适用的原版 Android 实现。
-当前源码资源 wire=34；执行语义 execution=26；配置 companion.config.v1；ZIP companion.bundle.v1。
+适用：0.75-preview / code243源码，revision93，wire37/execution28，SQLite1。内置Agent离线知识见AGENT_GUIDE.txt；实际验证以最新HANDOFF为准。
 
 这是给首次接触项目的 AI 与作者的当前指南，不是导入文件。产品名称是 velune；companion.* 格式标记、dev.gray.companion.core 命名空间和应用身份保留以兼容更新，不要擅自改名。
 本指南替换旧 revision56 的叠加补丁式说明。旧备份、已接受回复与冻结执行环境依然按原版本解释；“当前写法”不表示可以删除旧字段、迁移历史或重新执行副作用。
@@ -9,10 +8,10 @@ velune 扩展与资源作者指南
 
 资源转换：角色资料 -> characters；共享词条 -> packages。原文有提示词，不等于授权新增模型请求、模型连接、聊天、记忆或全局开关。保留用户原文、顺序和含义；普通词条 isTemplate=false，避免原文中的 {{...}} 意外展开。
 原生扩展：ConfigurationExtension 引用普通资源，常见为一个 GROUP；CallGroup 持有 workflows、stateDefaults、cards 和绑定的提示词包。宿主已有编辑器、调度器、宏与卡片渲染器负责运行。
-代码扩展：同一 ConfigurationExtension 可增加 code，工作流通过 plugin.run 调用受限 JavaScript 文本处理。它不是浏览器页面插件，也没有任意设置页、DOM、网络、文件、宿主模型或数据库 API。
+代码扩展：同一 ConfigurationExtension 可增加 code，工作流通过 plugin.run 执行。JavaScript v1 保持纯文本；v2 支持异步宿主能力，首批为受权限约束的 HTTPS 请求和可取消等待。它不是浏览器页面插件，没有任意 DOM、文件、宿主模型或数据库访问。详细接口见 PLUGIN_API.md 与机器可读 pluginCapabilities。
 内置记忆和自动选项：各有原生设置与全局权威开关，不要另造普通插件来假扮内置功能。
 
-读取路径：先本文件；再 AI_IMPORT_API_REFERENCE.json 中需要的类型与 actions；改代码前再读 AGENTS.md、docs/VELUNE_WORK.md 与相关源码。API JSON 是 serializer 字段/枚举/默认值和 ActionRegistry 目录，不是 JSON Schema，也不是完整语义校验器。optional=true 只表示可以省略，不保证其默认值构成有效资源。typedDefaults 中的自动 ID 占位文字必须换成真实稳定 ID。
+读取路径：先 AUTHORING_ARCHITECTURE.txt 了解当前系统边界，再读本文件；美化任务读 APPEARANCE_GUIDE.txt，JavaScript 联网任务读 PLUGIN_API.md；按需查 AI_IMPORT_API_REFERENCE.json 中的类型与 actions。应用内 Agent 使用 knowledge.list 中的 architecture-guide/resource-guide/appearance-guide/plugin-api/schema-reference 及分段 read/search；外部 AI 没有仓库时可使用独立作者包的一份完整 TXT 或对应分文件，不推测未提供的源码。改宿主代码前再读仓库 AGENTS.md、docs/ARCHITECTURE.md、docs/DEVELOPMENT.md 与相关源码。API JSON 是 serializer 字段/枚举/默认值和 ActionRegistry 目录，不是 JSON Schema，也不是完整语义校验器。optional=true 只表示可以省略，不保证其默认值构成有效资源。typedDefaults 中的自动 ID 占位文字必须换成真实稳定 ID。
 
 2. 三种文档不能混用
 
@@ -33,7 +32,7 @@ config 文件内放配置根；kind=group 等文件内直接放该资源对象�
 字符串附件写为 {"$text":"prompts/rules.txt"}，头像字段可用 {"$avatar":"images/avatar.png"}。标记对象只能有一个键；manifest 为附件分别声明 text/avatar，且必须由资源真实引用。只在 ZIP 装配阶段解析；单独导入 config JSON 时对应字段须为实际字符串/头像对象。文本采用 UTF-8。README 标 documentation，只供阅读、不创建资源；“说明文档未导入”是非错误提示。
 原生备份不能和其他配置主文档混装。不要将无关脚本、库、图片或操作系统文件打进 ZIP。
 
-C. 完整 Library 原生备份含 schemaVersion 和会话等字段，属于备份/恢复用途；其 schemaVersion 当前34。不要用它伪造运行记录或承载一个普通扩展。外国角色卡 JSON/PNG/CHARX 只有真实导入器识别的格式可转换；外国供应商设置、脚本和自定义前端字段不因此变成本项目字段。
+C. 完整 Library 原生备份含 schemaVersion 和会话等字段，属于备份/恢复用途；当前资源 wire/schemaVersion 为37（与 SQLite 表版本1、执行版本28相互独立）。不要用它伪造运行记录或承载一个普通扩展。外国角色卡 JSON/PNG/CHARX 只有真实导入器识别的格式可转换；外国供应商设置、脚本和自定义前端字段不因此变成本项目字段。
 
 3. ID、引用与配置命令
 
@@ -77,14 +76,15 @@ CSS 选择器：.card、.card-title、.card-element、.field-title、.field-valu
 例如 .card{padding:16px} #mood .field-value{font-size:20px}。
 生成的字段文本会 HTML 转义。CSS 不进行字段/宏插值，不允许 JS、外部资源、url()/@import/@font-face、反斜杠转义或标签；最大65536字符。可写静态样式，不是任意 HTML/网页引擎。
 
-presentation=CARD 可放 CHAT/SIDEBAR/INPUT/MENU；SIDE_PANEL 可放 SIDEBAR/MENU；STRIP 可放 CHAT/INPUT/MENU。defaultRegion 指默认位置；MENU 是聊天右上角省略号中的卡片列表，不是新增菜单动作 API。该菜单默认没有作者未定义的内容。
+presentation=CARD 可放 CHAT/SIDEBAR/INPUT/MENU；SIDE_PANEL 可放 SIDEBAR/MENU；STRIP 可放 CHAT/INPUT/MENU。这些是现有兼容枚举与合法组合，INPUT/STRIP 并未从协议删除。defaultRegion 指默认位置；MENU 是聊天右上角省略号中的卡片列表，选择后在当前聊天页面打开悬浮卡片层，不跳转新页面，也不是新增菜单动作 API。该菜单默认没有作者未定义的内容。
+当前界面恢复漂浮半透明输入栏，作者不能靠卡片在输入区常驻占位或遮住输入。只有用户需要主动打开的重要扩展前端才建议使用已有 CardResource 的 defaultRegion="MENU"（并选择支持 MENU 的 presentation）；普通状态和低重要性进度不应占据常驻横条或输入区。移除的生图进度横条不意味着自动把低重要性进度登记到右上角菜单；确有重要前端需求才按上述 MENU 卡片合同设计。不要为“重要性”、悬浮层或菜单动作臆造扩展字段。
 userAdjustable 控制用户能否调整布局，autoAdapt 为窄宽适应，minimumWidthDp 是120–1200dp的紧凑断点，不是固定宽度；floorScope=LATEST/EACH，hideWhenEmpty=true 可隐藏空内容，condition 控制可见性。用户覆盖位置在 Session.cardPlacements，扩展导入不要编造 Session。
 CHAT 楼层卡遵守正文修订与分支来源；旧数据不能冒充新楼状态。已接受 card.define 快照随回执保留，不能靠改 live 模板重写旧结果。不同区域和资源卡应交给 CardDisplays 统一解析。
 card.define 需要 cardDefinition，visible=false、outputProcessing=[]、regexOutputCopy.enabled=false。只是需要可编辑状态展示时优先使用 CallGroup.cards，避免增加无必要的执行节点。
 
 6. 可直接导入的完整最小示例
 
-同目录 examples/native-xml-status.config.json 是完整配置，含2个资源：一个无工作流的调用组与一个默认关闭的原生扩展。组有 XML 状态卡、两个字段、列表、可折叠分区、CSS，defaultRegion=MENU。无 JS、模型、连接、主调用、聊天或 select 设置。
+同目录 examples/native-xml-status.config.json 是完整配置，含2个资源：一个无工作流的调用组与一个默认关闭的原生扩展。组有 XML 状态卡、两个字段、列表、可折叠分区、CSS，defaultRegion=MENU，借此演示菜单卡片结构；实际作者应按上段重要性选择位置，不把普通状态都搬到 MENU。无 JS、模型、连接、主调用、聊天或 select 设置。
 直接导入 JSON；在扩展列表打开“XML 状态卡示例”，进入包含它的新聊天，点击右上角省略号可见“状态”。它显示固定演示 XML；不会自动从角色或历史推测状态。实际使用时在原生卡片编辑器修改来源，或添加下面的显式模型流程。
 生成同等 ZIP：
 python docs/examples/pack_native_xml_status.py /可写目录/native-xml-status.bundle.zip
@@ -125,9 +125,11 @@ Condition.expression 是受限只读 DSL，不是 JS；复杂字段和动作参�
 9. JavaScript 扩展的真实边界
 
 扩展 code={"runtime":"javascript","version":1,"source":"function execute(context) { return context.input.trim(); }"}。
-通过节点 actionId="plugin.run"、arguments={"pluginId":"扩展ID"} 调用。扩展须参与当前执行上下文。JS 只需全局同步 execute(context)，不要 export default、ES module、async/Promise。
+通过节点 actionId="plugin.run"、arguments={"pluginId":"扩展ID"} 调用。扩展须参与当前执行上下文。v1 使用全局同步 execute(context)，不要 export default、ES module、async/Promise；v2 使用 async execute(context, host)。不要把 v2 代码塞入 version=1。
 context 有 pluginId、input、state、results、messages；messages 为最多32条 BODY，含 role/text/speakerName，state/results 是字符串映射。输入是节点 inputTemplate 及 inputProcessing 后的值，不保证自动等于用户输入。返回字符串或 {text:"..."}，不会返回宿主 state patch、页面、模型调用或文件写入。
-源代码≤64KiB、序列化捕获上下文≤256KiB（内部含 code）、state/results 各≤256项、输出≤128KiB；Android 每次新 QuickJS，默认1000ms、16MiB内存、256KiB栈。传入 JS 的上下文深冻结，code 对象移除，Date/Math.random 禁用，无网络、模型、凭据、文件或可变宿主绑定。
+源代码≤64KiB、序列化捕获上下文≤256KiB（内部含 code）、state/results 各≤256项、输出≤128KiB；Android 每次新 QuickJS，16MiB内存、256KiB栈。v1 默认1000ms。传入 JS 的上下文深冻结，code 对象移除，Date/Math.random 禁用。v2 只通过 host.invoke 访问已实现能力，总时长最多180秒，HTTP最多64次，单次等待最多10秒；具体限制以 pluginCapabilities 为准。
+v2 code.permissions 声明精确 HTTPS origin、方法、凭据别名；声明不等于本机授权。用户在扩展详情中授权当前代码与权限，改动后须重新授权。密钥只在原生凭据栏填写，不写资源、源码、上下文或请求模板；宿主按别名注入请求头，JS 无明文读取接口。授权和密钥不随导入导出迁移。
+v2 已接受结果保存在既有回执/快照中，不进入纯结果重算配方。分支重建不能再次请求外部服务。未知提交结果不能自动重发 POST；本轮运行中可轮询，但跨进程远端任务恢复仍需后续任务能力。错误返回稳定 code、retryable 和 delivery；取消不表示远端任务已撤销。
 需要写状态、注入或调用模型时组合普通原生 workflow actions。卡片 CSS/正文外观模板也不能替代码扩展突破沙盒。导入仅保存，不能视为执行成功。
 
 10. 内置摘要与自动选项的 XML 合同
@@ -145,6 +147,7 @@ items=[] 且 titlesEnabled=false 保留旧重复 <option> 的兼容解析，不�
 11. 正文外观与历史兼容
 
 MainCall.bodyAppearanceTemplate 默认字面 {{正文}}，空白/默认使用原生 Markdown。自定义单框 HTML/<style> 模板通过受限 inert renderer，把实际正文插入合法文本节点，占位不等于任意全局宏。它只改变助手正文外观，不接管原生思考、消息动作、用户消息、卡片 CSS 或普通附加输出。不要宣称自定义模式支持任意脚本、外链资源、原生数学/交互图/引用跳转的全部能力。
+具体标签/CSS 安全边界及“文字宽88%、插图宽100%”完整可粘贴模板见 APPEARANCE_GUIDE.txt。文字收窄只改 .companion-markdown 的非插图直子元素；旧模板外层若已限宽或留大 padding，插图不会自动越过祖先。原生 Markdown 显示不读取自定义正文 CSS。
 旧 tiles/bodySourceTileId/bodyTextTemplate、ExtensionBinding、旧摘要与自动选项兼容字段可能仍在 serializer 目录；“可以读”不等于当前新资源应该写。回放必须遵守捕获 executionVersion，不把新模板、开关资源或解析规则追溯套到历史。
 
 12. 最少验证与维护入口
@@ -184,5 +187,10 @@ WorkflowNode.actionId="user.macro.create"，userMacro={"shortcut":"/抽天气","
 设置→配置工作台：新建隔离草稿，可直接编辑原生字段或暂存 companion.config.v1 JSON，再检查累计变更并应用。支持多个草稿；无效批次不会部分生效，暂存成功才推进 revision。草稿仅保留于当前进程，重启前可复制累计命令。应用保存资源与撤回回执，仍从已有配置修改记录撤回。
 工作台只编辑 character/mainCall/package/group/persona/tag/extension。连接、凭据、模型定义和全局选择继续使用原生设置；models 只读取安全名称/ID摘要。读取与起草不停止正在运行的主调用；应用遇忙返回 BUSY，保留草稿；并发改过同一资源则拒绝覆盖。提交对最新活库重新校验并在原事务中保存，保持聊天、断点和已冻结世界不变；完整依赖读集一致性尚未提供。
 ConfigurationToolGateway(controller).execute(JSON) 是同一进程的共享工具入口，工作台提供可折叠工具请求框。不是网络服务器，也未接入常驻Agent、@路由或侧栏。使用 {"op":"describe"} 发现全部工具及请求样例；{"op":"schema"} 返回根类型，{"op":"schema","type":"WorkflowNode"} 返回实际序列化字段、枚举、optional/nullable，不等于完整业务校验或通用JSON Schema。
+插件作者可用 {"op":"pluginCapabilities"} 查询宿主方法、参数、限额与错误，用 {"op":"schema","type":"PluginCode"} 查询资源声明，用 {"op":"pluginAccess","id":"扩展ID"} 查询本机授权摘要与已配置的凭据别名。后者不返回密钥，也不提供授权写入工具。
 常用读取：resources（可加query/kind）、resource（kind/id）、fields（resource={kind:"PACKAGE",id:...}）、readField（target）、actions、models、sessions、context（sessionId，默认最多20条/16000字符BODY正文）、sessionResource（指定聊天实际冻结资源）、usages（location）。read资源时不带workspaceId即活库，带workspaceId即草稿；会话读取始终取当前聊天快照。不会默认导出全库、推理文本、原始模型回复或连接秘密。
 典型操作顺序：open→resources/fields→stage或field→preview→commit。open返回workspaceId及revision。stage接收commands对象或JSON字符串；field接收稳定target与expectedValue/value（字符串或null）。stage/field/preview/commit/discard均必须传workspaceId和expectedRevision。每次成功暂存后用返回的revision；修改后旧preview失效。preview返回累计前后值，commit只接受这个版本的预览；export可复制累计原配置命令。状态与issues结构化返回，STALE须重读，BUSY须等待当前操作结束；不得把失败描述成已保存。
+
+修订90输出宏：普通文本产出即result.<outputKey>宏。recordTrajectory决定是否记录可回溯版本，不影响最新值引用。execution28模型也可关闭；新资源模型建议true、其他逻辑默认false。既有显式值不覆盖，旧冻结执行<=27仍按旧规则。关闭后不保存隐藏模型的逐版原始输出；已有正文、回执与旧历史不因此删除。正则复用outputProcessing步骤链和regexOutputCopy，不需要额外向导。
+
+Revision92 History纯文本前缀：历史引用可使用prefixes双引号JSON字段，键assistant/user/system，字符串缺省或空白时保留Assistant: /User: /System: 完整前缀。非空值按字面替换完整前缀，调用者自行包含标点、空格、换行；不展开宏。prefixes独立于format，不触发局部逐楼包装、不改变范围/来源/API角色；只在as:text输出生效，as:messages可保存但忽略。编辑入口为历史引用半屏栏的“发言方文本前缀”。旧execution<=25拒绝prefixes。
